@@ -1,0 +1,2 @@
+NativeAOT resource bytes: Δ, 😀, 日本語.
+The final newline is part of this resource.

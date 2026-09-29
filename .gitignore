@@ -1,0 +1,9 @@
+**/bin/
+**/obj/
+artifacts/
+__pycache__/
+*.pyc
+
+!scripts
+scripts/*.ps1
+scripts/*.sh

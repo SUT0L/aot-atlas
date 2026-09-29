@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/Atlas/Atlas.csproj" />
+    <Compile Include="../../src/Atlas.Binja/Core.cs" Link="Core.cs" />
+    <Compile Include="../../src/Atlas.Binja/SymbolNames.cs" Link="SymbolNames.cs" />
+    <Compile Include="../../src/Atlas.Binja/ObjectTypes.cs" Link="ObjectTypes.cs" />
+    <Compile Include="../../src/Atlas.Binja/FrozenText.cs" Link="FrozenText.cs" />
+    <Compile Include="../../src/Atlas.Binja/DispatchRecords.cs" Link="DispatchRecords.cs" />
+    <Compile Include="../../src/Atlas.Binja/DispatchTypes.cs" Link="DispatchTypes.cs" />
+    <Compile Include="../../src/Atlas.Binja/StaticTypes.cs" Link="StaticTypes.cs" />
+    <Compile Include="../../src/Atlas.Binja/StaticText.cs" Link="StaticText.cs" />
+    <Compile Include="../../src/Atlas.Binja/EnumTypes.cs" Link="EnumTypes.cs" />
+    <Compile Include="../../src/Atlas.Binja/UnwindTypes.cs" Link="UnwindTypes.cs" />
+    <Compile Include="../../src/Atlas.Binja/ExceptionTypes.cs" Link="ExceptionTypes.cs" />
+    <Compile Include="../../src/Atlas.Binja/ExceptionText.cs" Link="ExceptionText.cs" />
+    <Compile Include="../../src/Atlas.Binja/PInvokeTypes.cs" Link="PInvokeTypes.cs" />
+  </ItemGroup>
+</Project>

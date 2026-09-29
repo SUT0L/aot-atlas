@@ -1,0 +1,18 @@
+{
+  "provider_exports": [
+    {"ordinal": 3, "kind": "Code", "aliases": ["Add"]},
+    {"ordinal": 4, "kind": "Code", "aliases": ["AddAlias"]},
+    {"ordinal": 5, "kind": "Unused", "aliases": []},
+    {"ordinal": 6, "kind": "Unused", "aliases": []},
+    {"ordinal": 7, "kind": "Code", "aliases": []},
+    {"ordinal": 8, "kind": "Unused", "aliases": []},
+    {"ordinal": 9, "kind": "Unused", "aliases": []},
+    {"ordinal": 10, "kind": "Data", "aliases": ["Value"]},
+    {"ordinal": 11, "kind": "Unused", "aliases": []},
+    {"ordinal": 12, "kind": "Forwarder", "aliases": ["ForwardProcess"]}
+  ],
+  "consumer_imports": [
+    {"module": "AtlasLinkageProvider.dll", "delay_loaded": false, "imports": ["#7", "#3"]},
+    {"module": "USER32.dll", "delay_loaded": true, "imports": ["GetDesktopWindow"]}
+  ]
+}

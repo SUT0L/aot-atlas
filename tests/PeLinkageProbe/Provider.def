@@ -1,0 +1,7 @@
+LIBRARY AtlasLinkageProvider
+EXPORTS
+    Add @3
+    AddAlias=Add @4
+    OrdinalOnly @7 NONAME
+    Value @10 DATA
+    ForwardProcess=KERNEL32.GetCurrentProcessId @12
