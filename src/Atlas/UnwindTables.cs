@@ -130,13 +130,12 @@ public sealed class UnwindTables {
         uint begin = BinaryPrimitives.ReadUInt32LittleEndian(row);
         uint end = BinaryPrimitives.ReadUInt32LittleEndian(row[4..]);
         uint unwind = BinaryPrimitives.ReadUInt32LittleEndian(row[8..]);
-        if (begin >= end || !image.IsMapped(image.ImageBase + begin, end - begin)
-            || !image.IsExecutable(image.ImageBase + begin) || unwind == 0 || (unwind & 2) != 0)
-            throw new InvalidDataException("An indirect or chained RUNTIME_FUNCTION has an invalid code or unwind range.");
+        RuntimeFunction function = new(begin, end, unwind);
+        RuntimeTables.ValidateFunction(image, address, function);
 
         int result = Entries.Count + 1;
         index.Add(address, result);
-        Entries.Add(new UnwindEntry { Address = address, Function = new RuntimeFunction(begin, end, unwind) });
+        Entries.Add(new UnwindEntry { Address = address, Function = function });
         return result;
     }
 }

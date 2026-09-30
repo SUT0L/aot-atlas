@@ -58,6 +58,48 @@ internal static class UnwindChecks {
             Assert(root.Function.Begin == 0x1000 + roots[i] * 16 && root.Parent == 0);
         }
 
+        int firstRow = directory + fileDelta;
+        int secondRow = firstRow + 12;
+        byte[] invalidDiagnostic = (byte[])bytes.Clone();
+        BinaryPrimitives.WriteUInt32LittleEndian(invalidDiagnostic.AsSpan(secondRow + 4), 0x1010);
+        string diagnostic = FunctionError(invalidDiagnostic);
+        Assert(diagnostic.Contains("exception row 1 (directory RVA 0x00008000, row RVA 0x0000800C)", StringComparison.Ordinal));
+        Assert(diagnostic.Contains("Begin=0x00001010, End=0x00001010, Unwind=0x0000D020, PreviousBegin=0x00001000", StringComparison.Ordinal));
+        Assert(diagnostic.EndsWith("BeginAddress is not below EndAddress.", StringComparison.Ordinal));
+
+        CheckFunctionError(bytes, invalid => {
+            BinaryPrimitives.WriteUInt32LittleEndian(invalid.AsSpan(secondRow), 0x0FF8);
+            BinaryPrimitives.WriteUInt32LittleEndian(invalid.AsSpan(secondRow + 4), 0x1000);
+        }, "BeginAddress is below the previous BeginAddress.");
+        CheckFunctionError(bytes, invalid => {
+            BinaryPrimitives.WriteUInt32LittleEndian(invalid.AsSpan(firstRow), 0x30000);
+            BinaryPrimitives.WriteUInt32LittleEndian(invalid.AsSpan(firstRow + 4), 0x30010);
+        }, "Code range is not mapped within one region");
+        CheckFunctionError(bytes, invalid =>
+            BinaryPrimitives.WriteUInt32LittleEndian(invalid.AsSpan(364), 0x40000020),
+            "BeginAddress is not executable (section \".text\" RVA 0x00001000-0x00020E00, characteristics 0x40000020).");
+        CheckFunctionError(bytes, invalid =>
+            BinaryPrimitives.WriteUInt32LittleEndian(invalid.AsSpan(firstRow + 8), 0),
+            "UnwindInfoAddress is zero.");
+        CheckFunctionError(bytes, invalid =>
+            BinaryPrimitives.WriteUInt32LittleEndian(invalid.AsSpan(firstRow + 8), 2),
+            "UnwindInfoAddress has reserved bit 1 set.");
+        CheckFunctionError(bytes, invalid =>
+            BinaryPrimitives.WriteUInt32LittleEndian(invalid.AsSpan(firstRow + 8), 0x30000),
+            "Unwind information header is not mapped");
+
+        const int externalEntry = 0x1F000;
+        byte[] invalidReference = (byte[])bytes.Clone();
+        BinaryPrimitives.WriteUInt32LittleEndian(invalidReference.AsSpan(firstRow + 8), externalEntry | 1);
+        int externalOffset = externalEntry + fileDelta;
+        BinaryPrimitives.WriteUInt32LittleEndian(invalidReference.AsSpan(externalOffset), 0x2000);
+        BinaryPrimitives.WriteUInt32LittleEndian(invalidReference.AsSpan(externalOffset + 4), 0x2000);
+        BinaryPrimitives.WriteUInt32LittleEndian(invalidReference.AsSpan(externalOffset + 8), infoStart);
+        diagnostic = UnwindError(invalidReference);
+        Assert(diagnostic.Contains("indirect or chained record at RVA 0x0001F000", StringComparison.Ordinal));
+        Assert(diagnostic.Contains("Begin=0x00002000, End=0x00002000, Unwind=0x0000D000", StringComparison.Ordinal));
+        Assert(diagnostic.EndsWith("BeginAddress is not below EndAddress.", StringComparison.Ordinal));
+
         for (int fault = 0; fault < 6; ++fault) {
             byte[] invalid = (byte[])bytes.Clone();
             if (fault == 0)
@@ -80,6 +122,30 @@ internal static class UnwindChecks {
             Assert(failed);
         }
         Console.WriteLine("Unwind: 1024 seeded direct, indirect and chained ranges match the reference roots; cycles and invalid records rejected.");
+    }
+
+    private static void CheckFunctionError(byte[] valid, Action<byte[]> corrupt, string expected) {
+        byte[] invalid = (byte[])valid.Clone();
+        corrupt(invalid);
+        Assert(FunctionError(invalid).Contains(expected, StringComparison.Ordinal));
+    }
+
+    private static string FunctionError(byte[] bytes) {
+        try {
+            _ = RuntimeTables.Functions(new PeImage(bytes));
+        } catch (InvalidDataException error) {
+            return error.Message;
+        }
+        throw new Exception("Malformed runtime function was accepted.");
+    }
+
+    private static string UnwindError(byte[] bytes) {
+        try {
+            _ = new UnwindTables(new PeImage(bytes));
+        } catch (InvalidDataException error) {
+            return error.Message;
+        }
+        throw new Exception("Malformed unwind record was accepted.");
     }
 
     private static void Assert(bool condition) {
