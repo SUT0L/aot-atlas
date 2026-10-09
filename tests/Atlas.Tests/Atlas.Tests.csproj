@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/Atlas/Atlas.csproj" />
+    <Compile Include="../../src/Atlas.Cli/MetadataIdentityOutput.cs" Link="MetadataIdentityOutput.cs" />
+    <Compile Include="../../src/Atlas.Cli/MetadataOutput.cs" Link="MetadataOutput.cs" />
+    <Compile Include="../../src/Atlas.Cli/JsonOutput.cs" Link="JsonOutput.cs" />
+    <Compile Include="../../src/Atlas.Cli/CommandPlan.cs" Link="CommandPlan.cs" />
+    <Compile Include="../../src/Atlas.Cli/ExtractionStatusOutput.cs" Link="ExtractionStatusOutput.cs" />
+    <Compile Include="../../src/Atlas.Binja/PreparedAnalysis.cs" Link="PreparedAnalysis.cs" />
+    <Compile Include="../../src/Atlas.Binja/AnalysisEvidence.cs" Link="AnalysisEvidence.cs" />
+  </ItemGroup>
+</Project>

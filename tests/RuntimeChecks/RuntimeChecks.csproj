@@ -1,0 +1,79 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RuntimeSourceRoot Condition="'$(RuntimeSourceRoot)' == ''">$(MSBuildThisFileDirectory)..\..\..\reference\runtime</RuntimeSourceRoot>
+    <RuntimeSourceRepository>$([System.IO.Path]::GetFullPath('$(RuntimeSourceRoot)'))</RuntimeSourceRepository>
+    <RuntimeSourceRootWithSlash>$([MSBuild]::EnsureTrailingSlash('$(RuntimeSourceRepository)'))</RuntimeSourceRootWithSlash>
+    <RuntimeCommon Condition="'$(ReaderSchema)' != ''">$(RuntimeSourceRootWithSlash)src\coreclr\tools\Common\</RuntimeCommon>
+    <RuntimeChecksRoot Condition="'$(RuntimeChecksRoot)' == ''">$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)\..\..\artifacts\runtime-checks'))</RuntimeChecksRoot>
+    <RuntimeV8Revision Condition="'$(RuntimeV8Revision)' == ''">v8.0.0</RuntimeV8Revision>
+    <RuntimeV9Revision Condition="'$(RuntimeV9Revision)' == ''">v9.0.0</RuntimeV9Revision>
+    <RuntimeV10Revision Condition="'$(RuntimeV10Revision)' == ''">v10.0.0</RuntimeV10Revision>
+    <RuntimeV8SourceRoot>$(RuntimeChecksRoot)\source-$(RuntimeV8Revision)</RuntimeV8SourceRoot>
+    <RuntimeV9SourceRoot>$(RuntimeChecksRoot)\source-$(RuntimeV9Revision)</RuntimeV9SourceRoot>
+    <RuntimeV10SourceRoot>$(RuntimeChecksRoot)\source-$(RuntimeV10Revision)</RuntimeV10SourceRoot>
+    <RuntimeV8Common>$(RuntimeV8SourceRoot)\src\coreclr\tools\Common\</RuntimeV8Common>
+    <RuntimeV9Common>$(RuntimeV9SourceRoot)\src\coreclr\tools\Common\</RuntimeV9Common>
+    <RuntimeV10Common>$(RuntimeV10SourceRoot)\src\coreclr\tools\Common\</RuntimeV10Common>
+    <RuntimeProbeProject>$(MSBuildProjectDirectory)\..\MetadataMembersProbe\MetadataMembersProbe.csproj</RuntimeProbeProject>
+    <RuntimeExtraCorpusArgument Condition="'$(RuntimeSourceCorpus)' != ''">&quot;$(RuntimeSourceCorpus)&quot;</RuntimeExtraCorpusArgument>
+    <RuntimeConfiguration Condition="'$(Configuration)' == ''">debug</RuntimeConfiguration>
+    <RuntimeConfiguration Condition="'$(Configuration)' != ''">$([System.String]::Copy('$(Configuration)').ToLowerInvariant())</RuntimeConfiguration>
+    <DefineConstants Condition="Exists('$(RuntimeCommon)Internal\Metadata\NativeFormat\NativeMetadataReader.cs')">$(DefineConstants);RUNTIME_CHECKS</DefineConstants>
+    <DefineConstants Condition="'$(ReaderSchema)' == 'Net8'">$(DefineConstants);READER_NET8</DefineConstants>
+    <DefineConstants Condition="'$(ReaderSchema)' == 'Net9'">$(DefineConstants);READER_NET9</DefineConstants>
+    <NoWarn Condition="Exists('$(RuntimeCommon)Internal\Metadata\NativeFormat\NativeMetadataReader.cs')">$(NoWarn);CS8603;CS8618;CS8765</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/Atlas/Atlas.csproj" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('$(RuntimeCommon)Internal\Metadata\NativeFormat\NativeMetadataReader.cs')">
+    <Compile Include="$(RuntimeCommon)Internal\NativeFormat\NativeFormatReader*.cs" Exclude="$(RuntimeCommon)Internal\NativeFormat\NativeFormatReader.Metadata.cs" LinkBase="RuntimeSource" />
+    <Compile Include="$(RuntimeCommon)Internal\Metadata\NativeFormat\NativeMetadataReader.cs" LinkBase="RuntimeSource" />
+    <Compile Include="$(RuntimeCommon)Internal\Metadata\NativeFormat\NativeFormatReader*Gen.cs" LinkBase="RuntimeSource" />
+    <Compile Include="$(RuntimeCommon)Internal\Metadata\NativeFormat\MdBinaryReader*.cs" LinkBase="RuntimeSource" />
+  </ItemGroup>
+  <ItemGroup>
+    <RuntimeReader Include="$(RuntimeV8Revision)">
+      <Framework>net8.0</Framework>
+      <Schema>Net8</Schema>
+    </RuntimeReader>
+    <RuntimeReader Include="$(RuntimeV9Revision)">
+      <Framework>net9.0</Framework>
+      <Schema>Net9</Schema>
+    </RuntimeReader>
+    <RuntimeReader Include="$(RuntimeV10Revision)">
+      <Framework>$(TargetFramework)</Framework>
+      <Schema>Current</Schema>
+    </RuntimeReader>
+  </ItemGroup>
+  <Target Name="RuntimeChecks">
+    <Error Condition="!Exists('$(RuntimeSourceRootWithSlash)src\coreclr\tools\Common\Internal\Metadata\NativeFormat\NativeMetadataReader.cs')"
+           Text="RuntimeSourceRoot must point to a dotnet/runtime checkout containing src/coreclr/tools/Common." />
+    <MakeDir Directories="$(RuntimeChecksRoot);@(RuntimeReader->'$(RuntimeChecksRoot)\source-%(Identity)')" />
+    <Exec Condition="!Exists('$(RuntimeV8Common)Internal\Metadata\NativeFormat\NativeMetadataReader.cs') Or !Exists('$(RuntimeV9Common)Internal\Metadata\NativeFormat\NativeMetadataReader.cs') Or !Exists('$(RuntimeV10Common)Internal\Metadata\NativeFormat\NativeMetadataReader.cs')"
+          Command="git -C &quot;$(RuntimeSourceRepository)&quot; cat-file -e &quot;$(RuntimeV8Revision)^{commit}&quot; &amp;&amp; git -C &quot;$(RuntimeSourceRepository)&quot; cat-file -e &quot;$(RuntimeV9Revision)^{commit}&quot; &amp;&amp; git -C &quot;$(RuntimeSourceRepository)&quot; cat-file -e &quot;$(RuntimeV10Revision)^{commit}&quot;"
+          IgnoreExitCode="true">
+      <Output TaskParameter="ExitCode" PropertyName="RuntimeRevisionsExitCode" />
+    </Exec>
+    <Exec Condition="'$(RuntimeRevisionsExitCode)' != '' And '$(RuntimeRevisionsExitCode)' != '0'"
+          Command="git -C &quot;$(RuntimeSourceRepository)&quot; fetch --no-tags --depth=1 origin tag &quot;$(RuntimeV8Revision)&quot; tag &quot;$(RuntimeV9Revision)&quot; tag &quot;$(RuntimeV10Revision)&quot;"
+          IgnoreExitCode="true" />
+    <Exec Condition="'$(RuntimeRevisionsExitCode)' != '' And '$(RuntimeRevisionsExitCode)' != '0'"
+          Command="git -C &quot;$(RuntimeSourceRepository)&quot; cat-file -e &quot;$(RuntimeV8Revision)^{commit}&quot; &amp;&amp; git -C &quot;$(RuntimeSourceRepository)&quot; cat-file -e &quot;$(RuntimeV9Revision)^{commit}&quot; &amp;&amp; git -C &quot;$(RuntimeSourceRepository)&quot; cat-file -e &quot;$(RuntimeV10Revision)^{commit}&quot;"
+          IgnoreExitCode="true">
+      <Output TaskParameter="ExitCode" PropertyName="RuntimeRevisionsAfterFetchExitCode" />
+    </Exec>
+    <Error Condition="'$(RuntimeRevisionsExitCode)' != '' And '$(RuntimeRevisionsExitCode)' != '0' And '$(RuntimeRevisionsAfterFetchExitCode)' != '0'"
+           Text="Unable to obtain $(RuntimeV8Revision), $(RuntimeV9Revision), and $(RuntimeV10Revision) from the dotnet/runtime checkout." />
+    <Exec Condition="!Exists('$(RuntimeChecksRoot)\source-%(RuntimeReader.Identity)\src\coreclr\tools\Common\Internal\Metadata\NativeFormat\NativeMetadataReader.cs')"
+          Command="git -C &quot;$(RuntimeSourceRepository)&quot; archive --format=tar --output=&quot;$(RuntimeChecksRoot)\%(RuntimeReader.Identity).tar&quot; &quot;%(RuntimeReader.Identity)&quot; src/coreclr/tools/Common/Internal/NativeFormat src/coreclr/tools/Common/Internal/Metadata/NativeFormat" />
+    <Exec Condition="!Exists('$(RuntimeChecksRoot)\source-%(RuntimeReader.Identity)\src\coreclr\tools\Common\Internal\Metadata\NativeFormat\NativeMetadataReader.cs')"
+          Command="tar -xf &quot;$(RuntimeChecksRoot)\%(RuntimeReader.Identity).tar&quot; -C &quot;$(RuntimeChecksRoot)\source-%(RuntimeReader.Identity)&quot;" />
+
+    <Exec Command="dotnet publish &quot;$(RuntimeProbeProject)&quot; -c &quot;$(Configuration)&quot; -r win-x64 --self-contained -p:ProbeFramework=%(RuntimeReader.Framework) -p:PublishDir=&quot;$(RuntimeChecksRoot)\probes\%(RuntimeReader.Framework)&quot;" />
+
+    <Exec Command="dotnet build &quot;$(MSBuildProjectFullPath)&quot; -c &quot;$(Configuration)&quot; -p:RuntimeSourceRoot=&quot;$(RuntimeChecksRoot)\source-%(RuntimeReader.Identity)&quot; -p:ReaderSchema=%(RuntimeReader.Schema) -p:ArtifactsPath=&quot;$(RuntimeChecksRoot)\reader-%(RuntimeReader.Framework)&quot;" />
+    <Exec Command="dotnet &quot;$(RuntimeChecksRoot)\reader-%(RuntimeReader.Framework)\bin\RuntimeChecks\$(RuntimeConfiguration)\RuntimeChecks.dll&quot; &quot;$(RuntimeChecksRoot)\probes\%(RuntimeReader.Framework)\MetadataMembersProbe.exe&quot; $(RuntimeExtraCorpusArgument)" />
+  </Target>
+</Project>

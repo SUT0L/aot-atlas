@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <PackageReference Include="Iced" Version="1.21.0" GeneratePathProperty="true" />
+    <None Include="$(PkgIced)/LICENSE.txt" Link="Iced-LICENSE.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

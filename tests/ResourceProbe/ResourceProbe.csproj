@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework Condition="'$(ProbeFramework)' != ''">$(ProbeFramework)</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <PublishAot>true</PublishAot>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../ResourceLibrary/ResourceLibrary.csproj" />
+    <EmbeddedResource Include="Payload.bin" LogicalName="Atlas.Shared" />
+    <EmbeddedResource Include="Empty.bin" LogicalName="Atlas.Empty" />
+    <EmbeddedResource Include="Payload.txt" LogicalName="Atlas.Δ😀.txt" />
+  </ItemGroup>
+</Project>

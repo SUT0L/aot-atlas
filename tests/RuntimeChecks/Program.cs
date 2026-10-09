@@ -1,0 +1,1 @@
+RuntimeChecks.Run(args);

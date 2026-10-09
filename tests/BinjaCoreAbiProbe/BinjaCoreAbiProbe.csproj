@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TieredCompilation>false</TieredCompilation>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/Atlas/Atlas.csproj" />
+    <Compile Include="../../src/Atlas.Binja/*.cs" Link="%(Filename)%(Extension)" />
+  </ItemGroup>
+</Project>

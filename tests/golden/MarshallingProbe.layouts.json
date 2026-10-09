@@ -1,0 +1,44 @@
+[
+  {
+    "type_name": "MarshallingFixture.Blittable",
+    "invalid_layout": false,
+    "size": 9,
+    "size_source": "MethodTable",
+    "fields": [{"name": "Tag", "offset": 0}, {"name": "Value", "offset": 1}]
+  },
+  {
+    "type_name": "MarshallingFixture.Inline",
+    "invalid_layout": false,
+    "size": 20,
+    "size_source": "MarshallingMap",
+    "fields": [{"name": "Code", "offset": 0}, {"name": "Text", "offset": 2}, {"name": "Samples", "offset": 14}]
+  },
+  {
+    "type_name": "MarshallingFixture.InvalidLayout",
+    "invalid_layout": true,
+    "size": 0,
+    "size_source": "Unknown",
+    "fields": []
+  },
+  {
+    "type_name": "MarshallingFixture.LayoutClass",
+    "invalid_layout": false,
+    "size": 7,
+    "size_source": "MarshallingMap",
+    "fields": [{"name": "Tag", "offset": 0}, {"name": "Enabled", "offset": 1}, {"name": "Code", "offset": 5}]
+  },
+  {
+    "type_name": "MarshallingFixture.NativeBool",
+    "invalid_layout": false,
+    "size": 7,
+    "size_source": "MarshallingMap",
+    "fields": [{"name": "Tag", "offset": 0}, {"name": "Enabled", "offset": 1}, {"name": "Code", "offset": 5}]
+  },
+  {
+    "type_name": "MarshallingFixture.Owned",
+    "invalid_layout": false,
+    "size": 16,
+    "size_source": "MarshallingMap",
+    "fields": [{"name": "Text", "offset": 0}, {"name": "Number", "offset": 8}]
+  }
+]

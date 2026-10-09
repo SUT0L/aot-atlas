@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework Condition="'$(ProbeFramework)' != ''">$(ProbeFramework)</TargetFramework>
+    <AssemblyName>Atlas.Resources.Δ😀</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="../ResourceProbe/Payload.txt" LogicalName="Atlas.Shared" />
+    <EmbeddedResource Include="../ResourceProbe/Empty.bin" LogicalName="Atlas.Empty" />
+  </ItemGroup>
+</Project>

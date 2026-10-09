@@ -1,0 +1,153 @@
+name: Native builds
+
+on:
+  push:
+    branches: [master]
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'push' }}
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+  DOTNET_NOLOGO: '1'
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: '1'
+
+jobs:
+  build:
+    name: ${{ matrix.name }} (${{ matrix.rid }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            rid: linux-x64
+            name: aot-atlas
+            project: src/Atlas.Cli/Atlas.Cli.csproj
+            binary: aot-atlas
+          - os: ubuntu-22.04
+            rid: linux-x64
+            name: aot-atlas-binja
+            project: src/Atlas.Binja/Atlas.Binja.csproj
+            binary: aot-atlas-binja.so
+          - os: windows-2022
+            rid: win-x64
+            name: aot-atlas
+            project: src/Atlas.Cli/Atlas.Cli.csproj
+            binary: aot-atlas.exe
+          - os: windows-2022
+            rid: win-x64
+            name: aot-atlas-binja
+            project: src/Atlas.Binja/Atlas.Binja.csproj
+            binary: aot-atlas-binja.dll
+    env:
+      NUGET_PACKAGES: ${{ github.workspace }}/.nuget/packages
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: global.json
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.NUGET_PACKAGES }}
+          key: nuget-${{ runner.os }}-${{ hashFiles('global.json', 'Directory.Build.props', 'src/**/*.csproj') }}
+          restore-keys: nuget-${{ runner.os }}-
+
+      - name: Publish native binary
+        run: >-
+          dotnet publish "${{ matrix.project }}"
+          -c Release -r "${{ matrix.rid }}" --self-contained
+          --output artifacts/publish
+
+      - name: Package
+        env:
+          PACKAGE_NAME: ${{ matrix.name }}-${{ matrix.rid }}
+          NATIVE_BINARY: ${{ matrix.binary }}
+        run: |
+          if [[ "$RUNNER_OS" == Windows ]]; then package_python=python; else package_python=python3; fi
+          "$package_python" - <<'PY'
+          import os
+          import tarfile
+          import zipfile
+          from pathlib import Path
+
+          publish = Path('artifacts/publish')
+          files = [publish / os.environ['NATIVE_BINARY'], publish / 'Iced-LICENSE.txt']
+          for path in files:
+              if not path.is_file():
+                  raise FileNotFoundError(path)
+          destination = Path('artifacts/packages')
+          destination.mkdir(parents=True, exist_ok=True)
+          name = destination / os.environ['PACKAGE_NAME']
+          if os.name == 'nt':
+              with zipfile.ZipFile(str(name) + '.zip', 'w', zipfile.ZIP_DEFLATED, compresslevel=1) as archive:
+                  for path in files:
+                      archive.write(path, path.name)
+          else:
+              with tarfile.open(str(name) + '.tar.gz', 'w:gz', compresslevel=1) as archive:
+                  for path in files:
+                      archive.add(path, arcname=path.name)
+          PY
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ matrix.name }}-${{ matrix.rid }}
+          path: artifacts/packages/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  release:
+    name: Release assets
+    needs: build
+    if: github.event_name == 'release' || github.ref == 'refs/heads/master'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: packages
+          merge-multiple: true
+
+      - name: Publish release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          BUILD_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == release ]]; then
+            gh release upload "$RELEASE_TAG" packages/* --clobber
+          else
+            if gh api "repos/$GH_REPO/git/ref/tags/latest" >/dev/null 2>&1; then
+              gh api --method PATCH "repos/$GH_REPO/git/refs/tags/latest" -f sha="$BUILD_SHA" -F force=true
+            else
+              gh api --method POST "repos/$GH_REPO/git/refs" -f ref=refs/tags/latest -f sha="$BUILD_SHA"
+            fi
+            if gh release view latest >/dev/null 2>&1; then
+              gh release upload latest packages/* --clobber
+              gh release edit latest --title 'Latest builds' --notes "Commit: $BUILD_SHA" --latest
+            else
+              gh release create latest packages/* --verify-tag --title 'Latest builds' --notes "Commit: $BUILD_SHA" --latest
+            fi
+          fi

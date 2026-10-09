@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework Condition="'$(ProbeFramework)' != ''">$(ProbeFramework)</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <PublishAot>true</PublishAot>
+    <IlcDehydrate>true</IlcDehydrate>
+  </PropertyGroup>
+  <ItemGroup>
+    <DirectPInvoke Include="__Internal" />
+  </ItemGroup>
+</Project>

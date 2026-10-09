@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework Condition="'$(ProbeFramework)' != ''">$(ProbeFramework)</TargetFramework>
+    <PublishAot>true</PublishAot>
+    <LangVersion>preview</LangVersion>
+    <IlcFoldIdenticalMethodBodies>false</IlcFoldIdenticalMethodBodies>
+    <DefineConstants Condition="'$(StripContracts)' != 'true'">$(DefineConstants);KEEP_CONTRACTS</DefineConstants>
+  </PropertyGroup>
+</Project>
