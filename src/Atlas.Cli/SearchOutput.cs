@@ -79,7 +79,7 @@ internal static class SearchOutput {
         int traceEnd = runtimeCount + extraction.Traces.Methods.Count;
         int templateEnd = traceEnd + extraction.Templates.Methods.Count;
 
-        Span<ulong> sections = stackalloc ulong[337];
+        Span<ulong> sections = stackalloc ulong[(int)RtrSectionId.ProxyTypeMap + 1];
         sections.Clear();
 
         foreach (ref readonly var section in extraction.Header.Sections) {
@@ -202,6 +202,9 @@ internal static class SearchOutput {
 
             ++hits;
         }
+
+        SearchTypeMap(extraction.TypeMaps.External, "external_type_map", "external_type_mapping");
+        SearchTypeMap(extraction.TypeMaps.Proxy, "proxy_type_map", "proxy_type_mapping");
 
         var marshalling = extraction.Marshalling;
         int structCount = marshalling.Structs.Count;
@@ -406,6 +409,44 @@ internal static class SearchOutput {
         MetadataIdentityOutput.EndObject(json, extraction.Metadata, extraction.Signatures);
 
         return hits;
+
+        void SearchTypeMap(InteropTypeMap map, string groupKind, string mappingKind) {
+            foreach (ref readonly var group in map.Groups) {
+                string groupName = names.Values[extraction.Types.Index[group.GroupType]];
+                bool groupMatches = groupName.Contains(query, StringComparison.OrdinalIgnoreCase);
+                if (groupMatches) {
+                    json.WriteStartObject();
+                    json.WriteString("kind", groupKind);
+                    JsonOutput.WriteString(json, "name", groupName);
+                    json.WriteNumber("record", map.Address + (uint)group.Vertex);
+                    json.WriteNumber("group_type", group.GroupType);
+                    json.WriteNumber("state", group.State);
+                    json.WriteNumber("throwing_stub", group.ThrowingStub);
+                    json.WriteEndObject();
+                    ++hits;
+                }
+
+                foreach (ref readonly var entry in map.Entries.Slice(group.Entries.Start, group.Entries.Count)) {
+                    string source = entry.Name ?? names.Values[extraction.Types.Index[entry.SourceType]];
+                    string target = names.Values[extraction.Types.Index[entry.TargetType]];
+                    if (!groupMatches && !source.Contains(query, StringComparison.OrdinalIgnoreCase)
+                        && !target.Contains(query, StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    json.WriteStartObject();
+                    json.WriteString("kind", mappingKind);
+                    JsonOutput.WriteString(json, "name", source);
+                    JsonOutput.WriteString(json, "target_name", target);
+                    json.WriteNumber("record", map.Address + (uint)entry.Vertex);
+                    json.WriteNumber("group_record", map.Address + (uint)group.Vertex);
+                    json.WriteNumber("group_type", group.GroupType);
+                    json.WriteNumber("source_type", entry.SourceType);
+                    json.WriteNumber("target_type", entry.TargetType);
+                    json.WriteEndObject();
+                    ++hits;
+                }
+            }
+        }
     }
 
     private static ReadOnlySpan<char> QualifiedName(string owner, string member, ref char[] buffer) {

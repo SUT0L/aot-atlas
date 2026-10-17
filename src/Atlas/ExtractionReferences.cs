@@ -28,6 +28,21 @@ public sealed partial class Extraction {
     public RuntimeTypeReference NativeDelegateTypeAt(int position) =>
         RuntimeTypeAt(Marshalling.Delegates[position].TypeIndex);
 
+    public RuntimeTypeReference ExternalMapGroupTypeAt(int position) =>
+        RuntimeType(TypeMaps.External.Groups[position].GroupType);
+
+    public RuntimeTypeReference ExternalMapTargetTypeAt(int position) =>
+        RuntimeType(TypeMaps.External.Entries[position].TargetType);
+
+    public RuntimeTypeReference ProxyMapGroupTypeAt(int position) =>
+        RuntimeType(TypeMaps.Proxy.Groups[position].GroupType);
+
+    public RuntimeTypeReference ProxyMapSourceTypeAt(int position) =>
+        RuntimeType(TypeMaps.Proxy.Entries[position].SourceType);
+
+    public RuntimeTypeReference ProxyMapTargetTypeAt(int position) =>
+        RuntimeType(TypeMaps.Proxy.Entries[position].TargetType);
+
     public RuntimeTypeReference DispatchOwnerAt(int position) =>
         RuntimeTypeAt(Dispatch.Targets[position].OwnerType);
 

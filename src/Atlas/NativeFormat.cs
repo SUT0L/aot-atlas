@@ -104,6 +104,7 @@ public ref struct NativeTable {
     private readonly ReadOnlySpan<byte> data;
     private readonly int indexSize;
     private readonly int bucketCount;
+    private readonly int indexOrigin;
 
     private int bucket;
     private int position;
@@ -114,14 +115,21 @@ public ref struct NativeTable {
     public byte LowHash { get; private set; }
     public int Vertex { get; private set; }
 
-    public NativeTable(ReadOnlySpan<byte> bytes) {
+    public NativeTable(ReadOnlySpan<byte> bytes) : this(bytes, 0) {
+    }
+
+    public NativeTable(ReadOnlySpan<byte> bytes, int offset) {
         data = bytes;
 
-        if (bytes.IsEmpty)
+        if (bytes.IsEmpty && offset == 0)
             return;
 
-        int shift = bytes[0] >> 2;
-        int sizeCode = bytes[0] & 3;
+        if ((uint)offset >= (uint)bytes.Length)
+            throw new InvalidDataException("NativeHashtable header is outside storage.");
+
+        indexOrigin = offset + 1;
+        int shift = bytes[offset] >> 2;
+        int sizeCode = bytes[offset] & 3;
 
         if (shift > 29 || sizeCode > 2)
             throw new InvalidDataException("Invalid NativeHashtable header.");
@@ -129,10 +137,10 @@ public ref struct NativeTable {
         bucketCount = 1 << shift;
         indexSize = 1 << sizeCode;
 
-        if (((long)bucketCount + 1) * indexSize > bytes.Length - 1)
+        if (((long)bucketCount + 1) * indexSize > bytes.Length - indexOrigin)
             throw new InvalidDataException("Truncated NativeHashtable index.");
 
-        int indexEnd = 1 + (bucketCount + 1) * indexSize;
+        int indexEnd = indexOrigin + (bucketCount + 1) * indexSize;
         int previous = indexEnd;
 
         for (int i = 0; i <= bucketCount; ++i) {
@@ -147,14 +155,18 @@ public ref struct NativeTable {
     }
 
     private readonly int Boundary(int index) {
-        var row = data[(1 + index * indexSize)..];
+        var row = data[(indexOrigin + index * indexSize)..];
         uint value = indexSize == 1
             ? row[0]
             : indexSize == 2
                 ? BinaryPrimitives.ReadUInt16LittleEndian(row)
                 : BinaryPrimitives.ReadUInt32LittleEndian(row);
 
-        return checked((int)value + 1);
+        long boundary = (long)indexOrigin + value;
+        if (boundary > data.Length)
+            throw new InvalidDataException("NativeHashtable bucket exceeds storage.");
+
+        return (int)boundary;
     }
 
     public bool MoveNext() {

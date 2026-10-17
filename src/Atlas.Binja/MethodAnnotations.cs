@@ -32,7 +32,8 @@ internal enum FunctionRole : byte {
     Closed,
     Create,
     Constructor,
-    Unboxed
+    Unboxed,
+    ThrowingStub
 }
 
 internal static unsafe class MethodAnnotations {
@@ -53,7 +54,8 @@ internal static unsafe class MethodAnnotations {
         int templateEnd = checked(traceEnd + extraction.Templates.Methods.Count);
         int structEnd = checked(templateEnd + extraction.Marshalling.Structs.Count);
         int delegateEnd = checked(structEnd + extraction.Marshalling.Delegates.Count);
-        int count = checked(delegateEnd + extraction.Statics.Constructors.Count);
+        int constructorEnd = checked(delegateEnd + extraction.Statics.Constructors.Count);
+        int count = checked(constructorEnd + extraction.TypeMaps.ThrowingStubs.Length);
 
         var records = new MethodAnnotation[count];
         var sites = new List<FunctionSite>(checked(
@@ -67,9 +69,9 @@ internal static unsafe class MethodAnnotations {
         ulong originalBase = extraction.Image.ImageBase;
 
         Span<ulong> targets = stackalloc ulong[7];
-        Span<ulong> code = stackalloc ulong[10];
+        Span<ulong> code = stackalloc ulong[(int)FunctionRole.ThrowingStub + 1];
 
-        Span<ulong> sections = stackalloc ulong[337];
+        Span<ulong> sections = stackalloc ulong[(int)RtrSectionId.ProxyTypeMap + 1];
         sections.Clear();
 
         foreach (var section in extraction.Header.Sections) {
@@ -180,7 +182,7 @@ internal static unsafe class MethodAnnotations {
                 targets[1] = code[(int)FunctionRole.Open] = entry.Open;
                 targets[2] = code[(int)FunctionRole.Closed] = entry.Closed;
                 targets[3] = code[(int)FunctionRole.Create] = entry.Create;
-            } else {
+            } else if (i < constructorEnd) {
                 ref readonly var entry = ref
                     CollectionsMarshal.AsSpan(extraction.Statics.Constructors)[i - delegateEnd];
                 record.Section = (int)RtrSectionId.CctorContextMap;
@@ -191,6 +193,17 @@ internal static unsafe class MethodAnnotations {
                 recordPrefix = "context::"u8;
 
                 code[(int)FunctionRole.Constructor] = entry.Entrypoint;
+            } else {
+                ref readonly var stub = ref extraction.TypeMaps.ThrowingStubs[i - constructorEnd];
+                ref readonly var group = ref stub.Map.Groups[stub.GroupIndex];
+                record.Section = (int)stub.Map.Section;
+                offset = group.Vertex;
+                signature = extraction.Names.Values[extraction.Types.Index[group.GroupType]];
+                nameLength = signature.Length;
+                recordPrefix = stub.Map.Section == RtrSectionId.ExternalTypeMap
+                    ? "external_type_map::"u8 : "proxy_type_map::"u8;
+                targets[0] = group.GroupType;
+                targets[1] = code[(int)FunctionRole.ThrowingStub] = group.ThrowingStub;
             }
 
             if (signature.Contains('\0'))
@@ -577,7 +590,7 @@ internal static unsafe class MethodAnnotations {
         if (separator < 0)
             return false;
 
-        for (var role = FunctionRole.Entrypoint; role <= FunctionRole.Unboxed; ++role) {
+        for (var role = FunctionRole.Entrypoint; role <= FunctionRole.ThrowingStub; ++role) {
             if (!suffix[..separator].SequenceEqual(RoleName(role)))
                 continue;
 
@@ -599,6 +612,7 @@ internal static unsafe class MethodAnnotations {
         FunctionRole.Create => "create"u8,
         FunctionRole.Constructor => "cctor"u8,
         FunctionRole.Unboxed => "unboxed"u8,
+        FunctionRole.ThrowingStub => "throwing_stub"u8,
         _ => throw new ArgumentOutOfRangeException(nameof(role))
     };
 }

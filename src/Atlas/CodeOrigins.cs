@@ -19,7 +19,9 @@ public enum CodeOriginKind : byte {
     CreateDelegate,
     Virtual,
     RuntimeRole,
-    Export
+    Export,
+    InvalidExternalTypeMap,
+    InvalidProxyTypeMap
 }
 
 public struct CodeOrigin {
@@ -61,6 +63,8 @@ public sealed class CodeOrigins {
         CodeOriginKind.Virtual => "Virtual",
         CodeOriginKind.RuntimeRole => "RuntimeRole",
         CodeOriginKind.Export => "Export",
+        CodeOriginKind.InvalidExternalTypeMap => "InvalidExternalTypeMap",
+        CodeOriginKind.InvalidProxyTypeMap => "InvalidProxyTypeMap",
         _ => throw new ArgumentOutOfRangeException(nameof(kind))
     };
 
@@ -76,11 +80,12 @@ public sealed class CodeOrigins {
             + extraction.Statics.Constructors.Count
             + 3 * (extraction.Marshalling.Structs.Count + extraction.Marshalling.Delegates.Count)
             + extraction.Virtuals.Slots.Count
+            + extraction.TypeMaps.ThrowingStubs.Length
             + runtime.Functions.Length
             + extraction.Linkage.Exports.Length);
         Values = new List<CodeOrigin>(capacity);
 
-        Span<ulong> sections = stackalloc ulong[(int)RtrSectionId.ExactMethodInstantiationsHashtable + 1];
+        Span<ulong> sections = stackalloc ulong[(int)RtrSectionId.ProxyTypeMap + 1];
         sections.Clear();
 
         foreach (var section in extraction.Header.Sections) {
@@ -205,6 +210,20 @@ public sealed class CodeOrigins {
                     Aliases = 1
                 });
             }
+        }
+
+        var throwingStubs = extraction.TypeMaps.ThrowingStubs;
+        for (int i = 0; i < throwingStubs.Length; ++i) {
+            ref readonly var stub = ref throwingStubs[i];
+            ref readonly var group = ref stub.Map.Groups[stub.GroupIndex];
+            Values.Add(new CodeOrigin {
+                Address = group.ThrowingStub,
+                Witness = stub.Map.Address + (uint)group.Vertex,
+                Index = stub.GroupIndex,
+                Kind = stub.Map.Section == RtrSectionId.ExternalTypeMap
+                    ? CodeOriginKind.InvalidExternalTypeMap : CodeOriginKind.InvalidProxyTypeMap,
+                Aliases = 1
+            });
         }
 
         for (int i = 0; i < extraction.Virtuals.Slots.Count; ++i) {
@@ -357,6 +376,17 @@ public sealed class CodeOrigins {
                             buffer);
                         builder.Append(buffer.AsSpan(0, characters));
                     }
+                    break;
+
+                case CodeOriginKind.InvalidExternalTypeMap:
+                case CodeOriginKind.InvalidProxyTypeMap:
+                    var typeMap = origin.Kind == CodeOriginKind.InvalidExternalTypeMap
+                        ? extraction.TypeMaps.External : extraction.TypeMaps.Proxy;
+
+                    ref readonly var typeMapGroup = ref typeMap.Groups[origin.Index];
+                    builder.Append(origin.Kind == CodeOriginKind.InvalidExternalTypeMap
+                        ? "invalid_external_type_map::" : "invalid_proxy_type_map::");
+                    builder.Append(extraction.Names.Values[extraction.Types.Index[typeMapGroup.GroupType]]);
                     break;
 
                 default:

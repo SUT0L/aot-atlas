@@ -16,7 +16,7 @@ internal sealed record CommandPlan(
     internal static CommandPlan? For(string command) => command switch {
         "metadata" => new(Metadata: true),
         "maps" => new(Maps: true),
-        "types" or "frozen" or "gvm" or "marshalling" or "statics" => new(RequestedStages: ExtractionStage.RuntimeTypes),
+        "types" or "frozen" or "gvm" or "marshalling" or "typemaps" or "statics" => new(RequestedStages: ExtractionStage.RuntimeTypes),
         "templates" or "fields" or "header" => new(RequestedStages: ExtractionStage.MemberLayouts),
         "enums" => new(RequestedStages: ExtractionStage.Enums),
         "pinvoke" => new(RequestedStages: ExtractionStage.PInvokes),

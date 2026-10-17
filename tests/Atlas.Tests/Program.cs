@@ -2,6 +2,16 @@ using System.Buffers.Binary;
 using System.Diagnostics;
 using Atlas;
 
+if (args.Length == 1 && args[0] == "--typemaps") {
+    TypeMapsChecks.Run();
+    return;
+}
+
+if (args.Length == 2 && args[0] == "--typemaps-producer") {
+    TypeMapsProducerChecks.Run(args[1]);
+    return;
+}
+
 if (args.Length == 1 && args[0] == "--json-output") {
     JsonOutputChecks.Run();
     return;
@@ -570,6 +580,7 @@ ManagedUnwindChecks.Run();
 MethodGcChecks.Run();
 MethodGcCancellationChecks.Run();
 MarshallingChecks.Run([]);
+TypeMapsChecks.Run();
 CodeFlowChecks.Run();
 
 foreach (string probe in args) {

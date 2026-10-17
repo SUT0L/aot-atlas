@@ -35,11 +35,14 @@ internal sealed class AnalysisEvidence {
         if (imageBase > ulong.MaxValue - image.ImageSize)
             throw new InvalidDataException("The rebased image exceeds the address space.");
 
-        var tags = new Dictionary<(AnalysisEvidenceKind Kind, ulong Address), StringBuilder>();
+        var tags = new Dictionary<(AnalysisEvidenceKind Kind, ulong Address), object>();
         var references = new HashSet<AnalysisReference>();
 
         var extraction = prepared.Extraction;
         var analysis = extraction.UnwindAnalysis;
+
+        AddTypeMap(extraction.TypeMaps.External);
+        AddTypeMap(extraction.TypeMaps.Proxy);
 
         foreach (GcLayout layout in extraction.Gc.Layouts) {
             cancellationToken.ThrowIfCancellationRequested();
@@ -88,6 +91,8 @@ internal sealed class AnalysisEvidence {
                 $"function_pointers::failures={prepared.FunctionPointers.Failures.Count}::unproven_uses={prepared.FunctionPointers.UnprovenUses.Count}::unresolved_flow_owners={prepared.FunctionPointers.UnresolvedControlFlowOwners.Count}::dictionary_consumers={dictionaryStatus}");
             Add(AnalysisEvidenceKind.Status, address,
                 $"dictionary_signatures={(extraction.DictionarySignatureGaps.IsEmpty ? "complete" : "partial")}");
+            Add(AnalysisEvidenceKind.Status, address,
+                $"type_maps::external={(extraction.TypeMaps.External.Present ? "decoded" : "absent")}::proxy={(extraction.TypeMaps.Proxy.Present ? "decoded" : "absent")}");
 
             foreach (var failure in analysis.Failures)
                 Add(AnalysisEvidenceKind.Status, address, $"{failure.Phase}::error={failure.Error}");
@@ -254,7 +259,7 @@ internal sealed class AnalysisEvidence {
         foreach (var tag in tags) {
             cancellationToken.ThrowIfCancellationRequested();
 
-            string text = tag.Value.ToString();
+            string text = tag.Value is string single ? single : ((StringBuilder)tag.Value).ToString();
 
             if (text.Contains('\0'))
                 throw new InvalidDataException("An analysis annotation contains a NUL.");
@@ -263,6 +268,30 @@ internal sealed class AnalysisEvidence {
         }
 
         return new AnalysisEvidence(result, references.ToArray());
+
+        void AddTypeMap(InteropTypeMap typeMap) {
+            foreach (ref readonly var group in typeMap.Groups) {
+                cancellationToken.ThrowIfCancellationRequested();
+                ulong witness = typeMap.Address + (uint)group.Vertex;
+                Add(AnalysisEvidenceKind.RuntimeType, Rebase(witness),
+                    $"type_map::section={(int)typeMap.Section}::group=0x{Rebase(group.GroupType):X}::state={group.State}::hash=0x{group.Hash:X}::entries={group.Entries.Count}");
+                Reference(witness, group.GroupType);
+                Reference(witness, group.ThrowingStub);
+
+                foreach (ref readonly var entry in typeMap.Entries.Slice(group.Entries.Start, group.Entries.Count)) {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    ulong record = typeMap.Address + (uint)entry.Vertex;
+                    string source = entry.Name is null ? $"source=0x{Rebase(entry.SourceType):X}"
+                        : "name=" + entry.Name.Replace("\\", "\\\\").Replace("\0", "\\0").Replace("\r", "\\r").Replace("\n", "\\n");
+                    Add(AnalysisEvidenceKind.RuntimeType, Rebase(record),
+                        $"type_mapping::section={(int)typeMap.Section}::group_record=0x{Rebase(witness):X}::{source}::target=0x{Rebase(entry.TargetType):X}::hash=0x{entry.Hash:X}");
+                    Reference(witness, record);
+                    Reference(record, group.GroupType);
+                    Reference(record, entry.SourceType);
+                    Reference(record, entry.TargetType);
+                }
+            }
+        }
 
         ulong Rebase(ulong address) => address == 0 ? 0 : checked(imageBase + (address - image.ImageBase));
 
@@ -278,19 +307,28 @@ internal sealed class AnalysisEvidence {
             if (address == 0)
                 return;
 
-            Begin(kind, address).Append(text);
+            // Most addresses have one line. Promote shared addresses without repeatedly copying their text.
+            ref object? value = ref CollectionsMarshal.GetValueRefOrAddDefault(tags, (kind, address), out bool exists);
+            if (!exists)
+                value = text;
+            else if (value is StringBuilder builder)
+                builder.Append('\n').Append(text);
+            else {
+                string first = (string)value!;
+                value = new StringBuilder(checked(first.Length + 1 + text.Length)).Append(first).Append('\n').Append(text);
+            }
         }
 
         StringBuilder Begin(AnalysisEvidenceKind kind, ulong address) {
-            var key = (kind, address);
-
-            if (!tags.TryGetValue(key, out var builder)) {
+            ref object? value = ref CollectionsMarshal.GetValueRefOrAddDefault(tags, (kind, address), out bool exists);
+            StringBuilder builder;
+            if (!exists)
                 builder = new StringBuilder();
-                tags.Add(key, builder);
-            } else {
-                builder.Append('\n');
-            }
-
+            else if (value is string single)
+                builder = new StringBuilder(checked(single.Length + 1)).Append(single).Append('\n');
+            else
+                builder = ((StringBuilder)value!).Append('\n');
+            value = builder;
             return builder;
         }
 

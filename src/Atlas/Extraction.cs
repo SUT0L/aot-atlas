@@ -24,6 +24,7 @@ public sealed partial class Extraction {
     private readonly GenericMaps? generics;
     private readonly GvmTables? gvms;
     private readonly Marshalling? marshalling;
+    private readonly TypeMaps? typeMaps;
     private readonly VirtualMap? virtuals;
     private readonly TemplateMaps? templates;
     private readonly GenericDictionaries? dictionaries;
@@ -66,6 +67,7 @@ public sealed partial class Extraction {
     public GenericMaps Generics => Require(generics, ExtractionStage.RuntimeTypes);
     public GvmTables Gvms => Require(gvms, ExtractionStage.RuntimeTypes);
     public Marshalling Marshalling => Require(marshalling, ExtractionStage.RuntimeTypes);
+    public TypeMaps TypeMaps => Require(typeMaps, ExtractionStage.RuntimeTypes);
     public VirtualMap Virtuals => Require(virtuals, ExtractionStage.Dispatch);
     public TemplateMaps Templates => Require(templates, ExtractionStage.RuntimeTypes);
     public GenericDictionaries Dictionaries => Require(dictionaries, ExtractionStage.DictionaryBindings);
@@ -207,6 +209,7 @@ public sealed partial class Extraction {
 
                     Gvms.Read(image, rtr, metadata, Layout, commonFixups, maps.Format, Types, cancellationToken);
                     Marshalling.Read(image, rtr, commonFixups, Types, cancellationToken);
+                    typeMaps = new TypeMaps(image, rtr, commonFixups, Types, cancellationToken);
                     virtuals!.Read(image, rtr, metadata, Layout, commonFixups, maps.Format, cancellationToken);
                     Templates.Read(image, rtr, metadata, Layout, commonFixups, NativeStatics, maps.Format, cancellationToken);
 
@@ -325,6 +328,7 @@ public sealed partial class Extraction {
                     Layout.BindTypes(Types, Names);
                     Gvms.Bind(Types, metadata.SignatureBuilder, cancellationToken);
                     Marshalling.Bind(Types, metadata, maps, rtr.Format.LegacyTypeLayout, cancellationToken);
+                    TypeMaps.ValidateHashes(Types, cancellationToken);
                     Statics.BindFields(image, Memory, maps, Types);
                     break;
 

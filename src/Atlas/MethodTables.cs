@@ -23,7 +23,9 @@ public enum TypeEvidence : uint {
     GenericVirtualMethod = 16384,
     Marshalling = 32768,
     ExceptionHandling = 65536,
-    FrozenRuntimeType = 131072
+    FrozenRuntimeType = 131072,
+    ExternalTypeMap = 262144,
+    ProxyTypeMap = 524288
 }
 
 public struct MethodTable {

@@ -8,6 +8,7 @@
     <Compile Include="../../src/Atlas.Cli/MetadataOutput.cs" Link="MetadataOutput.cs" />
     <Compile Include="../../src/Atlas.Cli/JsonOutput.cs" Link="JsonOutput.cs" />
     <Compile Include="../../src/Atlas.Cli/CommandPlan.cs" Link="CommandPlan.cs" />
+    <Compile Include="../../src/Atlas.Cli/TypeMapsOutput.cs" Link="TypeMapsOutput.cs" />
     <Compile Include="../../src/Atlas.Cli/ExtractionStatusOutput.cs" Link="ExtractionStatusOutput.cs" />
     <Compile Include="../../src/Atlas.Binja/PreparedAnalysis.cs" Link="PreparedAnalysis.cs" />
     <Compile Include="../../src/Atlas.Binja/AnalysisEvidence.cs" Link="AnalysisEvidence.cs" />

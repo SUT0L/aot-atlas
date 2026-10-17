@@ -84,6 +84,9 @@ internal static class ExtractCommand {
         json.WritePropertyName("marshalling");
         MarshallingOutput.Write(json, inputSha256, extraction);
 
+        json.WritePropertyName("typemaps");
+        TypeMapsOutput.Write(json, inputSha256, extraction, cancellationToken);
+
         json.WritePropertyName("pinvoke");
         PInvokeOutput.Write(json, inputSha256, extraction);
 

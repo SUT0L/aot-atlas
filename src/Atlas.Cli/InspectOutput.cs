@@ -130,7 +130,8 @@ internal static class InspectOutput {
         ReadOnlySpan<RtrSectionId> hashtables = [
             RtrSectionId.TypeMap, RtrSectionId.InvokeMap, RtrSectionId.VirtualInvokeMap,
             RtrSectionId.FieldAccessMap, RtrSectionId.GenericsHashtable,
-            RtrSectionId.GenericMethodsHashtable, RtrSectionId.ExactMethodInstantiationsHashtable
+            RtrSectionId.GenericMethodsHashtable, RtrSectionId.ExactMethodInstantiationsHashtable,
+            RtrSectionId.ExternalTypeMap, RtrSectionId.ProxyTypeMap
         ];
 
         foreach (var id in hashtables) {

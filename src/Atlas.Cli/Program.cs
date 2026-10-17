@@ -376,6 +376,10 @@ try {
                             MarshallingOutput.Write(json, inputSha256, extraction);
                             break;
 
+                        case "typemaps":
+                            TypeMapsOutput.Write(json, inputSha256, extraction, cancellationToken);
+                            break;
+
                         case "pinvoke":
                             PInvokeOutput.Write(json, inputSha256, extraction);
                             break;
@@ -480,7 +484,7 @@ try {
 }
 
 int Usage() {
-    Console.Error.WriteLine("Usage: aot-atlas <extract|inspect|sections|metadata|maps|types|methods|dispatch|dictionaries|runtime-helpers|properties|templates|statics|fields|frozen|enums|gvm|marshalling|pinvoke|code|strings|resources|linkage|unwind|exceptions|gcinfo|generic-context|fat-function-pointers> <binary> <output.json> [--map-format legacy|metadata]");
+    Console.Error.WriteLine("Usage: aot-atlas <extract|inspect|sections|metadata|maps|types|methods|dispatch|dictionaries|runtime-helpers|properties|templates|statics|fields|frozen|enums|gvm|marshalling|typemaps|pinvoke|code|strings|resources|linkage|unwind|exceptions|gcinfo|generic-context|fat-function-pointers> <binary> <output.json> [--map-format legacy|metadata]");
     Console.Error.WriteLine("       aot-atlas search <binary> <output.json> <query> [--map-format legacy|metadata]");
     Console.Error.WriteLine("       aot-atlas header <binary> <output.h> [--map-format legacy|metadata]");
     Console.Error.WriteLine("       aot-atlas dispatch-cells <binary> <output.json> [--map-format legacy|metadata]");
