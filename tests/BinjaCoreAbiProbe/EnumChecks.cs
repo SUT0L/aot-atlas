@@ -11,19 +11,8 @@ internal static unsafe class EnumChecks {
 
         foreach (string binary in binaries) {
             var image = new PeImage(File.ReadAllBytes(binary));
-            var rtr = ReadyToRun.Read(image);
-
-            var section = rtr.Find(313);
-            var metadata = new Metadata(
-                section.Length == 0 ? default : image.FileMemory(section.Start, checked((int)section.Length)),
-                rtr.MetadataHandleBits, rtr.Major < 10);
-            metadata.ReadDefinitions();
-
-            var fixups = RuntimeTables.Fixups(image, rtr.Find(308));
-            var maps = new ReflectionMaps();
-            maps.Read(image, rtr, metadata, fixups, MapFormat.Auto);
-
-            var extraction = new Extraction(image, rtr, metadata, maps, fixups);
+            var extraction = Extraction.Read(image);
+            var metadata = extraction.Metadata;
             var enums = extraction.Enums;
 
             if (Path.GetFileNameWithoutExtension(binary) == "MetadataCollisionProbe") {

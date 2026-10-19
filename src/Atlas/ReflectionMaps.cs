@@ -22,6 +22,7 @@ public struct TypeMapEntry {
     public int Vertex;
     internal int Signature;
     public string Name;
+    public bool IsGlobalModule;
 }
 
 public readonly struct DerivedTypeEntry(int section, int vertex, ulong methodTable) {
@@ -36,6 +37,7 @@ public struct InvokeMapEntry {
     public ulong InvokeStub;
 
     public uint Flags;
+    public uint SourceFlags;
     public uint MetadataOffset;
     public uint NativeSignatureOffset;
 
@@ -50,6 +52,7 @@ public struct FieldMapEntry {
     public ulong StaticBase;
 
     public uint Flags;
+    public uint SourceFlags;
     public uint MetadataOffset;
     public uint Value;
     public uint StaticBaseIndex;
@@ -133,19 +136,6 @@ public sealed class ReflectionMaps {
         state = new();
     }
 
-    // Numeric prefixes are preserved only after the source namespace has
-    // been checked. The private extraction branch receives a fresh namespace.
-    private ReflectionMaps(ReflectionMaps source, SignatureHistory? origin) {
-        state = new(source.state);
-
-        if (origin is not null) {
-            signatureOrigin = origin;
-            state.Publication = null;
-        }
-    }
-
-    internal ReflectionMaps Fork(SignatureHistory? origin) => new(this, origin);
-
     internal void ValidateSignatureOrigin(SignatureHistory origin) {
         if (signatureOrigin is not null && !ReferenceEquals(signatureOrigin, origin))
             throw new ArgumentException("Reflection map signatures belong to a different metadata namespace.");
@@ -169,10 +159,10 @@ public sealed class ReflectionMaps {
         state.Publication = publication;
     }
 
-    public static ReflectionMaps Decode(
+    internal static ReflectionMaps Decode(
         PeImage image,
         ReadyToRun header,
-        Metadata metadata,
+        MetadataBuilder metadata,
         ReadOnlySpan<ulong> fixups,
         MapFormat format = MapFormat.Auto,
         CancellationToken cancellationToken = default) {
@@ -182,12 +172,12 @@ public sealed class ReflectionMaps {
         return result;
     }
 
-    public static MapFormat SelectFormat(
+    internal static MapFormat SelectFormat(
         int major,
         ReadOnlySpan<byte> invokes,
         ReadOnlySpan<byte> fields,
         ReadOnlySpan<byte> nativeLayout,
-        Metadata metadata,
+        MetadataBuilder metadata,
         MapFormat requested = MapFormat.Auto,
         CancellationToken cancellationToken = default) {
         cancellationToken.ThrowIfCancellationRequested();
@@ -281,7 +271,7 @@ public sealed class ReflectionMaps {
     internal void Read(
         PeImage image,
         ReadyToRun rtr,
-        Metadata metadata,
+        MetadataBuilder metadata,
         ReadOnlySpan<ulong> fixups,
         MapFormat requested = MapFormat.Auto,
         CancellationToken cancellationToken = default) {
@@ -291,20 +281,14 @@ public sealed class ReflectionMaps {
 
         ValidateSignatureOrigin(metadata.SignatureBuilder.Origin);
 
-        var workingMetadata = metadata.WorkingCopy();
-        var workingMaps = new ReflectionMaps(this, workingMetadata.SignatureBuilder.Origin);
-        workingMaps.ReadCore(image, rtr, workingMetadata, fixups, requested, cancellationToken);
-        workingMaps.SetSignatureOrigin(workingMetadata.SignatureBuilder.Publish());
-        cancellationToken.ThrowIfCancellationRequested();
-
-        metadata.Adopt(workingMetadata);
-        state = workingMaps.state;
+        ReadCore(image, rtr, metadata, fixups, requested, cancellationToken);
+        SetSignatureOrigin(metadata.SignatureBuilder.Publish());
     }
 
     private void ReadCore(
         PeImage image,
         ReadyToRun rtr,
-        Metadata metadata,
+        MetadataBuilder metadata,
         ReadOnlySpan<ulong> fixups,
         MapFormat requested,
         CancellationToken cancellationToken) {
@@ -326,6 +310,15 @@ public sealed class ReflectionMaps {
 
         Format = SelectFormat(rtr.Major, invokes, fields, nativeLayout, metadata, requested, cancellationToken);
         bool legacy = Format == MapFormat.Legacy;
+
+        var globalModules = new HashSet<uint>();
+        foreach (var id in metadata.ReadRecordIds()) {
+            if (id.Kind != MetadataRecordKind.ScopeDefinition)
+                continue;
+            var module = metadata.RecordField(id, MetadataFieldName.GlobalModuleType).Reference;
+            if (module.IsAvailable && module.Value.Kind == MetadataRecordKind.TypeDefinition && !module.Value.IsNil)
+                globalModules.Add(module.Value.Offset);
+        }
 
         ReadOnlySpan<RtrSectionId> typeMaps = [
             RtrSectionId.TypeMap,
@@ -371,14 +364,23 @@ public sealed class ReflectionMaps {
                 if (offset == 0)
                     throw new InvalidDataException("TypeMap contains a nil metadata handle.");
 
-                int signature = metadata.TypeSignature((offset << metadata.HandleBits) | kind);
-                string name = metadata.SignatureBuilder.Nodes[signature].Name;
+                uint metadataHandle = (offset << metadata.HandleBits) | kind;
+                int signature = 0;
+                string name = "";
+                try {
+                    signature = metadata.TypeSignature(metadataHandle);
+                    name = metadata.SignatureBuilder.Nodes[signature].Name;
+                } catch (Exception error) when (error is InvalidDataException or OverflowException or NotSupportedException) {
+                    metadata.RecordFailure(metadataHandle, "reflection type", error);
+                    name = metadata.Name(new((MetadataRecordKind)kind, offset));
+                }
 
                 Types.Add(new TypeMapEntry {
                     MethodTable = fixups[(int)index],
                     Handle = handle,
                     Vertex = table.Vertex,
                     Signature = signature,
+                    IsGlobalModule = kind == (uint)MetadataRecordKind.TypeDefinition && globalModules.Contains(offset),
                     Name = kind == 0x3D ? "typeref::" + name : name
                 });
             }
@@ -397,8 +399,11 @@ public sealed class ReflectionMaps {
                 Flags = reader.Unsigned()
             };
 
-            if ((entry.Flags & ~invokeMask) != 0)
-                throw new InvalidDataException($"Unknown InvokeMap flags 0x{entry.Flags:X}.");
+            entry.SourceFlags = entry.Flags;
+            entry.Flags = rtr.Format.NormalizeInvokeFlags(entry.SourceFlags);
+
+            if ((entry.SourceFlags & ~invokeMask) != 0)
+                throw new InvalidDataException($"Unknown InvokeMap flags 0x{entry.SourceFlags:X}.");
 
             uint handle = reader.Unsigned();
             uint type = reader.Unsigned();
@@ -462,14 +467,22 @@ public sealed class ReflectionMaps {
             }
 
             if (entry.MetadataOffset != 0) {
-                int index = metadata.ReadMethod(entry.MetadataOffset);
-                ref var method = ref CollectionsMarshal.AsSpan(metadata.Methods)[index];
-
-                if (method.Signature == 0)
-                    method.Signature = metadata.MethodSignature(method.SignatureOffset);
-
-                entry.Name = method.Name;
-                entry.Signature = method.Signature;
+                var methodId = new MetadataRecordId(MetadataRecordKind.Method, entry.MetadataOffset);
+                try {
+                    int index = metadata.ReadMethod(entry.MetadataOffset);
+                    var method = metadata.Methods[index];
+                    entry.Name = method.Name;
+                    if (method.SignatureOffset == 0)
+                        throw new InvalidDataException("Metadata method has no signature.");
+                    if (method.Signature == 0)
+                        method.Signature = metadata.MethodSignature(method.SignatureOffset);
+                    metadata.Methods[index] = method;
+                    entry.Signature = method.Signature;
+                } catch (Exception error) when (error is InvalidDataException or OverflowException or NotSupportedException) {
+                    uint metadataHandle = (entry.MetadataOffset << metadata.HandleBits) | (uint)MetadataRecordKind.Method;
+                    metadata.RecordFailure(metadataHandle, "reflection method", error);
+                    entry.Name = metadata.Name(methodId);
+                }
             } else {
                 if (entry.NativeSignatureOffset == 0 || entry.NativeSignatureOffset >= nativeLayout.Length)
                     throw new InvalidDataException("InvokeMap has no readable metadata or NativeLayout method identity.");
@@ -500,8 +513,11 @@ public sealed class ReflectionMaps {
                 Flags = reader.Unsigned()
             };
 
-            if ((entry.Flags & ~fieldMask) != 0)
-                throw new InvalidDataException($"Unknown FieldAccessMap flags 0x{entry.Flags:X}.");
+            entry.SourceFlags = entry.Flags;
+            entry.Flags = rtr.Format.NormalizeFieldFlags(entry.SourceFlags);
+
+            if ((entry.SourceFlags & ~fieldMask) != 0)
+                throw new InvalidDataException($"Unknown FieldAccessMap flags 0x{entry.SourceFlags:X}.");
 
             uint type = reader.Unsigned();
 
@@ -512,16 +528,22 @@ public sealed class ReflectionMaps {
 
             if (!legacy || (entry.Flags & 8) != 0) {
                 entry.MetadataOffset = reader.Unsigned();
-                int index = metadata.ReadField(entry.MetadataOffset);
-                ref var field = ref CollectionsMarshal.AsSpan(metadata.Fields)[index];
-
-                if (field.Signature == 0) {
-                    var signature = metadata.Reader(field.SignatureOffset);
-                    field.Signature = metadata.TypeSignature(signature.Unsigned());
+                var fieldId = new MetadataRecordId(MetadataRecordKind.Field, entry.MetadataOffset);
+                try {
+                    int index = metadata.ReadField(entry.MetadataOffset);
+                    var field = metadata.Fields[index];
+                    entry.Name = field.Name;
+                    if (field.Signature == 0) {
+                        var signature = new MetadataRecordId(MetadataRecordKind.FieldSignature, field.SignatureOffset);
+                        field.Signature = metadata.TypeSignature(metadata.Handle(signature, MetadataFieldName.Type));
+                    }
+                    metadata.Fields[index] = field;
+                    entry.Signature = field.Signature;
+                } catch (Exception error) when (error is InvalidDataException or OverflowException or NotSupportedException) {
+                    uint metadataHandle = (entry.MetadataOffset << metadata.HandleBits) | (uint)MetadataRecordKind.Field;
+                    metadata.RecordFailure(metadataHandle, "reflection field", error);
+                    entry.Name = metadata.Name(fieldId);
                 }
-
-                entry.Name = field.Name;
-                entry.Signature = field.Signature;
             } else
                 entry.Name = reader.String();
 

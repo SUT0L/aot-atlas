@@ -6,6 +6,7 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Atlas.Tests/Atlas.Tests.csproj" />
+    <Project Path="tests/BinjaCoreAbiProbe/BinjaCoreAbiProbe.csproj" />
     <Project Path="tests/RuntimeChecks/RuntimeChecks.csproj" />
   </Folder>
 </Solution>

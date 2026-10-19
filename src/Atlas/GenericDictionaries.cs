@@ -7,6 +7,7 @@ public enum DictionaryFixup : uint {
     Unknown,
     TypeHandle,
     InterfaceCall,
+    GvmDispatchCell,
     MethodDictionary = 4,
     StaticData,
     UnwrapNullableType,
@@ -92,6 +93,8 @@ public struct DictionarySlot {
     internal int Type;
     public int Method;
     public int Cell;
+    // One-based source contract; Status independently records semantic verification.
+    public int GvmCellMetadata;
     public DictionarySlotStatus Status;
 }
 
@@ -119,7 +122,7 @@ public sealed class GenericDictionaries {
     internal void Read(
         PeImage image,
         ReadyToRun header,
-        Metadata metadata,
+        MetadataBuilder metadata,
         NativeLayout native,
         TemplateMaps templates,
         MapFormat format,
@@ -132,7 +135,7 @@ public sealed class GenericDictionaries {
     internal void ReadSignatures(
         PeImage image,
         ReadyToRun header,
-        Metadata metadata,
+        MetadataBuilder metadata,
         NativeLayout native,
         TemplateMaps templates,
         MapFormat format,
@@ -142,7 +145,7 @@ public sealed class GenericDictionaries {
     private void Decode(
         PeImage image,
         ReadyToRun header,
-        Metadata metadata,
+        MetadataBuilder metadata,
         NativeLayout native,
         TemplateMaps templates,
         MapFormat format,
@@ -238,7 +241,8 @@ public sealed class GenericDictionaries {
                     bool legacyKind = recipe.Kind is >= DictionaryFixup.IsInstance and <= DictionaryFixup.PointerToOtherSlot;
                     if (encodedKind == (uint)DictionaryFixup.IntegerValue
                         || (legacyKind && !header.Format.LegacyDictionaryRecipes)
-                        || (recipe.Kind == DictionaryFixup.InstanceConstrainedMethod && !header.Format.InstanceConstrainedMethods)) {
+                        || (recipe.Kind == DictionaryFixup.InstanceConstrainedMethod && !header.Format.InstanceConstrainedMethods)
+                        || (recipe.Kind == DictionaryFixup.GvmDispatchCell && !header.Format.SeparateDispatchCellInfo)) {
                         layout.UnsupportedKind = encodedKind;
                         (signatureGaps ??= new()).Add(new(start, recipe.Offset, encodedKind, count - slot));
                         break;
@@ -267,14 +271,15 @@ public sealed class GenericDictionaries {
                                 throw new InvalidDataException("Dictionary static-data kind is neither GC nor non-GC.");
                             break;
 
+                        case DictionaryFixup.GvmDispatchCell:
                         case DictionaryFixup.MethodDictionary:
                         case DictionaryFixup.Method:
                             recipe.Method = native.MethodEntry((uint)reader.Position, metadata, format);
                             reader.Position = recipe.Method.End;
                             if (retainRecipes
-                                && recipe.Kind == DictionaryFixup.MethodDictionary
+                                && (recipe.Kind is DictionaryFixup.GvmDispatchCell or DictionaryFixup.MethodDictionary)
                                 && recipe.Method.Arguments.Count == 0)
-                                throw new InvalidDataException("Method-dictionary recipe has no generic method arguments.");
+                                throw new InvalidDataException("Generic-method dictionary recipe has no method arguments.");
                             break;
 
                         case DictionaryFixup.FieldLdToken:
@@ -375,7 +380,7 @@ public sealed class GenericDictionaries {
         ReadOnlySpan<byte> data,
         scoped ref NativeReader reader,
         NativeLayout native,
-        Metadata metadata,
+        MetadataBuilder metadata,
         MapFormat format,
         out int offset) {
         var payload = format == MapFormat.Legacy ? RelativePayload(data, ref reader) : reader;
@@ -504,6 +509,39 @@ public sealed class GenericDictionaries {
                             slot.Status = DictionarySlotStatus.Unsupported;
                         }
                     }
+                } else if (recipe.Kind == DictionaryFixup.GvmDispatchCell) {
+                    slot.Status = DictionarySlotStatus.Unresolved;
+                    slot.Type = bindings.Resolve(recipe.Method.DeclaringType, owner, arguments);
+                    int metadataIndex = extraction.DispatchCellMetadata.Find(slot.Value);
+                    if (metadataIndex >= 0) {
+                        ref readonly var contract = ref extraction.DispatchCellMetadata.Entries[metadataIndex];
+                        bool alignedGvm = contract.IsGvm && (slot.Value - contract.FirstCell) % 16 == 0;
+                        if (alignedGvm)
+                            slot.GvmCellMetadata = metadataIndex + 1;
+
+                        if (slot.Type != 0 && contract.Status == MetadataFactStatus.Valid) {
+                            bool identity = recipe.Method.Identity.MetadataOffset != 0 && contract.Method.MetadataOffset != 0
+                                ? recipe.Method.Identity.MetadataOffset == contract.Method.MetadataOffset
+                                : (comparison ??= new(signatures, bindings)).EqualMethod(
+                                    recipe.Method.Identity.Signature, contract.Method.Signature);
+                            bool match = alignedGvm
+                                && contract.Type == types[slot.Type - 1].Address
+                                && recipe.Method.Identity.Name == contract.Method.Name
+                                && identity
+                                && recipe.Method.Arguments.Count == contract.Arguments.Count
+                                && ((recipe.Method.Flags & 8) != 0) == contract.Method.AsyncVariant
+                                && ((recipe.Method.Flags & 0x10) != 0) == contract.Method.ReturnDroppingAsyncThunk;
+
+                            for (int argument = 0; match && argument < contract.Arguments.Count; ++argument) {
+                                int binding = bindings.Resolve(
+                                    signatures.Edges[recipe.Method.Arguments.Start + argument], owner, arguments);
+                                match = binding != 0 && types[binding - 1].Address
+                                    == extraction.DispatchCellMetadata.ArgumentAddresses[contract.Arguments.Start + argument];
+                            }
+
+                            slot.Status = match ? DictionarySlotStatus.Verified : DictionarySlotStatus.Conflict;
+                        }
+                    }
                 } else if (recipe.Kind == DictionaryFixup.StaticData) {
                     slot.Status = DictionarySlotStatus.Unresolved;
                     if (slot.Type != 0
@@ -533,7 +571,8 @@ public sealed class GenericDictionaries {
                                 || !identity
                                 || target.Arguments.Count != recipe.Method.Arguments.Count
                                 || target.AsyncVariant != ((recipe.Method.Flags & 8) != 0
-                                    && extraction.Header.Format.AsyncMethodVariants))
+                                    && extraction.Header.Format.AsyncMethodVariants)
+                                || target.ReturnDroppingAsyncThunk != ((recipe.Method.Flags & 0x10) != 0))
                                 continue;
 
                             bool match = true;

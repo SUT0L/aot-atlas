@@ -15,6 +15,8 @@ public enum DispatchCellStatus : byte {
     ContractMismatch
 }
 
+public enum DispatchCellStorage : byte { File, Rehydrated, ZeroInitialized, FileAndZeroInitialized }
+
 public readonly record struct InterfaceDispatchCell {
     public ulong Address { get; init; }
     public ulong Stub { get; init; }
@@ -23,9 +25,13 @@ public readonly record struct InterfaceDispatchCell {
     internal int InterfaceType { get; init; }
     public ushort Slot { get; init; }
     public IndexRange Uses { get; init; }
-    public bool Hydrated { get; init; }
+    public DispatchCellStorage Storage { get; init; }
+    public bool Hydrated => Storage == DispatchCellStorage.Rehydrated;
     public byte Register { get; init; }
     public IndexRange DictionarySlots { get; init; }
+    public int Metadata { get; init; }
+    public ulong CachedMethodTable { get; init; }
+    public ulong CachedCode { get; init; }
 
     internal InterfaceDispatchCell(
         ulong address,
@@ -37,7 +43,8 @@ public readonly record struct InterfaceDispatchCell {
         IndexRange uses,
         bool hydrated,
         byte register,
-        IndexRange dictionarySlots = default) {
+        IndexRange dictionarySlots = default,
+        int metadata = 0) {
         Address = address;
         Stub = stub;
         EncodedInterface = encodedInterface;
@@ -45,13 +52,18 @@ public readonly record struct InterfaceDispatchCell {
         InterfaceType = interfaceType;
         Slot = slot;
         Uses = uses;
-        Hydrated = hydrated;
+        Storage = hydrated ? DispatchCellStorage.Rehydrated : DispatchCellStorage.File;
         Register = register;
         DictionarySlots = dictionarySlots;
+        Metadata = metadata;
     }
 }
 
 public readonly record struct RejectedDispatchCell(ulong Address, DispatchCellStatus Status);
+
+public readonly record struct GvmDispatchCell(
+    ulong Address, int Metadata, IndexRange Uses, IndexRange DictionarySlots,
+    ulong CachedMethodTable, ulong CachedCode, DispatchCellStorage Storage);
 
 public sealed class DispatchCells {
     private readonly Extraction extraction;
@@ -59,17 +71,22 @@ public sealed class DispatchCells {
     internal readonly List<DispatchCellUse> Uses = new();
     internal readonly List<RejectedDispatchCell> Rejected = new();
     internal readonly List<int> DictionarySlots = new();
+    internal readonly List<GvmDispatchCell> GvmCells = new();
+    private readonly DispatchCellUse[] unprovenUses;
 
     public ReadOnlySpan<InterfaceDispatchCell> CellEntries => CollectionsMarshal.AsSpan(Cells);
     public ReadOnlySpan<DispatchCellUse> UseEntries => CollectionsMarshal.AsSpan(Uses);
     public ReadOnlySpan<RejectedDispatchCell> RejectedEntries => CollectionsMarshal.AsSpan(Rejected);
     public ReadOnlySpan<int> DictionarySlotPositions => CollectionsMarshal.AsSpan(DictionarySlots);
+    public ReadOnlySpan<GvmDispatchCell> GvmCellEntries => CollectionsMarshal.AsSpan(GvmCells);
+    public ReadOnlySpan<DispatchCellUse> UnprovenUseEntries => unprovenUses;
     public RuntimeTypeReference InterfaceTypeAt(int position) => extraction.RuntimeTypeAt(Cells[position].InterfaceType);
 
     public DispatchCells(Extraction extraction, CodeFlow code, CancellationToken cancellationToken = default) {
         cancellationToken.ThrowIfCancellationRequested();
 
         this.extraction = extraction;
+        unprovenUses = code.UnprovenDispatchCellUseEntries.ToArray();
         var candidates = code.DispatchCellUses.ToArray();
         Array.Sort(candidates, static (left, right) => {
             int order = left.Cell.CompareTo(right.Cell);
@@ -80,6 +97,16 @@ public sealed class DispatchCells {
         Uses.EnsureCapacity(candidates.Length);
 
         var stubs = new Dictionary<ulong, byte>();
+
+        if (extraction.DispatchCellMetadata.Layout == DispatchCellLayout.CachedMethodTableAndCode) {
+            ReadIndexed(extraction, candidates, cancellationToken);
+            AttachIndexedDictionarySlots(cancellationToken);
+            foreach (var use in unprovenUses) {
+                if (use.Cell != 0)
+                    Rejected.Add(new(use.Cell, DispatchCellStatus.UnknownStub));
+            }
+            return;
+        }
 
         for (int first = 0; first < candidates.Length;) {
             cancellationToken.ThrowIfCancellationRequested();
@@ -176,6 +203,32 @@ public sealed class DispatchCells {
         ulong expectedInterface = 0,
         uint expectedSlot = 0) {
         cell = default;
+
+        if (extraction.DispatchCellMetadata.Layout == DispatchCellLayout.CachedMethodTableAndCode) {
+            int info = extraction.DispatchCellMetadata.Find(address);
+            if (info < 0)
+                return DispatchCellStatus.MissingStorage;
+
+            ref readonly var entry = ref extraction.DispatchCellMetadata.Entries[info];
+            if ((address - entry.FirstCell) % 16 != 0)
+                return DispatchCellStatus.Unaligned;
+
+            if (entry.IsGvm || (expectedInterface != 0 && (expectedInterface != entry.Type || expectedSlot != entry.Slot)))
+                return DispatchCellStatus.ContractMismatch;
+
+            if ((entry.Status & MetadataFactStatus.InvalidHandle) != 0) {
+                return DispatchCellStatus.UnknownInterface;
+            }
+
+            var cache = ReadCache(extraction.Image, extraction.Memory, address);
+            cell = new InterfaceDispatchCell(address, 0, 0, 0, extraction.Types.Index[entry.Type],
+                entry.Slot, default, false, 11, metadata: info + 1) {
+                CachedMethodTable = cache.MethodTable,
+                CachedCode = cache.Code,
+                Storage = cache.Storage
+            };
+            return DispatchCellStatus.Valid;
+        }
 
         if ((address & 15) != 0)
             return DispatchCellStatus.Unaligned;
@@ -301,6 +354,173 @@ public sealed class DispatchCells {
         }
 
         return DispatchCellStatus.MissingTerminator;
+    }
+
+    private void ReadIndexed(Extraction extraction, DispatchCellUse[] candidates, CancellationToken cancellationToken) {
+        int use = 0;
+        int split = extraction.DispatchCellMetadata.InterfaceCount;
+        var entries = extraction.DispatchCellMetadata.Entries;
+        // The source directory groups interface and GVM contracts separately.
+        // Visit the two contiguous regions in address order to merge uses once.
+        if (split != 0 && split < entries.Length && entries[0].FirstCell > entries[split].FirstCell) {
+            ReadRange(split, entries.Length);
+            ReadRange(0, split);
+        } else {
+            ReadRange(0, split);
+            ReadRange(split, entries.Length);
+        }
+
+        while (use < candidates.Length)
+            Reject(candidates[use++]);
+
+        void ReadRange(int first, int end) {
+            for (int info = first; info < end; ++info) {
+                cancellationToken.ThrowIfCancellationRequested();
+                var entry = extraction.DispatchCellMetadata.Entries[info];
+                for (int offset = 0; offset < entry.CellCount; ++offset) {
+                    ulong address = entry.FirstCell + (uint)offset * 16UL;
+                    while (use < candidates.Length && candidates[use].Cell < address)
+                        Reject(candidates[use++]);
+
+                    if ((entry.Status & MetadataFactStatus.InvalidHandle) != 0) {
+                        Rejected.Add(new(address, DispatchCellStatus.UnknownInterface));
+                        while (use < candidates.Length && candidates[use].Cell == address) {
+                            ++use;
+                        }
+                        continue;
+                    }
+
+                    int start = Uses.Count;
+                    while (use < candidates.Length && candidates[use].Cell == address) {
+                        if (candidates[use].Register == 11)
+                            Uses.Add(candidates[use]);
+                        else
+                            Rejected.Add(new(address, DispatchCellStatus.WrongRegister));
+                        ++use;
+                    }
+
+                    var uses = new IndexRange(start, Uses.Count - start);
+                    var cache = ReadCache(extraction.Image, extraction.Memory, address);
+                    if (entry.IsGvm) {
+                        GvmCells.Add(new GvmDispatchCell(address, info + 1, uses, default,
+                            cache.MethodTable, cache.Code, cache.Storage));
+                    } else {
+                        Cells.Add(new InterfaceDispatchCell(address, 0, 0, 0, extraction.Types.Index[entry.Type],
+                            entry.Slot, uses, false, 11, metadata: info + 1) {
+                            CachedMethodTable = cache.MethodTable,
+                            CachedCode = cache.Code,
+                            Storage = cache.Storage
+                        });
+                    }
+                }
+            }
+        }
+
+        void Reject(DispatchCellUse candidate) {
+            int info = extraction.DispatchCellMetadata.Find(candidate.Cell);
+            var status = info >= 0 ? DispatchCellStatus.Unaligned : DispatchCellStatus.MissingStorage;
+            Rejected.Add(new(candidate.Cell, status));
+        }
+    }
+
+    private void AttachIndexedDictionarySlots(CancellationToken cancellationToken) {
+        if ((extraction.Stages & ExtractionStage.DictionaryBindings) == 0)
+            return;
+
+        var positions = new Dictionary<ulong, (int Index, bool Gvm)>(Cells.Count + GvmCells.Count);
+        for (int i = 0; i < Cells.Count; ++i)
+            positions.Add(Cells[i].Address, (i, false));
+        for (int i = 0; i < GvmCells.Count; ++i)
+            positions.Add(GvmCells[i].Address, (i, true));
+
+        var sources = new List<(int Cell, bool Gvm, int Slot)>();
+        for (int i = 0; i < extraction.Dictionaries.Slots.Count; ++i) {
+            cancellationToken.ThrowIfCancellationRequested();
+            var slot = extraction.Dictionaries.Slots[i];
+            if ((slot.Cell != 0 || slot.GvmCellMetadata != 0) && positions.TryGetValue(slot.Value, out var position))
+                sources.Add((position.Index, position.Gvm, i));
+        }
+
+        sources.Sort(static (left, right) => {
+            int order = left.Gvm.CompareTo(right.Gvm);
+            if (order == 0)
+                order = left.Cell.CompareTo(right.Cell);
+            return order != 0 ? order : left.Slot.CompareTo(right.Slot);
+        });
+
+        DictionarySlots.EnsureCapacity(sources.Count);
+        for (int first = 0; first < sources.Count;) {
+            int end = first + 1;
+            while (end < sources.Count && sources[end].Cell == sources[first].Cell && sources[end].Gvm == sources[first].Gvm)
+                ++end;
+
+            int index = sources[first].Cell;
+            var range = new IndexRange(DictionarySlots.Count, end - first);
+            if (sources[first].Gvm)
+                GvmCells[index] = GvmCells[index] with { DictionarySlots = range };
+            else
+                Cells[index] = Cells[index] with { DictionarySlots = range };
+            for (int i = first; i < end; ++i)
+                DictionarySlots.Add(sources[i].Slot);
+            first = end;
+        }
+    }
+
+    private static (ulong MethodTable, ulong Code, DispatchCellStorage Storage) ReadCache(
+        PeImage image, RuntimeMemory memory, ulong address) {
+        int regionIndex = memory.Find(address);
+        if (regionIndex >= 0) {
+            ref readonly var region = ref memory.Regions[regionIndex];
+            var bytes = region.Bytes[(int)(address - region.Start)..];
+            if (bytes.Length >= 16) {
+                return (BinaryPrimitives.ReadUInt64LittleEndian(bytes), BinaryPrimitives.ReadUInt64LittleEndian(bytes[8..]),
+                    region.Hydrated ? DispatchCellStorage.Rehydrated : DispatchCellStorage.File);
+            }
+        }
+
+        int sectionIndex = image.FindSection(address);
+        if (sectionIndex < 0) {
+            throw new InvalidDataException($"Dispatch cell at 0x{address:X} has no mapped storage.");
+        }
+
+        ref readonly var section = ref image.Sections[sectionIndex];
+        ulong offset = address - image.ImageBase - section.Rva;
+        if (16 > section.VirtualSize - offset) {
+            throw new InvalidDataException($"Dispatch cell at 0x{address:X} extends beyond mapped storage.");
+        }
+
+        // RuntimeMemory retains all initialized bytes, including hydration overlays.
+        // Uncovered bytes inside the mapped section are the PE's zero-filled tail.
+        Span<byte> cache = stackalloc byte[16];
+        cache.Clear();
+        ulong end = address + 16;
+        int initialized = 0;
+        bool hydrated = false;
+
+        foreach (ref readonly var region in memory.RegionEntries) {
+            if (region.Start >= end) {
+                break;
+            }
+
+            ulong first = Math.Max(address, region.Start);
+            ulong last = Math.Min(end, region.Start + (uint)region.Bytes.Length);
+            if (first >= last) {
+                continue;
+            }
+
+            int length = (int)(last - first);
+            region.Bytes.Slice((int)(first - region.Start), length).CopyTo(cache[(int)(first - address)..]);
+            initialized += length;
+            hydrated |= region.Hydrated;
+        }
+
+        var storage = (hydrated, initialized) switch {
+            (true, _) => DispatchCellStorage.Rehydrated,
+            (_, 0) => DispatchCellStorage.ZeroInitialized,
+            (_, 16) => DispatchCellStorage.File,
+            _ => DispatchCellStorage.FileAndZeroInitialized
+        };
+        return (BinaryPrimitives.ReadUInt64LittleEndian(cache), BinaryPrimitives.ReadUInt64LittleEndian(cache[8..]), storage);
     }
 
     private static DispatchCellStatus Interface(

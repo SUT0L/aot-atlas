@@ -72,7 +72,7 @@ public sealed class GvmTables {
     internal void Read(
         PeImage image,
         ReadyToRun rtr,
-        Metadata metadata,
+        MetadataBuilder metadata,
         NativeLayout layout,
         ReadOnlySpan<ulong> fixups,
         MapFormat format,
@@ -104,9 +104,12 @@ public sealed class GvmTables {
             entry.Calling.Identity = MethodIdentity.Read(entry.Calling.Token, metadata, layout, format);
             entry.Target.Identity = MethodIdentity.Read(entry.Target.Token, metadata, layout, format);
 
-            int arity = metadata.SignatureBuilder.Methods[entry.Calling.Identity.Signature].GenericParameterCount;
-            if (arity == 0 || metadata.SignatureBuilder.Methods[entry.Target.Identity.Signature].GenericParameterCount != arity)
-                throw new InvalidDataException("Class GVM methods have incompatible generic arities.");
+            if (entry.Calling.Identity.Signature != 0 && entry.Target.Identity.Signature != 0) {
+                int arity = metadata.SignatureBuilder.Methods[entry.Calling.Identity.Signature].GenericParameterCount;
+                if (arity == 0 || metadata.SignatureBuilder.Methods[entry.Target.Identity.Signature].GenericParameterCount != arity) {
+                    throw new InvalidDataException("Class GVM methods have incompatible generic arities.");
+                }
+            }
 
             entry.Length = reader.Position - entry.Vertex;
             Classes.Add(entry);
@@ -138,7 +141,7 @@ public sealed class GvmTables {
             entry.Calling.Identity = MethodIdentity.Read(entry.Calling.Token, metadata, layout, format);
 
             int arity = metadata.SignatureBuilder.Methods[entry.Calling.Identity.Signature].GenericParameterCount;
-            if (arity == 0)
+            if (entry.Calling.Identity.Signature != 0 && arity == 0)
                 throw new InvalidDataException("Interface GVM declaration has no generic parameters.");
 
             int count = checked((int)reader.Unsigned());
@@ -162,8 +165,8 @@ public sealed class GvmTables {
                         metadata,
                         layout,
                         format);
-                    if (metadata.SignatureBuilder.Methods[implementation.Target.Identity.Signature]
-                        .GenericParameterCount != arity)
+                    if (entry.Calling.Identity.Signature != 0 && implementation.Target.Identity.Signature != 0
+                        && metadata.SignatureBuilder.Methods[implementation.Target.Identity.Signature].GenericParameterCount != arity)
                         throw new InvalidDataException("Interface GVM implementation has an incompatible generic arity.");
                 }
 

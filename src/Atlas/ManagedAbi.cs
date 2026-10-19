@@ -15,7 +15,8 @@ public enum AbiStatus : byte {
     SharedTemplate,
     GenericDefinition,
     HiddenRecord,
-    TraceIdentity
+    TraceIdentity,
+    UnknownSignature
 }
 
 public enum AbiKind : byte {
@@ -114,6 +115,10 @@ public sealed class ManagedAbi {
             cancellationToken.ThrowIfCancellationRequested();
 
             var entry = new MethodRecord(extraction, i);
+            if (entry.Signature == 0) {
+                Methods[i].Parameters = new IndexRange(capacity, 0);
+                continue;
+            }
             var signature = signatures.Methods[entry.Signature];
             bool hasThis = signature.NativeConvention
                 ? (signature.CallingConvention & 2) == 0
@@ -128,7 +133,7 @@ public sealed class ManagedAbi {
                     shared = template.Method.Entrypoint != 0
                         && !template.UniversalCanonical
                         && !template.AsyncVariant
-                        && !entry.AsyncVariant;
+                        && !entry.AsyncVariant && !entry.ReturnDroppingAsyncThunk;
                 }
             }
 
@@ -184,6 +189,11 @@ public sealed class ManagedAbi {
             Owners[i] = owner;
             var ownerType = extraction.Types.Types[owner - 1];
 
+            if (entry.Signature == 0) {
+                Methods[i].Status = AbiStatus.UnknownSignature;
+                continue;
+            }
+
             uint convention = signature.CallingConvention;
             bool hasThis = signature.NativeConvention
                 ? (convention & 2) == 0
@@ -201,7 +211,7 @@ public sealed class ManagedAbi {
             method.Status =
                 entry.Entrypoint == 0 && !shared
                     ? AbiStatus.NoEntrypoint
-                : entry.AsyncVariant
+                : entry.AsyncVariant || entry.ReturnDroppingAsyncThunk
                     ? AbiStatus.AsyncVariant
                 : varargs
                     ? AbiStatus.Varargs
@@ -534,7 +544,7 @@ public sealed class ManagedAbi {
         ref readonly var method = ref template.Method;
         if (Methods[index].Status != AbiStatus.Complete
             || template.UniversalCanonical
-            || template.AsyncVariant
+            || template.AsyncVariant || template.ReturnDroppingAsyncThunk
             || method.Entrypoint != (unboxed ? Methods[index].UnboxedTarget : record.Entrypoint)
             || method.Identity.Name != record.Name
             || method.Arguments.Count != record.Arguments.Length)

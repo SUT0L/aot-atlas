@@ -32,21 +32,24 @@ public sealed class NativeLayout {
     private readonly ReadOnlyMemory<byte> data;
     private readonly ulong[] references;
     private readonly SignatureBuilder signatures;
-    internal readonly Dictionary<ulong, int> ExternalTypes = new(4096);
+    private readonly uint methodFlags;
+    internal readonly Dictionary<ulong, int> ExternalTypes = new();
 
     public NativeLayout(ReadOnlyMemory<byte> data, ulong[] references, SignatureBuilder signatures)
         : this(data, references, signatures, takeOwnership: false) {
     }
 
-    internal NativeLayout(ReadOnlyMemory<byte> data, ulong[] references, SignatureBuilder signatures, bool takeOwnership) {
+    internal NativeLayout(ReadOnlyMemory<byte> data, ulong[] references, SignatureBuilder signatures,
+        bool takeOwnership, uint methodFlags = 15) {
         this.data = takeOwnership ? data : data.ToArray();
         this.references = takeOwnership ? references : (ulong[])references.Clone();
         this.signatures = signatures;
+        this.methodFlags = methodFlags;
     }
 
-    private readonly Dictionary<int, (int Index, int End)> types = new(16384);
-    private readonly Dictionary<int, (int Index, int End)> methods = new(8192);
-    private readonly Dictionary<uint, NativeMethodIdentity> identities = new(8192);
+    private readonly Dictionary<int, (int Index, int End)> types = new();
+    private readonly Dictionary<int, (int Index, int End)> methods = new();
+    private readonly Dictionary<uint, NativeMethodIdentity> identities = new();
 
     private readonly HashSet<int> activeTypes = new();
     private readonly HashSet<int> activeMethods = new();
@@ -141,7 +144,7 @@ public sealed class NativeLayout {
         }
     }
 
-    internal NativeMethodEntry MethodEntry(uint offset, Metadata metadata, MapFormat format) {
+    internal NativeMethodEntry MethodEntry(uint offset, MetadataBuilder metadata, MapFormat format) {
         ReflectionMaps.RequireGrammar(format);
 
         if (format == MapFormat.Metadata && !ReferenceEquals(metadata.SignatureBuilder, signatures))
@@ -149,46 +152,12 @@ public sealed class NativeLayout {
                 "Metadata method entries must share the NativeLayout signature builder.",
                 nameof(metadata));
 
-        var checkpoint = signatures.MarkAppend();
-        using Metadata.SignatureOperation? metadataOperation = format == MapFormat.Metadata
-            ? new(metadata)
-            : null;
-
-        try {
-            return ReadMethodEntry(offset, metadata, format);
-        } catch {
-            metadataOperation?.Rollback();
-            RollbackEntry(checkpoint);
-            throw;
-        }
+        // Each nested source read retains its own validated facts. A later bad
+        // argument must not invalidate metadata signatures decoded independently.
+        return ReadMethodEntry(offset, metadata, format);
     }
 
-    private void RollbackEntry(SignatureBuilder.Checkpoint checkpoint) {
-        int[] newTypes = types.Where(entry => entry.Value.Index >= checkpoint.Nodes)
-            .Select(entry => entry.Key).ToArray();
-        int[] newMethods = methods.Where(entry => entry.Value.Index >= checkpoint.Methods)
-            .Select(entry => entry.Key).ToArray();
-        uint[] newIdentities = identities.Where(entry => entry.Value.Signature >= checkpoint.Methods)
-            .Select(entry => entry.Key).ToArray();
-        ulong[] newExternalTypes = ExternalTypes.Where(entry => entry.Value >= checkpoint.Nodes)
-            .Select(entry => entry.Key).ToArray();
-
-        foreach (int key in newTypes)
-            types.Remove(key);
-
-        foreach (int key in newMethods)
-            methods.Remove(key);
-
-        foreach (uint key in newIdentities)
-            identities.Remove(key);
-
-        foreach (ulong key in newExternalTypes)
-            ExternalTypes.Remove(key);
-
-        signatures.RollbackAppend(checkpoint);
-    }
-
-    private NativeMethodEntry ReadMethodEntry(uint offset, Metadata metadata, MapFormat format) {
+    private NativeMethodEntry ReadMethodEntry(uint offset, MetadataBuilder metadata, MapFormat format) {
 
         var reader = new NativeReader(data.Span, checked((int)offset));
 
@@ -197,8 +166,11 @@ public sealed class NativeLayout {
             Flags = reader.Unsigned()
         };
 
-        if ((entry.Flags & ~15U) != 0)
+        if ((entry.Flags & ~methodFlags) != 0)
             throw new InvalidDataException("NativeLayout method entry contains unknown flags.");
+
+        if ((entry.Flags & 24) == 24)
+            throw new InvalidDataException("NativeLayout method entry selects two async variants.");
 
         if ((entry.Flags & 4) != 0) {
             uint index = reader.Unsigned();
@@ -233,7 +205,8 @@ public sealed class NativeLayout {
         if ((entry.Flags & 1) != 0) {
             int count = checked((int)reader.Unsigned());
 
-            if (count == 0 || count != signatures.Methods[entry.Identity.Signature].GenericParameterCount)
+            if (count == 0 || (entry.Identity.Signature != 0
+                && count != signatures.Methods[entry.Identity.Signature].GenericParameterCount))
                 throw new InvalidDataException("NativeLayout method entry has a mismatched instantiation arity.");
 
             // This root protects the argument suffix. The enclosing operation

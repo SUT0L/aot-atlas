@@ -11,7 +11,7 @@ internal static unsafe class EnumTypes {
         int maxName = 0;
 
         foreach (ref readonly var member in CollectionsMarshal.AsSpan(enums.Members)) {
-            string name = metadata.Fields[member.Field].Name;
+            string name = metadata.FieldDefinitions[member.Field].Name;
             if (name.Contains('\0'))
                 throw new InvalidDataException("An enum member contains a NUL and cant be represented by a native type.");
 
@@ -33,7 +33,7 @@ internal static unsafe class EnumTypes {
 
                     for (int j = definition.Members.Start; j < definition.Members.End; ++j) {
                         var member = enums.Members[j];
-                        int length = Encoding.UTF8.GetBytes(metadata.Fields[member.Field].Name, text);
+                        int length = Encoding.UTF8.GetBytes(metadata.FieldDefinitions[member.Field].Name, text);
                         text[length] = 0;
 
                         // The core takes uint64_t even for signed enums
@@ -61,7 +61,7 @@ internal static unsafe class EnumTypes {
         int maxName = 0;
 
         foreach (ref readonly var definition in CollectionsMarshal.AsSpan(enums.Definitions)) {
-            string name = metadata.Types[definition.MetadataType].Name;
+            string name = metadata.TypeDefinitions[definition.MetadataType].Name;
             if (name.Contains('\0'))
                 throw new InvalidDataException("An enum name contains a NUL and cant be represented by a native type.");
 
@@ -87,7 +87,7 @@ internal static unsafe class EnumTypes {
                 if (types[i] == 0)
                     continue;
 
-                var definition = metadata.Types[enums.Definitions[i].MetadataType];
+                var definition = metadata.TypeDefinitions[enums.Definitions[i].MetadataType];
                 int length = Encoding.UTF8.GetBytes(definition.Name, buffer);
                 buffer[length] = 0;
 
@@ -120,7 +120,7 @@ internal static unsafe class EnumTypes {
 
             uint offset = isRuntime
                 ? checked((uint)(extraction.Types.Types[i - definitions.Length].Address - extraction.Image.ImageBase))
-                : extraction.Metadata.Types[definition.MetadataType].Offset;
+                : extraction.Metadata.TypeDefinitions[definition.MetadataType].Offset;
 
             BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(position), offset);
             bytes[position + 4] = (byte)(isRuntime ? 1 : 0);

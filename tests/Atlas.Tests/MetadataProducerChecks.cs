@@ -17,14 +17,14 @@ internal static class MetadataProducerChecks {
         Console.WriteLine("Compiler metadata producers: ten typed attribute arguments, six typeof shapes and source-declared field/parameter defaults matched.");
     }
 
-    private static Metadata Read(string path) {
-        var metadata = new Metadata(File.ReadAllBytes(path), 7);
+    private static MetadataBuilder Read(string path) {
+        var metadata = new MetadataBuilder(File.ReadAllBytes(path), 7);
         metadata.ReadDefinitions();
 
         return metadata;
     }
 
-    private static void CheckRichArguments(Metadata metadata) {
+    private static void CheckRichArguments(MetadataBuilder metadata) {
         var packet = metadata.Types.Single(type => type.Name == "Packet");
         var attribute = Enumerable.Range(packet.Attributes.Start, packet.Attributes.Count)
             .Select(index => metadata.AttributePayload(metadata.Handles[index]))
@@ -42,8 +42,8 @@ internal static class MetadataProducerChecks {
         Assert(arguments[0].Type == "int32[]" && arguments[1].Type == "string[]"
             && arguments[9].Type == "object[]", "Attribute array element labels changed.");
 
-        Assert(arguments[0].Value is System.Collections.ObjectModel.ReadOnlyCollection<object> integers
-            && integers.SequenceEqual(new object[] { -1, 7, 123456 }), "Int32 array values changed.");
+        Assert(arguments[0].Value is System.Collections.ObjectModel.ReadOnlyCollection<int> integers
+            && integers.SequenceEqual(new[] { -1, 7, 123456 }), "Int32 array values changed.");
         Assert(arguments[1].Value is System.Collections.ObjectModel.ReadOnlyCollection<MetadataValue> names && names.Count == 2
             && names[0].Kind == "string" && names[0].Value is "alpha"
             && names[1].Kind == "null" && names[1].Value is null, "String/null array values changed.");
@@ -60,7 +60,7 @@ internal static class MetadataProducerChecks {
             && mixed[2].Value is float single && single == 1.5f, "Mixed boxed argument types/values changed.");
     }
 
-    private static void CheckTypeSpecifications(Metadata metadata) {
+    private static void CheckTypeSpecifications(MetadataBuilder metadata) {
         var contract = metadata.Types.Single(type => type.Name == "Contract");
         var attribute = Enumerable.Range(contract.Attributes.Start, contract.Attributes.Count)
             .Select(index => metadata.AttributePayload(metadata.Handles[index]))
@@ -90,9 +90,10 @@ internal static class MetadataProducerChecks {
             "Named typeof value changed.");
     }
 
-    private static void CheckDefaults(Metadata metadata) {
+    private static void CheckDefaults(MetadataBuilder metadata) {
         var field = metadata.Fields.Single(value => value.Name == "WireId");
-        var members = new MetadataMembers(metadata);
+        var members = metadata.MembersBuilder;
+        members.ReadAll(default);
         var parameter = members.Parameters.Values.Single(value => value.Name == "count");
 
         Assert(metadata.Constant(field.DefaultValue).Value is int wireId && wireId == 0x1234,

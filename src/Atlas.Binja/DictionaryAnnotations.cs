@@ -73,6 +73,13 @@ internal static unsafe class DictionaryAnnotations {
                             stats.ImageBase
                                 + (extraction.Header.Find(nested.Section).Start + (uint)nested.Vertex - originalBase));
                         ++stats.DataReferences;
+                    } else if (recipe.Kind == DictionaryFixup.GvmDispatchCell) {
+                        var contract = extraction.DispatchCellMetadata.Entries[slot.GvmCellMetadata - 1];
+                        identity = string.Concat(extraction.Names.Values[slot.Type - 1], "::", contract.Method.Name);
+                        kind = "GvmDispatchCell";
+                        Core.BNAddUserDataReference(view, address,
+                            stats.ImageBase + extraction.Header.Find(contract.Section).Start + (uint)contract.Vertex - originalBase);
+                        ++stats.DataReferences;
                     } else {
                         identity = extraction.Names.Values[slot.Type - 1];
                         kind = recipe.Kind == DictionaryFixup.TypeHandle ? "TypeHandle"

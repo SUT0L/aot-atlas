@@ -166,15 +166,7 @@ internal static unsafe class NativeApply {
             throw new InvalidDataException("The rebased image exceeds the address space.");
 
         cancellationToken.ThrowIfCancellationRequested();
-        var header = ReadyToRun.Read(image);
-        var metadata = Metadata.FromImage(image, header);
-        metadata.ReadDefinitions(cancellationToken);
-
-        var fixups = RuntimeTables.Fixups(image, header.Find(RtrSectionId.CommonFixupsTable));
-        var maps = new ReflectionMaps();
-        maps.Read(image, header, metadata, fixups, format, cancellationToken);
-
-        var prepared = new PreparedAnalysis(image, header, metadata, maps, fixups, cancellationToken);
+        var prepared = PreparedAnalysis.Read(image, mapFormat: format, cancellationToken: cancellationToken);
         var extraction = prepared.Extraction;
         var preparationMeasurement = AnalysisMeasurement.Since(start, allocated);
 

@@ -22,6 +22,10 @@ public struct GenericMethodEntry {
 
     public string Name;
     public bool AsyncVariant;
+    public bool ReturnDroppingAsyncThunk;
+    public MetadataFactStatus NameStatus;
+    public MetadataFactStatus SignatureStatus;
+    public readonly MetadataFactStatus MetadataStatus => NameStatus | SignatureStatus;
     public IndexRange Arguments;
 }
 
@@ -37,7 +41,7 @@ public sealed class GenericMaps {
     internal void Read(
         PeImage image,
         ReadyToRun rtr,
-        Metadata metadata,
+        MetadataBuilder metadata,
         NativeLayout layout,
         ReadOnlySpan<ulong> references,
         MapFormat format,
@@ -113,14 +117,18 @@ public sealed class GenericMaps {
                             "Exact method instantiation entrypoint is outside executable storage.");
                 }
 
-                var identity = MethodIdentity.Read(entry.Token, metadata, layout, format, maskedToken);
+                var identity = MethodIdentity.Read(
+                    entry.Token, metadata, layout, format, maskedToken, rtr.Format.ReturnDroppingAsyncThunks);
                 entry.MetadataOffset = identity.MetadataOffset;
                 entry.NativeOffset = identity.NativeOffset;
                 entry.Name = identity.Name;
                 entry.Signature = identity.Signature;
                 entry.AsyncVariant = identity.AsyncVariant;
+                entry.ReturnDroppingAsyncThunk = identity.ReturnDroppingAsyncThunk;
+                entry.NameStatus = identity.NameStatus;
+                entry.SignatureStatus = identity.SignatureStatus;
 
-                if (metadata.SignatureBuilder.Methods[entry.Signature].GenericParameterCount != count)
+                if (entry.Signature != 0 && metadata.SignatureBuilder.Methods[entry.Signature].GenericParameterCount != count)
                     throw new InvalidDataException($"Generic method '{entry.Name}' has a mismatched instantiation arity.");
 
                 Methods.Add(entry);

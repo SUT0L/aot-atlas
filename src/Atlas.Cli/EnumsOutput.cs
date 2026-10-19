@@ -8,7 +8,7 @@ internal static class EnumsOutput {
 
         json.WriteStartObject();
         json.WriteString("input_sha256", inputSha256);
-        ExtractionStatusOutput.Write(json, extraction.Stages, extraction.DictionarySignatureGaps);
+        ExtractionStatusOutput.Write(json, extraction);
         json.WriteNumber("image_base", extraction.Image.ImageBase);
 
         json.WriteStartArray("definitions");
@@ -19,9 +19,16 @@ internal static class EnumsOutput {
             json.WriteStartObject();
             json.WriteNumber("metadata_type", type.Offset);
             JsonOutput.WriteString(json, "name", type.Name);
-            json.WriteNumber("width", definition.Width);
-            json.WriteBoolean("signed", definition.Signed);
+            if (definition.Width != 0) {
+                json.WriteNumber("width", definition.Width);
+                json.WriteBoolean("signed", definition.Signed);
+            } else {
+                json.WriteNull("width");
+                json.WriteNull("signed");
+            }
             json.WriteBoolean("flags", definition.Flags);
+            if (definition.Status != MetadataFactStatus.Valid)
+                json.WriteString("status", definition.Status.ToString());
 
             json.WriteStartArray("members");
 
@@ -60,6 +67,20 @@ internal static class EnumsOutput {
         }
 
         json.WriteEndArray();
+
+        if (!enums.Failures.IsEmpty) {
+            json.WriteStartArray("failures");
+            foreach (var failure in enums.Failures) {
+                json.WriteStartObject();
+                json.WriteNumber("metadata_type", extraction.Metadata.Types[failure.MetadataType].Offset);
+                if (failure.FieldOffset != 0)
+                    json.WriteNumber("metadata_field", failure.FieldOffset);
+                json.WriteString("status", failure.Status.ToString());
+                JsonOutput.WriteString(json, "error", failure.Error);
+                json.WriteEndObject();
+            }
+            json.WriteEndArray();
+        }
         json.WriteEndObject();
     }
 }

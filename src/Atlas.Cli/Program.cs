@@ -228,10 +228,8 @@ try {
 
     if (plan.NeedsMetadata) {
         long metadataStart = Stopwatch.GetTimestamp();
-        var metadata = Metadata.FromImage(image, rtr);
-
-        metadata.ReadDefinitions(cancellationToken);
-        var members = args[0] == "metadata" ? new MetadataMembers(metadata, cancellationToken) : null;
+        var metadataBuilder = MetadataBuilder.FromImage(image, rtr, cancellationToken);
+        metadataBuilder.ReadDefinitions(cancellationToken);
 
         long metadataEnd = Stopwatch.GetTimestamp();
 
@@ -239,17 +237,17 @@ try {
             var fixups = RuntimeTables.Fixups(image, rtr.Find(RtrSectionId.CommonFixupsTable));
             var maps = new ReflectionMaps();
 
-            maps.Read(image, rtr, metadata, fixups, requestedFormat, cancellationToken);
+            maps.Read(image, rtr, metadataBuilder, fixups, requestedFormat, cancellationToken);
 
             long mapsEnd = Stopwatch.GetTimestamp();
 
             if (plan.Stages is { } stages) {
                 var products = plan.Products == AnalysisProduct.None ? null
-                    : new AnalysisProducts(image, rtr, metadata, maps, fixups,
+                    : new AnalysisProducts(image, rtr, metadataBuilder, maps, fixups,
                         requested: plan.Products, stages: stages, cancellationToken: cancellationToken);
                 var extraction = products?.Extraction
-                    ?? new Extraction(image, rtr, metadata, maps, fixups, stages, cancellationToken);
-                metadata = extraction.Metadata;
+                    ?? new Extraction(image, rtr, metadataBuilder, maps, fixups, stages, cancellationToken);
+                var metadata = extraction.Metadata;
                 maps = extraction.Maps;
 
                 foreach (var failure in extraction.UnwindAnalysis.Failures)
@@ -353,9 +351,7 @@ try {
                             break;
 
                         case "types":
-                            TypesOutput.Write(json, inputSha256,
-                                extraction.Types, extraction.Gc, extraction.Names, image, extraction.TypesSeconds,
-                                extraction.Stages, extraction.DictionarySignatureGaps);
+                            TypesOutput.Write(json, inputSha256, extraction);
                             break;
 
                         case "methods":
@@ -366,10 +362,7 @@ try {
                             break;
 
                         case "dispatch":
-                            DispatchOutput.Write(json, inputSha256, image,
-                                extraction.Types, extraction.Names, extraction.Dispatch,
-                                extraction.Virtuals, extraction.DispatchSeconds,
-                                extraction.Stages, extraction.DictionarySignatureGaps);
+                            DispatchOutput.Write(json, inputSha256, extraction);
                             break;
 
                         case "marshalling":
@@ -412,9 +405,12 @@ try {
                 return 0;
             }
 
+            var mapsMetadata = metadataBuilder.Publish(cancellationToken);
+            maps.SetSignatureOrigin(mapsMetadata.PublishedSignatures);
+
             using (var stream = new OutputFileStream(temporaryOutput))
             using (var json = JsonOutput.CreateWriter(stream, cancellationToken))
-            MapsOutput.Write(json, inputSha256, maps, image, metadata,
+                MapsOutput.Write(json, inputSha256, maps, image, mapsMetadata,
                     Stopwatch.GetElapsedTime(metadataEnd, mapsEnd).TotalSeconds, cancellationToken);
 
             PublishOutput();
@@ -423,13 +419,16 @@ try {
             return 0;
         }
 
+        var publishedMetadata = metadataBuilder.Publish(cancellationToken);
+        metadataEnd = Stopwatch.GetTimestamp();
+
         using (var stream = new OutputFileStream(temporaryOutput))
         using (var json = JsonOutput.CreateWriter(stream, cancellationToken))
-            MetadataOutput.Write(json, inputSha256, metadata, members!, image, rtr,
+            MetadataOutput.Write(json, inputSha256, publishedMetadata,
                 Stopwatch.GetElapsedTime(metadataStart, metadataEnd).TotalSeconds, cancellationToken: cancellationToken);
 
         PublishOutput();
-        Console.WriteLine($"{metadata.Scopes.Count} scopes, {metadata.Types.Count} types, {metadata.Methods.Count} method records, {metadata.Fields.Count} field records.");
+        Console.WriteLine($"{publishedMetadata.ScopeDefinitions.Length} scopes, {publishedMetadata.TypeDefinitions.Length} types, {publishedMetadata.MethodDefinitions.Length} method records, {publishedMetadata.FieldDefinitions.Length} field records.");
 
         return 0;
     }
@@ -507,13 +506,15 @@ void Cancel(object? sender, ConsoleCancelEventArgs eventArgs) {
         if (section.Length == 0)
             return ([], "unavailable", null);
 
-        var metadata = Metadata.FromImage(image, rtr);
-        metadata.ReadDefinitions(cancellationToken);
+        var metadataBuilder = MetadataBuilder.FromImage(image, rtr, cancellationToken);
+        metadataBuilder.ReadDefinitions(cancellationToken);
 
-        var traces = new TraceMaps(image, rtr, metadata,
+        var traces = new TraceMaps(image, rtr, metadataBuilder,
             RuntimeTables.Fixups(image, rtr.Find(RtrSectionId.CommonFixupsTable)), cancellationToken);
+        var metadata = metadataBuilder.Publish(cancellationToken);
+        traces.Publish(metadata.PublishedSignatures, cancellationToken);
         var consumers = ManagedFunctionPointerConsumers.Read(
-            metadata, traces, metadata.SignatureBuilder.Publish(), cancellationToken);
+            metadata, traces, metadata.PublishedSignatures, cancellationToken);
 
         return (consumers, traces.Methods.Count == 0 ? "unavailable" : "complete", null);
     } catch (Exception error) when (error is InvalidDataException or NotSupportedException or OverflowException) {

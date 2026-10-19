@@ -3,14 +3,15 @@ using System.Text.Json;
 using Atlas;
 
 internal static class TypesOutput {
-    internal static void Write(Utf8JsonWriter json, string inputSha256, MethodTables tables,
-        GcLayouts gc, RuntimeNames names, PeImage image, double seconds,
-        ExtractionStage stages = ExtractionStage.All,
-        ReadOnlySpan<DictionarySignatureGap> dictionarySignatureGaps = default) {
+    internal static void Write(Utf8JsonWriter json, string inputSha256, Extraction extraction) {
+        var tables = extraction.Types;
+        var gc = extraction.Gc;
+        var names = extraction.Names;
+        var image = extraction.Image;
         json.WriteStartObject();
         json.WriteString("input_sha256", inputSha256);
-        ExtractionStatusOutput.Write(json, stages, dictionarySignatureGaps);
-        json.WriteNumber("type_preparation_seconds", seconds);
+        ExtractionStatusOutput.Write(json, extraction);
+        json.WriteNumber("type_preparation_seconds", extraction.TypesSeconds);
 
         json.WriteStartObject("types");
 

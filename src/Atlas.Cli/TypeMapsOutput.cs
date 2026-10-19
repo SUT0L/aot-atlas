@@ -8,7 +8,7 @@ internal static class TypeMapsOutput {
         json.WriteString("operation", "typemaps");
         json.WriteNumber("schema_version", 1);
         json.WriteString("input_sha256", inputSha256);
-        ExtractionStatusOutput.Write(json, extraction.Stages, extraction.DictionarySignatureGaps);
+        ExtractionStatusOutput.Write(json, extraction);
         WriteMap(json, "external", extraction.TypeMaps.External, extraction, cancellationToken);
         WriteMap(json, "proxy", extraction.TypeMaps.Proxy, extraction, cancellationToken);
         json.WriteEndObject();
@@ -52,7 +52,7 @@ internal static class TypeMapsOutput {
                 json.WriteNumber("vertex", entry.Vertex);
                 json.WriteNumber("length", entry.Length);
                 json.WriteNumber("hash", entry.Hash);
-                if (map.Section == RtrSectionId.ExternalTypeMap) {
+                if (map.Kind == InteropTypeMapKind.External) {
                     JsonOutput.WriteString(json, "name", entry.Name!);
                     json.WriteNumber("name_offset", entry.NameBytes.Start);
                     json.WriteNumber("name_length", entry.NameBytes.Count);

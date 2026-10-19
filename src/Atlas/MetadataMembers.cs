@@ -1,4 +1,4 @@
-using System.Runtime.InteropServices;
+using System.Collections.Frozen;
 
 namespace Atlas;
 
@@ -9,6 +9,7 @@ public struct MetadataProperty {
     public uint SignatureOffset;
     public uint CallingConvention;
     public uint DefaultValue;
+    public MetadataFactStatus DefaultValueStatus;
 
     public string Name;
     internal int Type;
@@ -35,6 +36,7 @@ public struct MetadataParameter {
     public uint Sequence;
 
     public uint DefaultValue;
+    public MetadataFactStatus DefaultValueStatus;
     public string Name;
     public IndexRange Attributes;
 }
@@ -58,280 +60,203 @@ public readonly struct MetadataAccessor(uint offset, uint semantics, uint method
 }
 
 public sealed class MetadataMembers {
-    private readonly SignatureBuilder signatureBuilder;
-    private readonly ReadOnlyMemory<byte> sourceData;
-    private Signatures? signatures;
-    private Signatures SignaturePublication => signatures ??= signatureBuilder.Publish();
-    internal readonly Dictionary<uint, MetadataProperty> Properties;
-    internal readonly Dictionary<uint, MetadataEvent> Events;
-    internal readonly Dictionary<uint, MetadataParameter> Parameters;
-    internal readonly Dictionary<uint, MetadataGenericParameter> GenericParameters;
+    private readonly Signatures signatures;
+    internal readonly System.Collections.Frozen.FrozenDictionary<uint, MetadataProperty> Properties;
+    internal readonly System.Collections.Frozen.FrozenDictionary<uint, MetadataEvent> Events;
+    internal readonly System.Collections.Frozen.FrozenDictionary<uint, MetadataParameter> Parameters;
+    internal readonly System.Collections.Frozen.FrozenDictionary<uint, MetadataGenericParameter> GenericParameters;
+    private readonly uint[] handles;
+    private readonly MetadataAccessor[] accessors;
+    private readonly int[] handleSignatures;
 
-    internal readonly List<uint> Handles;
-    internal readonly List<MetadataAccessor> Accessors;
-    private readonly List<int> handleSignatures;
+    public IReadOnlyDictionary<uint, MetadataProperty> PropertyDefinitions => Properties;
+    public IReadOnlyDictionary<uint, MetadataEvent> EventDefinitions => Events;
+    public IReadOnlyDictionary<uint, MetadataParameter> ParameterDefinitions => Parameters;
+    public IReadOnlyDictionary<uint, MetadataGenericParameter> GenericParameterDefinitions => GenericParameters;
+    public ReadOnlySpan<uint> MemberHandles => handles;
+    public ReadOnlySpan<MetadataAccessor> AccessorEntries => accessors;
+    internal ReadOnlySpan<uint> Handles => handles;
+    internal ReadOnlySpan<MetadataAccessor> Accessors => accessors;
 
-    private System.Collections.ObjectModel.ReadOnlyDictionary<uint, MetadataProperty>? propertyDefinitions;
-    private System.Collections.ObjectModel.ReadOnlyDictionary<uint, MetadataEvent>? eventDefinitions;
-    private System.Collections.ObjectModel.ReadOnlyDictionary<uint, MetadataParameter>? parameterDefinitions;
-    private System.Collections.ObjectModel.ReadOnlyDictionary<uint, MetadataGenericParameter>? genericParameterDefinitions;
-
-    public System.Collections.ObjectModel.ReadOnlyDictionary<uint, MetadataProperty> PropertyDefinitions =>
-        propertyDefinitions ??= new(Properties);
-    public System.Collections.ObjectModel.ReadOnlyDictionary<uint, MetadataEvent> EventDefinitions =>
-        eventDefinitions ??= new(Events);
-    public System.Collections.ObjectModel.ReadOnlyDictionary<uint, MetadataParameter> ParameterDefinitions =>
-        parameterDefinitions ??= new(Parameters);
-    public System.Collections.ObjectModel.ReadOnlyDictionary<uint, MetadataGenericParameter> GenericParameterDefinitions =>
-        genericParameterDefinitions ??= new(GenericParameters);
-    public ReadOnlySpan<uint> MemberHandles => CollectionsMarshal.AsSpan(Handles);
-    public ReadOnlySpan<MetadataAccessor> AccessorEntries => CollectionsMarshal.AsSpan(Accessors);
-
-    public SignatureType PropertyType(uint offset) => SignaturePublication.Types[Properties[offset].Type];
-    public SignatureType EventType(uint offset) => SignaturePublication.Types[Events[offset].Type];
-    public SignatureType PropertyParameterTypeAt(uint offset, int position) =>
-        CollectedTypeAt(Properties[offset].Parameters, position);
-    public SignatureType GenericConstraintTypeAt(uint offset, int position) =>
-        CollectedTypeAt(GenericParameters[offset].Constraints, position);
+    public SignatureType PropertyType(uint offset) => signatures.Types[Properties[offset].Type];
+    public SignatureType EventType(uint offset) => signatures.Types[Events[offset].Type];
+    public SignatureType PropertyParameterTypeAt(uint offset, int position) => CollectedTypeAt(Properties[offset].Parameters, position);
+    public SignatureType GenericConstraintTypeAt(uint offset, int position) => CollectedTypeAt(GenericParameters[offset].Constraints, position);
 
     private SignatureType CollectedTypeAt(IndexRange range, int position) {
         if ((uint)position >= (uint)range.Count)
             throw new ArgumentOutOfRangeException(nameof(position));
-
-        return SignaturePublication.Types[handleSignatures[range.Start + position]];
+        return signatures.Types[handleSignatures[range.Start + position]];
     }
 
-    internal MetadataMembers RebindTo(Metadata metadata) {
-        var destination = metadata.PublishedSignatures;
-
-        if (!sourceData.Equals(metadata.Data)
-            || !destination.HasSamePrefix(signatureBuilder.Nodes, signatureBuilder.Edges, signatureBuilder.Methods))
-            throw new ArgumentException("Member definitions require the same metadata input and preserved signature prefix.", nameof(metadata));
-
-        return new(this, metadata);
+    internal MetadataMembers(MetadataMembersBuilder source, Signatures publication) {
+        signatures = publication;
+        Properties = source.Properties.ToFrozenDictionary();
+        Events = source.Events.ToFrozenDictionary();
+        Parameters = source.Parameters.ToFrozenDictionary();
+        GenericParameters = source.GenericParameters.ToFrozenDictionary();
+        handles = source.Handles.ToArray();
+        accessors = source.Accessors.ToArray();
+        handleSignatures = source.HandleSignatures.ToArray();
     }
+}
 
-    internal void ValidateOwner(Metadata metadata) {
-        if (!sourceData.Equals(metadata.Data)
-            || !ReferenceEquals(signatureBuilder.Origin, metadata.SignatureBuilder.Origin))
-            throw new ArgumentException("Member definitions belong to different metadata.", nameof(metadata));
-    }
+internal sealed class MetadataMembersBuilder(MetadataBuilder metadata) {
+    internal readonly Dictionary<uint, MetadataProperty> Properties = new();
+    internal readonly Dictionary<uint, MetadataEvent> Events = new();
+    internal readonly Dictionary<uint, MetadataParameter> Parameters = new();
+    internal readonly Dictionary<uint, MetadataGenericParameter> GenericParameters = new();
+    internal readonly List<uint> Handles = new();
+    internal readonly List<MetadataAccessor> Accessors = new();
+    internal readonly List<int> HandleSignatures = new();
+    private bool read;
 
-    private MetadataMembers(MetadataMembers source, Metadata metadata) {
-        signatureBuilder = metadata.SignatureBuilder;
-        sourceData = metadata.Data;
-        Properties = source.Properties;
-        Events = source.Events;
-        Parameters = source.Parameters;
-        GenericParameters = source.GenericParameters;
-        Handles = source.Handles;
-        Accessors = source.Accessors;
-        handleSignatures = source.handleSignatures;
-    }
-
-    public MetadataMembers(Metadata metadata, CancellationToken cancellationToken = default)
-        : this(metadata, cancellationToken, ownsMetadataDraft: false) {
-    }
-
-    internal MetadataMembers(Metadata metadata, CancellationToken cancellationToken, bool ownsMetadataDraft) {
-        cancellationToken.ThrowIfCancellationRequested();
-        var sourceMetadata = metadata;
-
-        if (!ownsMetadataDraft)
-            metadata = metadata.WorkingCopy();
-
-        sourceData = metadata.Data;
-        Handles = new();
-        Accessors = new();
-        handleSignatures = new();
-        int properties = 0;
-        int events = 0;
-        int parameters = 0;
-        int generics = 0;
-
-        foreach (ref readonly var type in CollectionsMarshal.AsSpan(metadata.Types)) {
+    internal void ReadAll(CancellationToken cancellationToken) {
+        if (read)
+            return;
+        foreach (var id in metadata.ReadRecordIds().ToArray()) {
             cancellationToken.ThrowIfCancellationRequested();
-
-            properties = checked(properties + type.Properties.Count);
-            events = checked(events + type.Events.Count);
-            generics = checked(generics + type.GenericParameters.Count);
-        }
-
-        foreach (ref readonly var method in CollectionsMarshal.AsSpan(metadata.Methods)) {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            parameters = checked(parameters + method.Parameters.Count);
-            generics = checked(generics + method.GenericParameters.Count);
-        }
-
-        Properties = new(properties);
-        Events = new(events);
-        Parameters = new(parameters);
-        GenericParameters = new(generics);
-
-        foreach (ref readonly var type in CollectionsMarshal.AsSpan(metadata.Types)) {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            for (int i = type.Properties.Start; i < type.Properties.End; ++i) {
-                cancellationToken.ThrowIfCancellationRequested();
-
-                uint offset = metadata.Handles[i];
-                if (Properties.ContainsKey(offset))
-                    continue;
-
-                var reader = metadata.Reader(offset);
-
-                MetadataProperty property = new() {
-                    Offset = offset,
-                    Flags = checked((ushort)reader.Unsigned())
-                };
-
-                property.Name = metadata.String(reader.Unsigned());
-                property.SignatureOffset = reader.Unsigned();
-
-                property.Accessors = ReadAccessors(metadata, ref reader);
-                property.DefaultValue = reader.Unsigned();
-                property.Attributes = Collection(ref reader);
-
-                var signature = metadata.Reader(property.SignatureOffset);
-                property.CallingConvention = signature.Unsigned();
-                property.Type = metadata.TypeSignature(signature.Unsigned());
-                property.Parameters = Collection(ref signature, metadata);
-
-                Properties.Add(offset, property);
+            switch (id.Kind) {
+                case MetadataRecordKind.Property:
+                    metadata.Recover(id, "property", () => ReadProperty(id));
+                    break;
+                case MetadataRecordKind.Event:
+                    metadata.Recover(id, "event", () => ReadEvent(id));
+                    break;
+                case MetadataRecordKind.Parameter:
+                    metadata.Recover(id, "parameter", () => ReadParameter(id));
+                    break;
+                case MetadataRecordKind.GenericParameter:
+                    metadata.Recover(id, "generic parameter", () => ReadGeneric(id));
+                    break;
             }
-
-            for (int i = type.Events.Start; i < type.Events.End; ++i) {
-                cancellationToken.ThrowIfCancellationRequested();
-
-                uint offset = metadata.Handles[i];
-                if (Events.ContainsKey(offset))
-                    continue;
-
-                var reader = metadata.Reader(offset);
-
-                MetadataEvent entry = new() {
-                    Offset = offset,
-                    Flags = checked((ushort)reader.Unsigned())
-                };
-
-                entry.Name = metadata.String(reader.Unsigned());
-                entry.Type = metadata.TypeSignature(reader.Unsigned());
-
-                entry.Accessors = ReadAccessors(metadata, ref reader);
-                entry.Attributes = Collection(ref reader);
-
-                Events.Add(offset, entry);
-            }
-
-            ReadGenerics(metadata, type.GenericParameters, 0, cancellationToken);
         }
-
-        foreach (ref readonly var method in CollectionsMarshal.AsSpan(metadata.Methods)) {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            for (int i = method.Parameters.Start; i < method.Parameters.End; ++i) {
-                cancellationToken.ThrowIfCancellationRequested();
-
-                uint offset = metadata.Handles[i];
-                if (Parameters.ContainsKey(offset))
-                    continue;
-
-                var reader = metadata.Reader(offset);
-
-                MetadataParameter parameter = new() {
-                    Offset = offset,
-                    Flags = checked((ushort)reader.Unsigned()),
-                    Sequence = checked((ushort)reader.Unsigned()),
-                    Name = metadata.String(reader.Unsigned()),
-                    DefaultValue = reader.Unsigned()
-                };
-
-                parameter.Attributes = Collection(ref reader);
-
-                Parameters.Add(offset, parameter);
-            }
-
-            ReadGenerics(metadata, method.GenericParameters, 1, cancellationToken);
-        }
-
-        cancellationToken.ThrowIfCancellationRequested();
-        signatureBuilder = metadata.SignatureBuilder;
-
-        if (!ownsMetadataDraft)
-            sourceMetadata.Adopt(metadata);
+        foreach (var type in metadata.Types)
+            ValidateGenerics(type.GenericParameters, 0, new(MetadataRecordKind.TypeDefinition, type.Offset));
+        foreach (var method in metadata.Methods)
+            ValidateGenerics(method.GenericParameters, 1, new(MetadataRecordKind.Method, method.Offset));
+        read = true;
     }
 
-    private void ReadGenerics(Metadata metadata, IndexRange range, uint kind, CancellationToken cancellationToken) {
-        for (int i = range.Start; i < range.End; ++i) {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            uint offset = metadata.Handles[i];
-            if (!GenericParameters.TryGetValue(offset, out var parameter)) {
-                var reader = metadata.Reader(offset);
-
-                parameter = new MetadataGenericParameter {
-                    Offset = offset,
-                    Number = checked((ushort)reader.Unsigned()),
-                    Flags = checked((ushort)reader.Unsigned()),
-                    Kind = reader.Unsigned(),
-                    Name = metadata.String(reader.Unsigned())
-                };
-
-                parameter.Constraints = Collection(ref reader, metadata);
-                parameter.Attributes = Collection(ref reader);
-
-                GenericParameters.Add(offset, parameter);
-            }
-
-            if (parameter.Kind != kind)
-                throw new InvalidDataException("Generic parameter kind disagrees with its declaring member.");
+    private void ValidateGenerics(IndexRange range, uint expectedKind, MetadataRecordId owner) {
+        for (int i = range.Start; i < range.End; i++) {
+            if (GenericParameters.TryGetValue(metadata.Handles[i], out var parameter) && parameter.Kind != expectedKind)
+                metadata.RecordFailure(metadata.Encoding.EncodeHandle(owner), "generic parameters",
+                    new InvalidDataException("Generic parameter kind disagrees with its declaring member."));
         }
     }
 
-    private IndexRange ReadAccessors(Metadata metadata, ref NativeReader reader) {
-        int count = checked((int)reader.Unsigned());
+    internal MetadataMembers Publish(Signatures signatures) => new(this, signatures);
 
-        if (count > reader.Remaining)
-            throw new InvalidDataException("Accessor collection exceeds the metadata blob.");
+    private void ReadProperty(MetadataRecordId id) {
+        if (Properties.ContainsKey(id.Offset))
+            return;
+        uint defaultValue = metadata.AvailableHandle(id, MetadataFieldName.DefaultValue, out var defaultStatus);
+        MetadataProperty property = new() {
+            Offset = id.Offset,
+            Flags = checked((ushort)metadata.UInt(id, MetadataFieldName.Flags)),
+            Name = metadata.Name(id),
+            SignatureOffset = metadata.AvailableOffset(id, MetadataFieldName.Signature),
+            Accessors = ReadAccessors(id),
+            DefaultValue = defaultValue,
+            DefaultValueStatus = defaultStatus,
+            Attributes = Collection(id, MetadataFieldName.CustomAttributes, false)
+        };
+        metadata.Recover(id, "property signature", () => {
+            var signature = new MetadataRecordId(MetadataRecordKind.PropertySignature, property.SignatureOffset);
+            property.CallingConvention = metadata.UInt(signature, MetadataFieldName.CallingConvention);
+            property.Type = metadata.TypeSignature(metadata.Handle(signature, MetadataFieldName.Type));
+            property.Parameters = Collection(signature, MetadataFieldName.Parameters, true);
+        });
+        Properties.Add(id.Offset, property);
+    }
 
+    private void ReadEvent(MetadataRecordId id) {
+        if (Events.ContainsKey(id.Offset))
+            return;
+        MetadataEvent value = new() {
+            Offset = id.Offset,
+            Flags = checked((ushort)metadata.UInt(id, MetadataFieldName.Flags)),
+            Name = metadata.Name(id),
+            Accessors = ReadAccessors(id),
+            Attributes = Collection(id, MetadataFieldName.CustomAttributes, false)
+        };
+        metadata.Recover(id, "event type", () => value.Type = metadata.TypeSignature(metadata.Handle(id, MetadataFieldName.Type)));
+        Events.Add(id.Offset, value);
+    }
+
+    private void ReadParameter(MetadataRecordId id) {
+        if (Parameters.ContainsKey(id.Offset))
+            return;
+        uint defaultValue = metadata.AvailableHandle(id, MetadataFieldName.DefaultValue, out var defaultStatus);
+        Parameters.Add(id.Offset, new MetadataParameter {
+            Offset = id.Offset,
+            Flags = checked((ushort)metadata.UInt(id, MetadataFieldName.Flags)),
+            Sequence = checked((ushort)metadata.UInt(id, MetadataFieldName.Sequence)),
+            Name = metadata.Name(id),
+            DefaultValue = defaultValue,
+            DefaultValueStatus = defaultStatus,
+            Attributes = Collection(id, MetadataFieldName.CustomAttributes, false)
+        });
+    }
+
+    private void ReadGeneric(MetadataRecordId id) {
+        if (GenericParameters.ContainsKey(id.Offset))
+            return;
+        GenericParameters.Add(id.Offset, new MetadataGenericParameter {
+            Offset = id.Offset,
+            Number = checked((ushort)metadata.UInt(id, MetadataFieldName.Number)),
+            Flags = checked((ushort)metadata.UInt(id, MetadataFieldName.Flags)),
+            Kind = metadata.UInt(id, MetadataFieldName.Kind),
+            Name = metadata.Name(id),
+            Constraints = Collection(id, MetadataFieldName.Constraints, true),
+            Attributes = Collection(id, MetadataFieldName.CustomAttributes, false)
+        });
+    }
+
+    private IndexRange ReadAccessors(MetadataRecordId id) {
+        var items = metadata.RecordField(id, MetadataFieldName.MethodSemantics).Items;
         int start = Accessors.Count;
-        Accessors.EnsureCapacity(checked(start + count));
-
-        for (int i = 0; i < count; ++i) {
-            uint offset = reader.Unsigned();
-            var record = metadata.Reader(offset);
-
-            uint semantics = checked((ushort)record.Unsigned());
-            uint method = record.Unsigned();
-
-            if (!metadata.MethodIndex.ContainsKey(method))
-                throw new InvalidDataException("A property or event accessor does not identify a retained method.");
-
-            Accessors.Add(new MetadataAccessor(offset, semantics, method));
+        for (int i = 0; i < items.Count; i++) {
+            var item = items[i].Reference;
+            if (!item.IsAvailable || item.Value.IsNil) {
+                metadata.RecordFailure(metadata.Encoding.EncodeHandle(id), "accessor", new InvalidDataException($"Accessor is unavailable ({item.Status})."));
+                continue;
+            }
+            var accessor = item.Value;
+            metadata.Recover(accessor, "accessor", () => {
+                uint semantics = metadata.UInt(accessor, MetadataFieldName.Attributes);
+                uint method = metadata.Offset(accessor, MetadataFieldName.Method);
+                if (semantics > ushort.MaxValue)
+                    throw new InvalidDataException("Accessor semantics exceed the runtime field width.");
+                if (!metadata.MethodIndex.ContainsKey(method))
+                    throw new InvalidDataException("Accessor method projection is unavailable.");
+                Accessors.Add(new(accessor.Offset, semantics, method));
+            });
         }
-
-        return new IndexRange(start, count);
+        if (items.Status != MetadataFactStatus.Valid)
+            metadata.RecordFailure(metadata.Encoding.EncodeHandle(id), "accessors", new InvalidDataException($"Accessor collection is partial ({items.Status})."));
+        return new(start, Accessors.Count - start);
     }
 
-    private IndexRange Collection(ref NativeReader reader, Metadata? signatures = null) {
-        int count = checked((int)reader.Unsigned());
-
-        if (count > reader.Remaining)
-            throw new InvalidDataException("Member collection exceeds the metadata blob.");
-
+    private IndexRange Collection(MetadataRecordId id, MetadataFieldName name, bool signatures) {
+        var items = metadata.RecordField(id, name).Items;
         int start = Handles.Count;
-        Handles.EnsureCapacity(checked(start + count));
-        handleSignatures.EnsureCapacity(checked(start + count));
-
-        for (int i = 0; i < count; ++i) {
-            uint handle = reader.Unsigned();
-            int signature = signatures?.TypeSignature(handle) ?? 0;
-
+        for (int i = 0; i < items.Count; i++) {
+            var reference = items[i].Reference;
+            if (!reference.IsAvailable || reference.Value.IsNil) {
+                metadata.RecordFailure(metadata.Encoding.EncodeHandle(id), name.ToString(), new InvalidDataException($"Collection item is unavailable ({reference.Status})."));
+                continue;
+            }
+            uint handle = signatures ? metadata.Encoding.EncodeHandle(reference.Value) : reference.Value.Offset;
+            int signature = 0;
+            if (signatures)
+                metadata.Recover(reference.Value, "type signature", () => signature = metadata.TypeSignature(handle));
             Handles.Add(handle);
-            handleSignatures.Add(signature);
+            HandleSignatures.Add(signature);
         }
-
-        return new IndexRange(start, count);
+        if (items.Status != MetadataFactStatus.Valid)
+            metadata.RecordFailure(metadata.Encoding.EncodeHandle(id), name.ToString(), new InvalidDataException($"Member collection is partial ({items.Status})."));
+        return new(start, Handles.Count - start);
     }
 }

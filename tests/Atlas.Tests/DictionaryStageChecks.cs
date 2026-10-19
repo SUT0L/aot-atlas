@@ -35,7 +35,11 @@ internal static class DictionaryStageChecks {
                 var reader = new NativeReader(
                     bound.Image.FileSpan(section.Start, checked((int)section.Length)), staticData.Offset);
                 reader.Unsigned();
-                bound.Layout.TypeSignature(ref reader);
+                var owner = MetadataBuilder.FromImage(bound.Image, bound.Header);
+                var layout = new NativeLayout(bound.Image.FileMemory(section.Start, checked((int)section.Length)),
+                    bound.NativeReferences, owner.SignatureBuilder, takeOwnership: true,
+                    methodFlags: bound.Header.Format.ReturnDroppingAsyncThunks ? 31U : 15U);
+                layout.TypeSignature(ref reader);
 
                 byte[] damaged = (byte[])original.Clone();
                 int offset = bound.Image.FileRange(section.Start).Start + reader.Position;
@@ -80,8 +84,8 @@ internal static class DictionaryStageChecks {
                 Assert(recovered.DictionarySignatureGaps.IsEmpty);
                 Assert(members.Fields.FieldTypes.SequenceEqual(recovered.Fields.FieldTypes));
 
-                Reject(damaged, ExtractionStage.DictionaryBindings, "no generic method arguments");
-                Reject(damaged, ExtractionStage.All, "no generic method arguments");
+                Reject(damaged, ExtractionStage.DictionaryBindings, "no method arguments");
+                Reject(damaged, ExtractionStage.All, "no method arguments");
             }
 
             if (bound.Dictionaries.Slots.Count != 0) {
@@ -89,7 +93,8 @@ internal static class DictionaryStageChecks {
                 // Redirect only its NativeReferences cell to the unmapped image end.
                 var instance = bound.Dictionaries.Instances.First(instance => instance.Slots.Count != 0);
                 int reference = Array.IndexOf(bound.NativeReferences, instance.Address);
-                Assert(reference >= 0 && !bound.Layout.ExternalTypes.ContainsKey(instance.Address));
+                Assert(reference >= 0 && !bound.Signatures.Nodes.ToArray().Any(node =>
+                    node.Kind == SignatureKind.RuntimeType && node.TypeAddress == instance.Address));
 
                 var references = bound.Header.Find(RtrSectionId.NativeReferences);
                 ulong address = references.Start + (uint)reference * 4UL;
@@ -173,7 +178,7 @@ internal static class DictionaryStageChecks {
         var image = PeFixture.Create(data, ".rdata", 0x40000040);
         var header = ReadyToRun.Read(image);
         var section = header.Find(RtrSectionId.NativeLayoutInfo);
-        var metadata = new Metadata(default, 7);
+        var metadata = new MetadataBuilder(default, 7);
         var native = new NativeLayout(
             image.FileMemory(section.Start, checked((int)section.Length)),
             [0x1111, 0x2222, 0x3333, 0x4444], metadata.SignatureBuilder, takeOwnership: true);
@@ -248,13 +253,13 @@ internal static class DictionaryStageChecks {
             var templates = new TemplateMaps();
             templates.Methods.Add(new MethodTemplate { LayoutOffset = 0 });
 
-            var fullMetadata = new Metadata(default, header.MetadataHandleBits);
+            var fullMetadata = new MetadataBuilder(default, header.MetadataHandleBits);
             var fullNative = new NativeLayout(image.FileMemory(storage.Start, (int)storage.Length),
                 [0x1111, 0x2222, 0x3333], fullMetadata.SignatureBuilder, takeOwnership: true);
             var full = new GenericDictionaries();
             full.Read(image, header, fullMetadata, fullNative, templates, MapFormat.Legacy);
 
-            var narrowMetadata = new Metadata(default, header.MetadataHandleBits);
+            var narrowMetadata = new MetadataBuilder(default, header.MetadataHandleBits);
             var narrowNative = new NativeLayout(image.FileMemory(storage.Start, (int)storage.Length),
                 [0x1111, 0x2222, 0x3333], narrowMetadata.SignatureBuilder, takeOwnership: true);
             var narrow = new GenericDictionaries();
@@ -305,7 +310,7 @@ internal static class DictionaryStageChecks {
         var image = PeFixture.Create(data, ".rdata", 0x40000040);
         var header = ReadyToRun.Read(image);
         var storage = header.Find(RtrSectionId.NativeLayoutInfo);
-        var metadata = new Metadata(default, 8);
+        var metadata = new MetadataBuilder(default, 8);
         var native = new NativeLayout(image.FileMemory(storage.Start, (int)storage.Length),
             [0x1111, 0x2222, 0x3333, 0x4444], metadata.SignatureBuilder, takeOwnership: true);
         var templates = new TemplateMaps();
@@ -326,7 +331,7 @@ internal static class DictionaryStageChecks {
         var emptyImage = PeFixture.Create(data, ".rdata", 0x40000040);
         var emptyHeader = ReadyToRun.Read(emptyImage);
         var emptyStorage = emptyHeader.Find(RtrSectionId.NativeLayoutInfo);
-        var narrowMetadata = new Metadata(default, 8);
+        var narrowMetadata = new MetadataBuilder(default, 8);
         var narrowNative = new NativeLayout(emptyImage.FileMemory(emptyStorage.Start, (int)emptyStorage.Length),
             [0x1111, 0x2222, 0x3333, 0x4444], narrowMetadata.SignatureBuilder, takeOwnership: true);
         var narrow = new GenericDictionaries();
@@ -345,9 +350,7 @@ internal static class DictionaryStageChecks {
         var image = new PeImage(bytes);
         var header = ReadyToRun.Read(image);
         var section = header.Find(RtrSectionId.EmbeddedMetadata);
-        var metadata = new Metadata(
-            image.FileMemory(section.Start, checked((int)section.Length)),
-            header.MetadataHandleBits, header.Format.LegacyMetadataConstants);
+        var metadata = MetadataBuilder.FromImage(image, header);
         metadata.ReadDefinitions();
 
         var fixups = RuntimeTables.Fixups(image, header.Find(RtrSectionId.CommonFixupsTable));
@@ -368,11 +371,99 @@ internal static class DictionaryStageChecks {
     }
 
     private static void EqualGraph(Extraction left, Extraction right) {
-        Assert(left.Metadata.SignatureBuilder.Nodes.SequenceEqual(right.Metadata.SignatureBuilder.Nodes));
-        Assert(left.Metadata.SignatureBuilder.Edges.SequenceEqual(right.Metadata.SignatureBuilder.Edges));
-        Assert(left.Metadata.SignatureBuilder.Methods.SequenceEqual(right.Metadata.SignatureBuilder.Methods));
-        Assert(left.Metadata.TypeSignatureHandles.SequenceEqual(right.Metadata.TypeSignatureHandles));
-        Assert(left.Layout.ExternalTypes.SequenceEqual(right.Layout.ExternalTypes));
+        var a = TypeShapes(left.Signatures);
+        var b = TypeShapes(right.Signatures);
+        Assert(a.ToHashSet().SetEquals(b));
+        Assert(MethodShapes(left.Signatures, a).ToHashSet().SetEquals(MethodShapes(right.Signatures, b)));
+        Assert(left.Metadata.TypeSignatureHandles.ToDictionary(row => row.Key, row => a[row.Value])
+            .OrderBy(row => row.Key).SequenceEqual(right.Metadata.TypeSignatureHandles
+                .ToDictionary(row => row.Key, row => b[row.Value]).OrderBy(row => row.Key)));
+    }
+
+    // Separate extractions may discover the same graph in different orders.
+    // Hash every node field and ordered edge, including scopes and array bounds.
+    private static string[] TypeShapes(Signatures graph) {
+        var shapes = new string[graph.Nodes.Length];
+        shapes[0] = "nil";
+        var active = new bool[shapes.Length];
+        var pending = new Stack<(int Index, bool Expanded)>();
+        for (int root = 1; root < shapes.Length; root++) {
+            pending.Push((root, false));
+            while (pending.TryPop(out var frame)) {
+                if (shapes[frame.Index] is not null)
+                    continue;
+                var node = graph.Nodes[frame.Index];
+                if (!frame.Expanded) {
+                    Assert(!active[frame.Index]);
+                    active[frame.Index] = true;
+                    pending.Push((frame.Index, true));
+                    pending.Push((node.Element, false));
+                    if (node.Kind == SignatureKind.Modified)
+                        pending.Push((node.Value, false));
+                    for (int i = node.Arguments.Start; i < node.Arguments.End; i++)
+                        pending.Push((graph.Edges[i], false));
+                    for (int i = node.Varargs.Start; i < node.Varargs.End; i++)
+                        pending.Push((graph.Edges[i], false));
+                    continue;
+                }
+                using var bytes = new MemoryStream();
+                using var writer = new BinaryWriter(bytes);
+                writer.Write((byte)node.Kind);
+                writer.Write(node.Name is not null);
+                if (node.Name is not null)
+                    writer.Write(node.Name);
+                writer.Write(node.TypeAddress);
+                writer.Write(node.MetadataScope);
+                writer.Write(node.Optional);
+                writer.Write(node.NativeConvention);
+                writer.Write(shapes[node.Element]);
+                if (node.Kind == SignatureKind.Modified)
+                    writer.Write(shapes[node.Value]);
+                else
+                    writer.Write(node.Value);
+                WriteRange(node.Arguments, references: true);
+                WriteRange(node.Varargs, references: true);
+                WriteRange(node.Sizes, references: false);
+                WriteRange(node.LowerBounds, references: false);
+                var hash = System.Security.Cryptography.SHA256.HashData(bytes.GetBuffer().AsSpan(0, (int)bytes.Length));
+                shapes[frame.Index] = Convert.ToHexString(hash);
+                active[frame.Index] = false;
+
+                void WriteRange(IndexRange range, bool references) {
+                    writer.Write(range.Count);
+                    for (int i = range.Start; i < range.End; i++) {
+                        if (references)
+                            writer.Write(shapes[graph.Edges[i]]);
+                        else
+                            writer.Write(graph.Edges[i]);
+                    }
+                }
+            }
+        }
+        return shapes;
+    }
+
+    private static IEnumerable<string> MethodShapes(Signatures graph, string[] types) {
+        for (int index = 1; index < graph.Methods.Length; index++) {
+            var method = graph.Methods[index];
+            using var bytes = new MemoryStream();
+            using var writer = new BinaryWriter(bytes);
+            writer.Write(method.Offset);
+            writer.Write(method.CallingConvention);
+            writer.Write(method.GenericParameterCount);
+            writer.Write(method.NativeConvention);
+            writer.Write(types[method.ReturnType]);
+            WriteRange(method.Parameters);
+            WriteRange(method.Varargs);
+            var hash = System.Security.Cryptography.SHA256.HashData(bytes.GetBuffer().AsSpan(0, (int)bytes.Length));
+            yield return Convert.ToHexString(hash);
+
+            void WriteRange(IndexRange range) {
+                writer.Write(range.Count);
+                for (int i = range.Start; i < range.End; i++)
+                    writer.Write(types[graph.Edges[i]]);
+            }
+        }
     }
 
     private static void AssertMissing(Extraction extraction) {

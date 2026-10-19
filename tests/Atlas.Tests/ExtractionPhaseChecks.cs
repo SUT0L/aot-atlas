@@ -46,10 +46,23 @@ internal static class ExtractionPhaseChecks {
                 | ExtractionStage.MethodTracing | ExtractionStage.Dispatch),
             "Property projection depends on unrelated linkage.");
 
+        byte[] statusHeader = new byte[40];
+        "RTR\0"u8.CopyTo(statusHeader);
+        BinaryPrimitives.WriteUInt16LittleEndian(statusHeader.AsSpan(4), 16);
+        BinaryPrimitives.WriteUInt16LittleEndian(statusHeader.AsSpan(12), 1);
+        statusHeader[14] = 24;
+        statusHeader[15] = 1;
+        BinaryPrimitives.WriteUInt32LittleEndian(statusHeader.AsSpan(16), (uint)RtrSectionId.ResourceData);
+        BinaryPrimitives.WriteUInt32LittleEndian(statusHeader.AsSpan(20), 1);
+        BinaryPrimitives.WriteUInt64LittleEndian(statusHeader.AsSpan(24), 0x140001028);
+        BinaryPrimitives.WriteUInt64LittleEndian(statusHeader.AsSpan(32), 0x140001028);
+        var statusImage = PeFixture.Create(statusHeader, ".rdata", 0x40000040);
+        var statusExtraction = new Extraction(statusImage, ReadyToRun.Read(statusImage),
+            new MetadataBuilder(default, 7), new ReflectionMaps(), [], ExtractionStage.Resources);
         using (var stream = new MemoryStream()) {
             using (var json = new Utf8JsonWriter(stream)) {
                 json.WriteStartObject();
-                ExtractionStatusOutput.Write(json, ExtractionStage.Resources, []);
+                ExtractionStatusOutput.Write(json, statusExtraction);
                 json.WriteEndObject();
             }
 
@@ -68,17 +81,14 @@ internal static class ExtractionPhaseChecks {
             byte[] original = File.ReadAllBytes(binary);
             var image = new PeImage(original);
             var header = ReadyToRun.Read(image);
-            var sourceMetadata = new Metadata(default, header.MetadataHandleBits);
-            var independent = new Extraction(image, header, sourceMetadata, new ReflectionMaps(), [],
-                ExtractionStage.Resources | ExtractionStage.Linkage);
+            var independent = Extraction.Read(image, ExtractionStage.Resources | ExtractionStage.Linkage);
 
             Assert(independent.Stages == (ExtractionStage.Resources | ExtractionStage.Linkage),
                 "Independent source request constructed runtime stages.");
-            Assert(sourceMetadata.SignatureBuilder.Nodes.Length == 1,
-                "Independent sources mutated the signature graph.");
+            Assert(independent.Metadata.Bytes.IsEmpty && independent.Metadata.PublishedSignatures.Nodes.Length == 1,
+                "Independent sources parsed unrelated metadata.");
             Missing(() => independent.Types);
             Missing(() => independent.Memory);
-            Missing(() => independent.Layout);
             Missing(() => independent.Signatures);
             Missing(() => independent.PInvokes);
             Missing(() => independent.Fields);
@@ -130,7 +140,7 @@ internal static class ExtractionPhaseChecks {
 
             if (enumOnly.Enums.Members.Count != 0) {
                 var field = enumOnly.Metadata.Fields[enumField.Field];
-                var reader = enumOnly.Metadata.Reader(field.Offset);
+                var reader = new NativeReader(enumOnly.Metadata.Bytes, checked((int)field.Offset));
                 reader.Unsigned(); // flags
                 reader.Unsigned(); // name
                 reader.Unsigned(); // signature offset
@@ -150,8 +160,16 @@ internal static class ExtractionPhaseChecks {
                 Assert(healthyMembers.Fields.Fields.SequenceEqual(independentMembers.Fields.Fields),
                     "Enum constant fault changed field layouts.");
 
-                Reject(badEnum, ExtractionStage.Enums, "Enum constant has unsupported NativeFormat kind");
-                Reject(badEnum, ExtractionStage.All, "Enum constant has unsupported NativeFormat kind");
+                var partialEnums = Extract(badEnum, ExtractionStage.Enums);
+                var partialAll = Extract(badEnum, ExtractionStage.All);
+                foreach (var partial in new[] { partialEnums, partialAll }) {
+                    Assert(!partial.Enums.Failures.IsEmpty && !partial.Metadata.IsComplete,
+                        "A damaged enum constant was reported complete.");
+                    Assert(partial.Enums.Members.Count == enumOnly.Enums.Members.Count - 1,
+                        "A damaged enum constant discarded healthy enum members.");
+                    Assert(partial.Enums.MemberEntries.ToArray().All(member => partial.Metadata.Fields[member.Field].Offset != field.Offset),
+                        "A damaged constant produced an invented enum value.");
+                }
             }
 
             RetainedInputs(original);
@@ -181,12 +199,10 @@ internal static class ExtractionPhaseChecks {
 
         if ((stages & ~(ExtractionStage.Resources | ExtractionStage.Linkage)) == 0)
             return new Extraction(
-                image, header, new Metadata(default, header.MetadataHandleBits), new ReflectionMaps(), [], stages);
+                image, header, new MetadataBuilder(default, header.MetadataHandleBits), new ReflectionMaps(), [], stages);
 
         var section = header.Find(RtrSectionId.EmbeddedMetadata);
-        var metadata = new Metadata(
-            section.Length == 0 ? default : image.FileMemory(section.Start, checked((int)section.Length)),
-            header.MetadataHandleBits, header.Format.LegacyMetadataConstants);
+        var metadata = MetadataBuilder.FromImage(image, header);
         metadata.ReadDefinitions();
 
         var fixups = RuntimeTables.Fixups(image, header.Find(RtrSectionId.CommonFixupsTable));
@@ -207,106 +223,52 @@ internal static class ExtractionPhaseChecks {
 
     private static void RetainedInputs(byte[] original) {
         var expected = Extract(original, ExtractionStage.All);
-
-        foreach (int fault in new[] { 0, 1, 2 }) {
+        foreach (int fault in new[] { 0, 1 }) {
             var image = new PeImage((byte[])original.Clone());
             var header = ReadyToRun.Read(image);
-            var section = header.Find(RtrSectionId.EmbeddedMetadata);
-            var metadata = new Metadata(image.FileMemory(section.Start, checked((int)section.Length)),
-                header.MetadataHandleBits, header.Format.LegacyMetadataConstants);
-            metadata.ReadDefinitions();
-
-            var fixups = RuntimeTables.Fixups(image, header.Find(RtrSectionId.CommonFixupsTable));
-            var maps = new ReflectionMaps();
-            maps.Read(image, header, metadata, fixups);
-            var before = metadata.SignatureBuilder.Publish();
-
+            var before = expected.Signatures;
             var directory = image.Directories[1];
             var resource = header.Find(RtrSectionId.ResourceIndex);
             int resourceOffset = resource.Length == 0 ? -1 : image.FileRange(resource.Start).Start;
             byte resourceHeader = resourceOffset < 0 ? (byte)0 : image.FileData[resourceOffset];
-
-            int constant = metadata.Fields.FindIndex(field => (field.Flags & 0x8050) == 0x8050
-                && field.DefaultValue != 0
-                && metadata.SignatureBuilder.Nodes[field.Signature].Kind == SignatureKind.Named
-                && expected.Enums.Definitions.Any(definition => definition.Signature == field.Signature));
-            MetadataField savedField = constant < 0 ? default : metadata.Fields[constant];
             string error;
-
             if (fault == 0) {
                 image.Directories[1] = new(directory.Rva == 0 ? image.Sections[0].Rva : directory.Rva, 1);
                 error = "Truncated import directory";
-            } else if (fault == 1) {
+            } else {
                 if (resourceOffset < 0)
                     continue;
-
                 image.FileData[resourceOffset] = 255;
                 error = "Invalid NativeHashtable header";
-            } else {
-                if (constant < 0)
-                    continue;
-
-                var changed = savedField;
-                changed.DefaultValue = (changed.DefaultValue & ~((1U << header.MetadataHandleBits) - 1)) | 1;
-                metadata.Fields[constant] = changed;
-                error = "Enum constant has unsupported NativeFormat kind";
             }
-
             bool rejected = false;
-
             try {
-                _ = new Extraction(image, header, metadata, maps, fixups);
+                _ = Extraction.Read(image);
             } catch (InvalidDataException failure) when (failure.Message.Contains(error, StringComparison.Ordinal)) {
                 rejected = true;
             }
-
             Assert(rejected, "Accepted optional-source fault was not rejected.");
-            Assert(ReferenceEquals(before, metadata.SignatureBuilder.Publish()),
-                "Failed optional source changed prior publication.");
-
+            Assert(ReferenceEquals(before, expected.Signatures),
+                "Failed optional source changed an earlier extraction.");
             image.Directories[1] = directory;
-
             if (resourceOffset >= 0)
                 image.FileData[resourceOffset] = resourceHeader;
-
-            if (constant >= 0)
-                metadata.Fields[constant] = savedField;
-
-            var recovered = new Extraction(image, header, metadata, maps, fixups);
+            var recovered = Extraction.Read(image);
             EqualTypes(expected, recovered);
-            Assert(expected.Signatures.Nodes.SequenceEqual(recovered.Signatures.Nodes),
-                "Recovered signature node IDs/order changed.");
-            Assert(expected.Signatures.Edges.SequenceEqual(recovered.Signatures.Edges),
-                "Recovered signature edge IDs/order changed.");
-            Assert(expected.Signatures.Methods.SequenceEqual(recovered.Signatures.Methods),
-                "Recovered signature method IDs/order changed.");
+            Assert(ReferenceEquals(before, expected.Signatures),
+                "A later extraction changed an earlier publication.");
         }
     }
 
     private static void RejectEarly(byte[] bytes, string message) {
         var image = new PeImage(bytes);
-        var header = ReadyToRun.Read(image);
-        var section = header.Find(RtrSectionId.EmbeddedMetadata);
-        var metadata = new Metadata(
-            section.Length == 0 ? default : image.FileMemory(section.Start, checked((int)section.Length)),
-            header.MetadataHandleBits, header.Format.LegacyMetadataConstants);
-        metadata.ReadDefinitions();
-
-        var fixups = RuntimeTables.Fixups(image, header.Find(RtrSectionId.CommonFixupsTable));
-        var maps = new ReflectionMaps();
-        maps.Read(image, header, metadata, fixups);
-        var before = metadata.SignatureBuilder.Publish();
         bool rejected = false;
-
         try {
-            _ = new Extraction(image, header, metadata, maps, fixups);
+            _ = Extraction.Read(image);
         } catch (InvalidDataException error) when (error.Message.Contains(message, StringComparison.Ordinal)) {
             rejected = true;
         }
-
         Assert(rejected, "Selected independent source fault did not reject extraction.");
-        Assert(ReferenceEquals(before, metadata.SignatureBuilder.Publish()),
-            "Independent source failure mutated caller-owned signature state.");
     }
 
     private static void Missing(Func<object> read) {

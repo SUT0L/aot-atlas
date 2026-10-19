@@ -3,14 +3,16 @@ using System.Text.Json;
 using Atlas;
 
 internal static class DispatchOutput {
-    internal static void Write(Utf8JsonWriter json, string inputSha256, PeImage image,
-        MethodTables tables, RuntimeNames names, Dispatch dispatch, VirtualMap virtuals, double seconds,
-        ExtractionStage stages = ExtractionStage.All,
-        ReadOnlySpan<DictionarySignatureGap> dictionarySignatureGaps = default) {
+    internal static void Write(Utf8JsonWriter json, string inputSha256, Extraction extraction) {
+        var image = extraction.Image;
+        var tables = extraction.Types;
+        var names = extraction.Names;
+        var dispatch = extraction.Dispatch;
+        var virtuals = extraction.Virtuals;
         json.WriteStartObject();
         json.WriteString("input_sha256", inputSha256);
-        ExtractionStatusOutput.Write(json, stages, dictionarySignatureGaps);
-        json.WriteNumber("dispatch_seconds", seconds);
+        ExtractionStatusOutput.Write(json, extraction);
+        json.WriteNumber("dispatch_seconds", extraction.DispatchSeconds);
 
         json.WriteStartArray("maps");
 

@@ -28,7 +28,7 @@ internal static class TypeGraphChecks {
 
         var names = new RuntimeNames(valid, new ReflectionMaps());
         Assert(names.Values[1] == $"mt_ref_{Address(2):X}<mt_ref_{Address(0):X}>", "Generic name postorder changed.");
-        _ = new FieldLayouts(new Metadata(default, 7), new ReflectionMaps(), valid);
+        _ = new FieldLayouts(Metadata.Read(default, new(7)), new ReflectionMaps(), valid);
 
         var chain = new Row[4096];
 
@@ -47,7 +47,7 @@ internal static class TypeGraphChecks {
             RelatedType = Address(0)
         };
 
-        Rejects(() => _ = new FieldLayouts(new Metadata(default, 7), new ReflectionMaps(), manual),
+        Rejects(() => _ = new FieldLayouts(Metadata.Read(default, new(7)), new ReflectionMaps(), manual),
             "Cyclic base type");
 
         manual.Types[index] = new MethodTable {

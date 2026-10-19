@@ -6,14 +6,15 @@ internal static class TypeMapsProducerChecks {
     internal static void Run(string binary) {
         var image = PeImage.ReadFile(binary);
         var header = ReadyToRun.Read(image);
-        var metadata = Metadata.FromImage(image, header);
+        var metadata = MetadataBuilder.FromImage(image, header);
 
         metadata.ReadDefinitions();
 
         var fixups = RuntimeTables.Fixups(image, header.Find(RtrSectionId.CommonFixupsTable));
         var maps = ReflectionMaps.Decode(image, header, metadata, fixups);
-        var selected = new Extraction(image, header, metadata, maps, fixups, ExtractionStage.RuntimeTypes);
-        var prepared = new PreparedAnalysis(image, header, metadata, maps, fixups);
+        var snapshot = metadata.Publish();
+        var selected = Extraction.Read(image, ExtractionStage.RuntimeTypes);
+        var prepared = PreparedAnalysis.Read(image);
         var full = prepared.Extraction;
 
         foreach (var extraction in new[] { selected, full }) {
@@ -44,7 +45,7 @@ internal static class TypeMapsProducerChecks {
                 "Empty compiler groups disappeared.");
 
             foreach (var typeMap in new[] { external, proxy }) {
-                var evidence = typeMap.Section == RtrSectionId.ExternalTypeMap
+                var evidence = typeMap.Kind == InteropTypeMapKind.External
                     ? TypeEvidence.ExternalTypeMap : TypeEvidence.ProxyTypeMap;
                 foreach (var group in typeMap.Groups) {
                     Check(fixups[group.GroupFixup] == group.GroupType, "Group CommonFixups provenance changed.");
@@ -103,7 +104,7 @@ internal static class TypeMapsProducerChecks {
 
         var image = new PeImage(bytes);
         var withoutTraces = ReadyToRun.Read(image);
-        var metadata = Metadata.FromImage(image, withoutTraces);
+        var metadata = MetadataBuilder.FromImage(image, withoutTraces);
         metadata.ReadDefinitions();
         var fixups = RuntimeTables.Fixups(image, withoutTraces.Find(RtrSectionId.CommonFixupsTable));
         var maps = ReflectionMaps.Decode(image, withoutTraces, metadata, fixups);
@@ -117,7 +118,7 @@ internal static class TypeMapsProducerChecks {
             ref readonly var group = ref stub.Map.Groups[stub.GroupIndex];
             ulong stubAddress = group.ThrowingStub;
             var origin = origins.OriginEntries.ToArray().Single(entry => entry.Address == stubAddress);
-            string prefix = stub.Map.Section == RtrSectionId.ExternalTypeMap
+            string prefix = stub.Map.Kind == InteropTypeMapKind.External
                 ? "invalid_external_type_map::" : "invalid_proxy_type_map::";
             Check(origins.NameText.Slice(origin.Name.Start, origin.Name.Count).SequenceEqual(prefix + Name(extraction, group.GroupType)),
                 "A sparse throwing-stub index selected the wrong owner or section.");

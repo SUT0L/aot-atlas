@@ -63,7 +63,7 @@ internal static class RtrFormatChecks {
         Reject<ArgumentOutOfRangeException>(() => modern.InvokeMapFlags(MapFormat.Auto));
         Reject<ArgumentOutOfRangeException>(() => modern.FieldMapFlags((MapFormat)255));
         Reject<ArgumentOutOfRangeException>(() =>
-            ReflectionMaps.SelectFormat(16, [], [], [], new Metadata(default, 7), (MapFormat)255));
+            ReflectionMaps.SelectFormat(16, [], [], [], new MetadataBuilder(default, 7), (MapFormat)255));
 
         var random = new Random(0x525452);
 

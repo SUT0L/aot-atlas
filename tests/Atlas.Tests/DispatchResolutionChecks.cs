@@ -25,7 +25,7 @@ internal static class DispatchResolutionChecks {
             var rtr = ReadyToRun.Read(image);
 
             var section = rtr.Find(313);
-            var metadata = new Metadata(
+            var metadata = new MetadataBuilder(
                 section.Length == 0 ? default : image.FileMemory(section.Start, checked((int)section.Length)),
                 rtr.MetadataHandleBits, rtr.Major < 10);
             metadata.ReadDefinitions();

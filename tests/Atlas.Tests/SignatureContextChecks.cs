@@ -163,7 +163,7 @@ internal static class SignatureContextChecks {
             Put(480, 0, 128, 1, 0, 0, 0, 0, 0);
             Put(560, H(288, 0x3d));
 
-            var metadata = new Metadata(data, bits);
+            var metadata = new MetadataBuilder(data, bits);
             int left = metadata.TypeSignature(H(256, 0x3d));
             int alias = metadata.TypeSignature(H(560, 0x3e));
 
@@ -182,7 +182,7 @@ internal static class SignatureContextChecks {
             using (var json = new Utf8JsonWriter(stream)) {
                 json.WriteStartObject();
                 MetadataIdentityOutput.WriteContext(json, left, false, context);
-                MetadataIdentityOutput.Write(json, metadata);
+                MetadataIdentityOutput.Write(json, metadata.Publish());
                 json.WriteEndObject();
             }
 

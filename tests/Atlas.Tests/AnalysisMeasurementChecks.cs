@@ -49,7 +49,7 @@ internal static class AnalysisMeasurementChecks {
             && result.TotalMeasurement.Seconds <= seconds);
         Check(result.TotalMeasurement.AllocatedBytes <= allocated);
 
-        double productSeconds = result.MetadataMemberMeasurement.Seconds + result.ExtractionMeasurement.Seconds
+        double productSeconds = result.ExtractionMeasurement.Seconds
             + result.AbiMeasurement.Seconds + result.PropertyMeasurement.Seconds + result.CodeMeasurement.Seconds
             + result.DispatchCellMeasurement.Seconds + result.HelperMeasurement.Seconds
             + result.GcInfoMeasurement.Seconds + result.GenericContextMeasurement.Seconds
@@ -70,7 +70,7 @@ internal static class AnalysisMeasurementChecks {
         var image = PeImage.ReadFile(path);
         SHA256.HashData(image.FileData);
         var header = ReadyToRun.Read(image);
-        var metadata = Metadata.FromImage(image, header);
+        var metadata = MetadataBuilder.FromImage(image, header);
         metadata.ReadDefinitions();
         var fixups = RuntimeTables.Fixups(image, header.Find(RtrSectionId.CommonFixupsTable));
         var maps = ReflectionMaps.Decode(image, header, metadata, fixups);

@@ -124,6 +124,8 @@ internal static unsafe class InstanceTypes {
 
                     bool indirect = table.Kind == 1 || table.ElementType is 0x19 or 0x1A;
                     int enumeration = extraction.Enums.RuntimeIndices[i];
+                    if (enumeration != 0 && enums[enumeration - 1] == 0)
+                        enumeration = 0;
                     if (layouts[i].Length == 0 && !indirect && enumeration == 0) {
                         parts[1] = opaque;
                         nint named = Core.BNCreateNamedType(3, id, &name);

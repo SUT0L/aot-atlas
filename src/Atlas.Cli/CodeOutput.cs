@@ -9,7 +9,7 @@ internal static class CodeOutput {
 
         json.WriteStartObject();
         json.WriteString("input_sha256", inputSha256);
-        ExtractionStatusOutput.Write(json, extraction.Stages, extraction.DictionarySignatureGaps);
+        ExtractionStatusOutput.Write(json, extraction);
         json.WriteNumber("code_preparation_seconds", seconds);
         json.WriteNumber("allocated_bytes", allocated);
         json.WriteNumber("instruction_count", code.InstructionCount);
@@ -79,6 +79,26 @@ internal static class CodeOutput {
         WriteEdges(json, "calls", code.Calls);
         WriteEdges(json, "jumps", code.Jumps);
         WriteEdges(json, "addresses", code.Addresses);
+
+        if (!code.UnprovenDispatchCellUseEntries.IsEmpty) {
+            json.WriteString("dispatch_uses_status", "partial");
+            json.WriteStartArray("unproven_dispatch_cell_uses");
+            foreach (var use in code.UnprovenDispatchCellUseEntries) {
+                json.WriteStartObject();
+                if (use.Cell == 0) {
+                    json.WriteNull("definition");
+                    json.WriteNull("cell");
+                } else {
+                    json.WriteNumber("definition", use.Definition);
+                    json.WriteNumber("cell", use.Cell);
+                }
+                json.WriteNumber("instruction", use.Instruction);
+                json.WriteNumber("target", use.Target);
+                json.WriteString("status", use.Cell == 0 ? "unknown_cell" : "unknown_helper");
+                json.WriteEndObject();
+            }
+            json.WriteEndArray();
+        }
 
         json.WriteStartArray("metadata_references");
 

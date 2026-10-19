@@ -33,6 +33,7 @@ public struct MethodTemplate {
     public NativeMethodEntry Method;
     public bool UniversalCanonical;
     public bool AsyncVariant;
+    public bool ReturnDroppingAsyncThunk;
 }
 
 public struct TemplateLayoutFacts {
@@ -124,7 +125,7 @@ public sealed class TemplateMaps {
     internal void Read(
         PeImage image,
         ReadyToRun rtr,
-        Metadata metadata,
+        MetadataBuilder metadata,
         NativeLayout layout,
         ReadOnlySpan<ulong> fixups,
         ReadOnlySpan<ulong> staticReferences,
@@ -193,7 +194,8 @@ public sealed class TemplateMaps {
                         LayoutOffset = offset,
                         Method = entry,
                         UniversalCanonical = variant && rtr.Format.UniversalCanonicalMethods,
-                        AsyncVariant = variant && rtr.Format.AsyncMethodVariants
+                        AsyncVariant = variant && rtr.Format.AsyncMethodVariants,
+                        ReturnDroppingAsyncThunk = (entry.Flags & 16) != 0
                     });
                 }
             }

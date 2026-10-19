@@ -11,7 +11,7 @@ public readonly struct NativeAotFormat {
     }
 
     public static NativeAotFormat ForVersion(ushort major, ushort minor) {
-        if ((major, minor) is not ((9, 1) or (10, 1) or (12, 0) or (16, 0) or (18, 4) or (18, 5)))
+        if ((major, minor) is not ((9, 1) or (10, 1) or (12, 0) or (16, 0) or (18, 4) or (18, 5) or (32, 0)))
             throw new NotSupportedException($"Unsupported RTR version {major}.{minor}.");
 
         return new NativeAotFormat(major, minor);
@@ -20,7 +20,7 @@ public readonly struct NativeAotFormat {
     public int MetadataHandleBits => Major < 12 ? 8 : 7;
     public bool LegacyTypeLayout => Major < 10;
     public bool LegacyMetadataConstants => Major < 10;
-    public int MethodGcVersion => Major < 10 ? 2 : Major < 11 ? 3 : 4;
+    public int MethodGcVersion => Major < 10 ? 2 : Major < 11 ? 3 : Major < 21 ? 4 : 5;
     public uint HasPointersFlag => PointerFlag(LegacyTypeLayout);
     internal static uint PointerFlag(bool legacy) => legacy ? 0x00200000U : 0x01000000U;
 
@@ -30,6 +30,14 @@ public readonly struct NativeAotFormat {
     public bool LegacyTemplateMethodSignatures => Major == 9;
     public bool OrdinalFields => Major <= 12;
     public bool AsyncMethodVariants => Major >= 18;
+    public bool SeparateDispatchCellInfo => Major >= 32;
+    public bool ReturnDroppingAsyncThunks => Major >= 32;
+    public bool CombinedMetadataTypeOwnership => Major >= 32;
+    public bool CompactReflectionMapFlags => Major >= 32;
+    public RtrSectionId ExternalTypeMapSection => Major >= 32
+        ? RtrSectionId.SharedExternalTypeMap : RtrSectionId.ExternalTypeMap;
+    public RtrSectionId ProxyTypeMapSection => Major >= 32
+        ? RtrSectionId.SharedProxyTypeMap : RtrSectionId.ProxyTypeMap;
     public bool EmbeddedDehydrationLength => Major > 18 || (Major == 18 && Minor >= 4);
     public bool MaskedGenericMethodTokens => Major > 18 || (Major == 18 && Minor >= 4);
 
@@ -38,15 +46,24 @@ public readonly struct NativeAotFormat {
         ? MapFormat.Auto
         : major < 12 ? MapFormat.Legacy : MapFormat.Metadata;
 
-    public uint InvokeMapFlags(MapFormat grammar) => grammar switch {
+    public uint InvokeMapFlags(MapFormat grammar) => CompactReflectionMapFlags ? 0x3FU : grammar switch {
         MapFormat.Legacy => 0x70FFU,
         MapFormat.Metadata => UniversalCanonicalMethods ? 0x70FBU : 0x70BBU,
         _ => throw new ArgumentOutOfRangeException(nameof(grammar))
     };
 
-    public uint FieldMapFlags(MapFormat grammar) => grammar switch {
+    public uint FieldMapFlags(MapFormat grammar) => CompactReflectionMapFlags ? 0xFU : grammar switch {
         MapFormat.Legacy => 0xEFU,
         MapFormat.Metadata => OrdinalFields ? 0xE7U : 0xE3U,
         _ => throw new ArgumentOutOfRangeException(nameof(grammar))
     };
+
+    // Source flags are retained on map rows. Consumers use the same owned
+    // flag positions across every accepted wire grammar.
+    internal uint NormalizeInvokeFlags(uint source) => !CompactReflectionMapFlags ? source
+        : (source & 3) | ((source & 0x1C) << 1) | ((source & 0x20) << 2);
+
+    internal uint NormalizeFieldFlags(uint source) => !CompactReflectionMapFlags ? source
+        : (source & 3) | ((source & 4) << 3) | ((source & 8) << 4);
+
 }

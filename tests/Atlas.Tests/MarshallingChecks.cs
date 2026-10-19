@@ -8,7 +8,7 @@ internal static class MarshallingChecks {
         foreach (int bits in new[] { 7, 8 }) {
             foreach (uint layout in new uint[] { 0, 8, 16, 24 }) {
                 foreach (bool retained in new[] { false, true }) {
-                    var metadata = new Metadata(new byte[1], bits);
+                    var metadata = new MetadataBuilder(new byte[1], bits);
                     if (retained) {
                         metadata.TypeIndex.Add(1, 0);
                         metadata.Types.Add(new MetadataType {
@@ -83,9 +83,7 @@ internal static class MarshallingChecks {
             var header = ReadyToRun.Read(image);
 
             var section = header.Find(313);
-            var metadata = new Metadata(
-                image.FileMemory(section.Start, checked((int)section.Length)),
-                header.MetadataHandleBits, header.Major < 10);
+            var metadata = MetadataBuilder.FromImage(image, header);
             metadata.ReadDefinitions();
 
             var fixups = RuntimeTables.Fixups(image, header.Find(308));

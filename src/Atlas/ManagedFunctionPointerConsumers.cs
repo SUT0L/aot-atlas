@@ -24,7 +24,7 @@ public static class ManagedFunctionPointerConsumers {
         Signatures signatures,
         CancellationToken cancellationToken = default) {
         cancellationToken.ThrowIfCancellationRequested();
-        if (!metadata.SignatureBuilder.Owns(signatures))
+        if (!metadata.PublishedSignatures.SharesOrigin(signatures))
             throw new InvalidOperationException("Delegate consumer signatures belong to a different metadata graph.");
 
         traces.ValidateSignatures(signatures, cancellationToken);

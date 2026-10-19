@@ -131,7 +131,7 @@ internal static class InspectOutput {
             RtrSectionId.TypeMap, RtrSectionId.InvokeMap, RtrSectionId.VirtualInvokeMap,
             RtrSectionId.FieldAccessMap, RtrSectionId.GenericsHashtable,
             RtrSectionId.GenericMethodsHashtable, RtrSectionId.ExactMethodInstantiationsHashtable,
-            RtrSectionId.ExternalTypeMap, RtrSectionId.ProxyTypeMap
+            rtr.Format.ExternalTypeMapSection, rtr.Format.ProxyTypeMapSection
         ];
 
         foreach (var id in hashtables) {

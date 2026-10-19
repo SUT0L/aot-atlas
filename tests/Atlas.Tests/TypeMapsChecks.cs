@@ -15,13 +15,11 @@ internal static class TypeMapsChecks {
             byte[] proxy = Map(false, width);
             var image = Image(external, proxy);
             var header = ReadyToRun.Read(image);
-            var metadata = new Metadata(default, 7);
-            var maps = new ReflectionMaps();
-            var publication = metadata.PublishedSignatures;
-            var extraction = new Extraction(image, header, metadata, maps, Fixups, ExtractionStage.RuntimeTypes);
+            var extraction = Extract(image, Fixups);
+            var metadata = extraction.Metadata;
+            var maps = extraction.Maps;
+            var publication = extraction.Signatures;
             var decoded = extraction.TypeMaps;
-
-            Check(ReferenceEquals(publication, metadata.PublishedSignatures), "Extraction changed its metadata input.");
             Check(decoded.External.Groups.Length == 3 && decoded.Proxy.Groups.Length == 3, "Group records lost.");
             Check(decoded.External.Entries.Length == 2 && decoded.Proxy.Entries.Length == 2, "Mapping records lost.");
             Check(decoded.External.Bytes.SequenceEqual(external), "Source bytes changed.");
@@ -78,7 +76,7 @@ internal static class TypeMapsChecks {
             var sharedMaps = new TypeMaps(sharedImage, ReadyToRun.Read(sharedImage), Fixups, sharedTypes, default);
             Check(sharedMaps.Proxy.Entries.Length == 2 && sharedMaps.Proxy.Entries[0].Vertex == 40
                 && sharedMaps.Proxy.Entries[1].Vertex == 40, "Shared vertices were collapsed.");
-            var sharedPrepared = new PreparedAnalysis(sharedImage, ReadyToRun.Read(sharedImage), metadata, maps, Fixups);
+            var sharedPrepared = new PreparedAnalysis(sharedImage, ReadyToRun.Read(sharedImage), new MetadataBuilder(default, 7), new ReflectionMaps(), Fixups);
             var sharedEvidence = AnalysisEvidence.Read(sharedPrepared, sharedImage.ImageBase);
             var sharedTag = sharedEvidence.Tags.Single(tag => tag.Address == Start + 320 + 40);
             string[] sharedLines = sharedTag.Text.Split('\n');
@@ -88,7 +86,7 @@ internal static class TypeMapsChecks {
             Encoding.UTF8.GetBytes("\\\0\r\nx").CopyTo(escaped, 41);
             escaped[67 + 2 * width + 6] = 0xCE; // NativeAOT name hash 0x6DD420CE.
             var escapedImage = Image(escaped, proxy);
-            var escapedPrepared = new PreparedAnalysis(escapedImage, ReadyToRun.Read(escapedImage), metadata, maps, Fixups);
+            var escapedPrepared = new PreparedAnalysis(escapedImage, ReadyToRun.Read(escapedImage), new MetadataBuilder(default, 7), new ReflectionMaps(), Fixups);
             var escapedTag = AnalysisEvidence.Read(escapedPrepared, escapedImage.ImageBase).Tags
                 .Single(tag => tag.Address == Start + 64 + 40);
             Check(escapedTag.Text.Contains(@"name=\\\0\r\nx", StringComparison.Ordinal), "Native tag escaping changed.");
@@ -120,7 +118,7 @@ internal static class TypeMapsChecks {
             using var cancelled = new CancellationTokenSource();
             cancelled.Cancel();
             try {
-                _ = new Extraction(image, header, metadata, maps, Fixups,
+                _ = new Extraction(image, header, new MetadataBuilder(default, 7), new ReflectionMaps(), Fixups,
                     ExtractionStage.RuntimeTypes, cancelled.Token);
                 throw new Exception("Cancelled extraction succeeded.");
             } catch (OperationCanceledException) {
@@ -131,12 +129,12 @@ internal static class TypeMapsChecks {
             byte[] lateFailure = (byte[])proxy.Clone();
             lateFailure[64] = 126;
             var damaged = Image(external, lateFailure);
-            Reject(() => _ = new Extraction(damaged, ReadyToRun.Read(damaged), metadata, maps,
+            Reject(() => _ = new Extraction(damaged, ReadyToRun.Read(damaged), new MetadataBuilder(default, 7), new ReflectionMaps(),
                 Fixups, ExtractionStage.RuntimeTypes), "CommonFixups");
             Check(ReferenceEquals(publication, metadata.PublishedSignatures) && maps.TypeEntries.IsEmpty,
                 "Failed extraction published partial type metadata.");
 
-            var prepared = new PreparedAnalysis(image, header, metadata, maps, Fixups);
+            var prepared = new PreparedAnalysis(image, header, new MetadataBuilder(default, 7), new ReflectionMaps(), Fixups);
             var evidence = AnalysisEvidence.Read(prepared, image.ImageBase);
             const ulong delta = 0x10000000;
             var rebased = AnalysisEvidence.Read(prepared, image.ImageBase + delta);
@@ -157,7 +155,7 @@ internal static class TypeMapsChecks {
         Check(emptyMap.Present && emptyMap.Bytes.IsEmpty && emptyMap.Groups.IsEmpty && emptyMap.HashMask == 0,
             "Zero-length section became absent or acquired records.");
         CheckNestedBuckets();
-        var resources = new Extraction(absentImage, ReadyToRun.Read(absentImage), new Metadata(default, 7),
+        var resources = new Extraction(absentImage, ReadyToRun.Read(absentImage), new MetadataBuilder(default, 7),
             new ReflectionMaps(), [], ExtractionStage.Resources);
         try {
             _ = resources.TypeMaps;
@@ -170,7 +168,7 @@ internal static class TypeMapsChecks {
     }
 
     private static Extraction Extract(PeImage image, ulong[] fixups) => new(image, ReadyToRun.Read(image),
-        new Metadata(default, 7), new ReflectionMaps(), fixups, ExtractionStage.RuntimeTypes);
+        new MetadataBuilder(default, 7), new ReflectionMaps(), fixups, ExtractionStage.RuntimeTypes);
 
     private static void CheckNestedBuckets() {
         foreach (int width in new[] { 1, 2, 4 }) {

@@ -17,12 +17,14 @@ public readonly ref struct MethodRecord {
     public SignatureMethod MethodSignature => source.Signatures.MethodSignatures[Signature];
 
     public readonly uint Flags;
+    public readonly uint SourceFlags;
     public readonly uint Token;
     public readonly uint MetadataOffset;
     public readonly uint NativeOffset;
 
     public readonly string Name;
     public readonly bool AsyncVariant;
+    public readonly bool ReturnDroppingAsyncThunk;
     public readonly ReadOnlySpan<ulong> Arguments;
 
     public MethodRecord(Extraction extraction, int index) {
@@ -39,12 +41,11 @@ public readonly ref struct MethodRecord {
             Name           = entry.Name;
 
             Flags          = entry.Flags;
+            SourceFlags    = entry.SourceFlags;
             MetadataOffset = entry.MetadataOffset;
             NativeOffset   = entry.NativeSignatureOffset;
 
-            Signature = entry.Signature != 0
-                ? entry.Signature
-                : extraction.Layout.Method(NativeOffset).Signature;
+            Signature = entry.Signature;
             Arguments = CollectionsMarshal.AsSpan(extraction.Maps.GenericArguments)
                 .Slice(entry.GenericArguments.Start, entry.GenericArguments.Count);
         } else {
@@ -65,6 +66,7 @@ public readonly ref struct MethodRecord {
 
             Token          = entry.Token;
             AsyncVariant   = entry.AsyncVariant;
+            ReturnDroppingAsyncThunk = entry.ReturnDroppingAsyncThunk;
 
             Arguments = CollectionsMarshal.AsSpan(extraction.Generics.Arguments)
                 .Slice(entry.Arguments.Start, entry.Arguments.Count);
@@ -85,6 +87,7 @@ public sealed class MethodText(Extraction extraction) {
     internal int SignatureIndex { get; private set; }
     public SignatureMethod Signature => extraction.Signatures.MethodSignatures[SignatureIndex];
     public bool SignatureComplete { get; private set; } = true;
+    public bool HasAbbreviatedReferences { get; private set; }
     public SignatureContext Context => !SignatureComplete
         ? new(typeBindings.AsSpan(0, typeBindingCount), methodBindings.AsSpan(0, argumentCount))
         : throw new InvalidOperationException("The signature display was not abbreviated.");
@@ -128,6 +131,8 @@ public sealed class MethodText(Extraction extraction) {
         builder.Clear();
         if (entry.AsyncVariant)
             builder.Append("async_variant::");
+        if (entry.ReturnDroppingAsyncThunk)
+            builder.Append("return_dropping_async_thunk::");
 
         ownerStart = builder.Length;
         ownerLength = names[typeIndex].Length;
@@ -149,12 +154,13 @@ public sealed class MethodText(Extraction extraction) {
         }
 
         NameLength = builder.Length;
-        if (includeSignature) {
+        if (includeSignature && entry.Signature != 0) {
             SignatureComplete = entry.MethodSignature.Append(
                 builder,
                 typeArguments.AsSpan(0, arguments.Count),
                 methodArguments.AsSpan(0, entry.Arguments.Length));
             if (!SignatureComplete) {
+                HasAbbreviatedReferences = true;
                 PrepareContext(arguments.Count);
 
                 for (int i = 0; i < arguments.Count; ++i)
@@ -213,7 +219,7 @@ public sealed class MethodText(Extraction extraction) {
                 if (i != 0)
                     builder.Append(',');
 
-                builder.Append(typeArguments[i]);
+                builder.Append(string.IsNullOrEmpty(typeArguments[i]) ? "??" : typeArguments[i]);
             }
 
             builder.Append('>');
@@ -230,7 +236,7 @@ public sealed class MethodText(Extraction extraction) {
                 if (i != entry.ParameterNames.Start)
                     builder.Append(',');
 
-                builder.Append(parameters[i]);
+                builder.Append(string.IsNullOrEmpty(parameters[i]) ? "??" : parameters[i]);
             }
 
             builder.Append('>');
@@ -243,6 +249,7 @@ public sealed class MethodText(Extraction extraction) {
                 typeArguments.AsSpan(0, count),
                 parameters.Slice(entry.ParameterNames.Start, entry.ParameterNames.Count));
             if (!SignatureComplete) {
+                HasAbbreviatedReferences = true;
                 PrepareContext(count);
 
                 for (int i = 0; i < count; ++i)
@@ -304,6 +311,8 @@ public sealed class MethodText(Extraction extraction) {
 
         if (template.AsyncVariant)
             builder.Append("async_variant::");
+        if (template.ReturnDroppingAsyncThunk)
+            builder.Append("return_dropping_async_thunk::");
 
         if ((entry.Flags & 2) != 0)
             builder.Append("unboxing::");
@@ -326,12 +335,13 @@ public sealed class MethodText(Extraction extraction) {
         builder.Append('>');
 
         NameLength = builder.Length;
-        if (includeSignature) {
+        if (includeSignature && entry.Identity.Signature != 0) {
             SignatureComplete = signatures.MethodSignatures[entry.Identity.Signature].Append(
                 builder,
                 typeArguments.AsSpan(0, typeArgs.Count),
                 Arguments);
             if (!SignatureComplete) {
+                HasAbbreviatedReferences = true;
                 PrepareContext(typeArgs.Count);
 
                 for (int i = 0; i < typeArgs.Count; ++i)

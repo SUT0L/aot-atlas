@@ -200,7 +200,7 @@ internal static unsafe class MethodAnnotations {
                 offset = group.Vertex;
                 signature = extraction.Names.Values[extraction.Types.Index[group.GroupType]];
                 nameLength = signature.Length;
-                recordPrefix = stub.Map.Section == RtrSectionId.ExternalTypeMap
+                recordPrefix = stub.Map.Kind == InteropTypeMapKind.External
                     ? "external_type_map::"u8 : "proxy_type_map::"u8;
                 targets[0] = group.GroupType;
                 targets[1] = code[(int)FunctionRole.ThrowingStub] = group.ThrowingStub;

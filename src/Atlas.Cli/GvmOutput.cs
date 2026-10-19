@@ -12,7 +12,7 @@ internal static class GvmOutput {
 
         json.WriteStartObject();
         json.WriteString("input_sha256", inputSha256);
-        ExtractionStatusOutput.Write(json, extraction.Stages, extraction.DictionarySignatureGaps);
+        ExtractionStatusOutput.Write(json, extraction);
         json.WriteNumber("class_table", extraction.Header.Find(RtrSectionId.GenericVirtualMethodTable).Start);
         json.WriteNumber("interface_table", extraction.Header.Find(RtrSectionId.InterfaceGenericVirtualMethodTable).Start);
 
@@ -104,15 +104,36 @@ internal static class GvmOutput {
         GvmMethod method, StringBuilder builder) {
         ref readonly var identity = ref method.Identity;
         var signatures = extraction.Signatures;
-        int arity = signatures.Methods[identity.Signature].GenericParameterCount;
         string owner = extraction.Names.Values[extraction.Types.Index[method.Owner]];
 
         builder.Clear();
         builder.Append("gvm::")
             .Append(owner)
             .Append("::")
-            .Append(identity.Name)
-            .Append('<');
+            .Append(identity.Name);
+
+        json.WriteStartObject();
+        json.WriteNumber("type", method.Owner);
+        JsonOutput.WriteString(json, "type_name", owner);
+        json.WriteNumber("token", method.Token);
+        json.WriteNumber("metadata_offset", identity.MetadataOffset);
+        json.WriteNumber("native_offset", identity.NativeOffset);
+        JsonOutput.WriteString(json, "method_name", identity.Name);
+
+        if (identity.Signature == 0) {
+            json.WriteNull("generic_arity");
+            json.WriteNull("static");
+            JsonOutput.WriteString(json, "name", builder.ToString());
+            json.WriteNull("declared_signature");
+            json.WriteString("signature_status", "unavailable");
+            json.WriteEndObject();
+            return;
+        }
+
+        ref readonly var signature = ref signatures.Methods[identity.Signature];
+        int arity = signature.GenericParameterCount;
+
+        builder.Append('<');
 
         for (int i = 0; i < arity; ++i) {
             if (i != 0)
@@ -125,20 +146,10 @@ internal static class GvmOutput {
 
         builder.Append('>');
 
-        json.WriteStartObject();
-        json.WriteNumber("type", method.Owner);
-        JsonOutput.WriteString(json, "type_name", owner);
-        json.WriteNumber("token", method.Token);
-        json.WriteNumber("metadata_offset", identity.MetadataOffset);
-        json.WriteNumber("native_offset", identity.NativeOffset);
         json.WriteNumber("generic_arity", arity);
-
-        ref readonly var signature = ref signatures.Methods[identity.Signature];
-
         json.WriteBoolean("static", signature.NativeConvention
             ? (signature.CallingConvention & 2) != 0
             : (signature.CallingConvention & 0x20) == 0);
-        JsonOutput.WriteString(json, "method_name", identity.Name);
         JsonOutput.WriteString(json, "name", builder.ToString());
 
         signatures.MethodSignatures[identity.Signature].Append(builder);

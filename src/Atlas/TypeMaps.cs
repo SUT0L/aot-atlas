@@ -16,10 +16,13 @@ public readonly record struct InteropTypeMapEntry(
 
 internal readonly record struct TypeMapThrowingStub(InteropTypeMap Map, int GroupIndex);
 
+public enum InteropTypeMapKind : byte { External, Proxy }
+
 public sealed class InteropTypeMap {
     private static readonly UTF8Encoding Utf8 = new(false, true);
 
     public RtrSectionId Section { get; }
+    public InteropTypeMapKind Kind { get; }
     public bool Present { get; }
     public ulong Address { get; }
     private readonly ReadOnlyMemory<byte> storage;
@@ -35,6 +38,8 @@ public sealed class InteropTypeMap {
         PeImage image, ReadyToRun header, RtrSectionId id, ReadOnlySpan<ulong> fixups,
         MethodTables types, List<TypeMapThrowingStub> throwingStubs, CancellationToken cancellationToken) {
         Section = id;
+        Kind = id is RtrSectionId.ExternalTypeMap or RtrSectionId.SharedExternalTypeMap
+            ? InteropTypeMapKind.External : InteropTypeMapKind.Proxy;
         var section = header.Find(id);
         Present = section.Id == (int)id;
         Address = section.Start;
@@ -45,7 +50,7 @@ public sealed class InteropTypeMap {
             var data = Bytes;
             var table = new NativeTable(data);
             HashMask = data.IsEmpty ? 0 : ((uint)table.BucketMask << 8) | 255;
-            bool external = id == RtrSectionId.ExternalTypeMap;
+            bool external = Kind == InteropTypeMapKind.External;
             var evidence = external ? TypeEvidence.ExternalTypeMap : TypeEvidence.ProxyTypeMap;
 
             while (table.MoveNext()) {
@@ -124,7 +129,7 @@ public sealed class InteropTypeMap {
             if ((types.Types[types.Index[group.GroupType]].Hash & HashMask) != group.Hash)
                 throw new InvalidDataException($"Type map section {(int)Section} at offset 0x{group.Vertex:X}: group hash does not match its runtime lookup bucket.");
 
-            if (Section != RtrSectionId.ProxyTypeMap)
+            if (Kind != InteropTypeMapKind.Proxy)
                 continue;
 
             foreach (ref readonly var entry in Entries.Slice(group.Entries.Start, group.Entries.Count)) {
@@ -168,8 +173,8 @@ public sealed class TypeMaps {
 
     internal TypeMaps(PeImage image, ReadyToRun header, ReadOnlySpan<ulong> fixups,
         MethodTables types, CancellationToken cancellationToken) {
-        External = new(image, header, RtrSectionId.ExternalTypeMap, fixups, types, throwingStubs, cancellationToken);
-        Proxy = new(image, header, RtrSectionId.ProxyTypeMap, fixups, types, throwingStubs, cancellationToken);
+        External = new(image, header, header.Format.ExternalTypeMapSection, fixups, types, throwingStubs, cancellationToken);
+        Proxy = new(image, header, header.Format.ProxyTypeMapSection, fixups, types, throwingStubs, cancellationToken);
     }
 
     internal void ValidateHashes(MethodTables types, CancellationToken cancellationToken) {

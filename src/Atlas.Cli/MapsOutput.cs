@@ -6,7 +6,7 @@ internal static class MapsOutput {
     internal static void Write(Utf8JsonWriter json, string inputSha256, ReflectionMaps maps,
         PeImage image, Metadata metadata, double seconds, CancellationToken cancellationToken = default) {
         cancellationToken.ThrowIfCancellationRequested();
-        var signatures = metadata.SignatureBuilder.Publish();
+        var signatures = metadata.PublishedSignatures;
 
         json.WriteStartObject();
         json.WriteString("input_sha256", inputSha256);
@@ -16,6 +16,12 @@ internal static class MapsOutput {
             _ => "unknown"
         });
         json.WriteNumber("maps_seconds", seconds);
+        bool partialMetadata = metadata.ProjectionDiagnostics.Count != 0
+            || (!metadata.Bytes.IsEmpty && metadata.Facts.Status != MetadataFactStatus.Valid);
+        if (partialMetadata) {
+            json.WriteString("metadata_status", "partial");
+            json.WriteNumber("metadata_projection_failures", metadata.ProjectionDiagnostics.Count);
+        }
 
         json.WriteStartArray("types");
 
@@ -56,7 +62,7 @@ internal static class MapsOutput {
             JsonOutput.WriteString(json, "method_name", entry.Name);
             json.WriteNumber("declaring_type", entry.DeclaringType);
 
-            json.WriteNumber("flags", entry.Flags);
+            json.WriteNumber("flags", entry.SourceFlags);
             json.WriteBoolean("is_generic", (entry.Flags & 2) != 0);
             json.WriteBoolean("is_default_ctor", (entry.Flags & 8) != 0);
             json.WriteNumber("metadata_handle", entry.MetadataOffset);
@@ -76,6 +82,8 @@ internal static class MapsOutput {
 
             if (entry.Signature != 0)
                 JsonOutput.WriteString(json, "signature", signatures.MethodSignatures[entry.Signature].Render(entry.Name));
+            else if (entry.MetadataOffset != 0)
+                json.WriteString("signature_status", "unavailable");
 
             json.WriteEndObject();
         }
@@ -93,7 +101,7 @@ internal static class MapsOutput {
             json.WriteNumber("metadata_handle", entry.MetadataOffset);
 
             json.WriteNumber("storage", entry.Storage);
-            json.WriteNumber("flags", entry.Flags);
+            json.WriteNumber("flags", entry.SourceFlags);
             json.WriteBoolean("is_init_only", (entry.Flags & 0x80) != 0);
             JsonOutput.WriteString(json, "field_name", entry.Name);
 
@@ -106,6 +114,8 @@ internal static class MapsOutput {
 
             if (entry.Signature != 0)
                 JsonOutput.WriteString(json, "signature", signatures.Types[entry.Signature].Render());
+            else if (entry.MetadataOffset != 0)
+                json.WriteString("signature_status", "unavailable");
 
             json.WriteEndObject();
         }

@@ -11,7 +11,7 @@ internal static unsafe class AnalysisAnnotations {
         nint task) {
         ownership.Reserve(evidence.Tags.Length);
 
-        nint[] tagTypes = new nint[5];
+        nint[] tagTypes = new nint[(int)AnalysisEvidenceKind.Status + 1];
 
         byte[] text = [];
 
@@ -30,6 +30,7 @@ internal static unsafe class AnalysisAnnotations {
                         AnalysisEvidenceKind.GenericContext => "AOT Atlas generic context",
                         AnalysisEvidenceKind.FunctionPointer => "AOT Atlas function pointer",
                         AnalysisEvidenceKind.RuntimeType => "AOT Atlas runtime type",
+                        AnalysisEvidenceKind.DispatchCell => "AOT Atlas dispatch cell",
                         _ => "AOT Atlas analysis"
                     };
 

@@ -25,7 +25,8 @@ public enum TypeEvidence : uint {
     ExceptionHandling = 65536,
     FrozenRuntimeType = 131072,
     ExternalTypeMap = 262144,
-    ProxyTypeMap = 524288
+    ProxyTypeMap = 524288,
+    DispatchCell = 1048576
 }
 
 public struct MethodTable {

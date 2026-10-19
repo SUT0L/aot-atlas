@@ -12,42 +12,40 @@ internal static class ExtractCommand {
         json.WriteString("input_sha256", inputSha256);
 
         long start = Stopwatch.GetTimestamp();
-        var metadata = Metadata.FromImage(image, rtr);
-
-        metadata.ReadDefinitions(cancellationToken);
-        var members = new MetadataMembers(metadata, cancellationToken);
+        var metadataBuilder = MetadataBuilder.FromImage(image, rtr, cancellationToken);
+        metadataBuilder.ReadDefinitions(cancellationToken);
 
         double metadataSeconds = Stopwatch.GetElapsedTime(start).TotalSeconds;
-
-        json.WritePropertyName("metadata");
-        MetadataOutput.Write(
-            json, inputSha256, metadata, members, image, rtr, metadataSeconds,
-            includeSignatureGraph: false, cancellationToken: cancellationToken);
 
         start = Stopwatch.GetTimestamp();
 
         var fixups = RuntimeTables.Fixups(image, rtr.Find(RtrSectionId.CommonFixupsTable));
         var maps = new ReflectionMaps();
 
-        maps.Read(image, rtr, metadata, fixups, format, cancellationToken);
+        maps.Read(image, rtr, metadataBuilder, fixups, format, cancellationToken);
 
         double mapsSeconds = Stopwatch.GetElapsedTime(start).TotalSeconds;
 
-        json.WritePropertyName("maps");
-        MapsOutput.Write(json, inputSha256, maps, image, metadata, mapsSeconds, cancellationToken);
-
-        var products = new AnalysisProducts(image, rtr, metadata, maps, fixups,
+        var products = new AnalysisProducts(image, rtr, metadataBuilder, maps, fixups,
             requested: AnalysisProduct.All & ~AnalysisProduct.StringReferences,
-            members: members, cancellationToken: cancellationToken);
+            cancellationToken: cancellationToken);
         var extraction = products.Extraction;
-        metadata = extraction.Metadata;
+        var metadata = extraction.Metadata;
         maps = extraction.Maps;
         var analysis = extraction.UnwindAnalysis;
         var gcInfo = products.GcInfo;
         var fatPointers = products.FunctionPointers!;
 
-        ExtractionStatusOutput.Write(json, extraction.Stages, extraction.DictionarySignatureGaps);
-        AnalysisOutput.Write(json, analysis, gcInfo);
+        json.WritePropertyName("metadata");
+        MetadataOutput.Write(
+            json, inputSha256, metadata, metadataSeconds,
+            includeSignatureGraph: false, cancellationToken: cancellationToken);
+
+        json.WritePropertyName("maps");
+        MapsOutput.Write(json, inputSha256, maps, image, metadata, mapsSeconds, cancellationToken);
+
+        ExtractionStatusOutput.Write(json, extraction);
+        AnalysisOutput.Write(json, products);
 
         json.WritePropertyName("dictionaries");
         DictionariesOutput.Write(json, inputSha256, extraction);
@@ -58,16 +56,13 @@ internal static class ExtractCommand {
         }
 
         json.WritePropertyName("types");
-        TypesOutput.Write(json, inputSha256,
-            extraction.Types, extraction.Gc, extraction.Names, image, extraction.TypesSeconds,
-            extraction.Stages, extraction.DictionarySignatureGaps);
+        TypesOutput.Write(json, inputSha256, extraction);
 
         json.WritePropertyName("fields");
         FieldsOutput.Write(json, inputSha256, extraction);
 
         json.WritePropertyName("dispatch");
-        DispatchOutput.Write(json, inputSha256, image, extraction.Types, extraction.Names, extraction.Dispatch,
-            extraction.Virtuals, extraction.DispatchSeconds, extraction.Stages, extraction.DictionarySignatureGaps);
+        DispatchOutput.Write(json, inputSha256, extraction);
 
         json.WritePropertyName("statics");
         StaticsOutput.Write(json, inputSha256, extraction);

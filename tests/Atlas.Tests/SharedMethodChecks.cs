@@ -10,9 +10,7 @@ internal static class SharedMethodChecks {
             var header = ReadyToRun.Read(image);
 
             var section = header.Find(313);
-            var metadata = new Metadata(
-                image.FileMemory(section.Start, checked((int)section.Length)),
-                header.MetadataHandleBits, header.Major < 10);
+            var metadata = MetadataBuilder.FromImage(image, header);
             metadata.ReadDefinitions();
 
             var fixups = RuntimeTables.Fixups(image, header.Find(308));
@@ -21,7 +19,7 @@ internal static class SharedMethodChecks {
 
             var extraction = new Extraction(image, header, metadata, maps, fixups);
             var shared = extraction.Shared;
-            var abi = new ManagedAbi(extraction, extraction.Metadata.SignatureBuilder.Publish());
+            var abi = new ManagedAbi(extraction, extraction.Signatures);
 
             string[] lines = Invoke(binary, extended: true).Split(
                 '\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
@@ -182,7 +180,7 @@ internal static class SharedMethodChecks {
         int templateIndex = extraction.Shared.Templates[recordIndex] - 1;
         var record = extraction.Generics.Methods[recordIndex];
         var template = extraction.Templates.Methods[templateIndex];
-        var signature = extraction.Metadata.SignatureBuilder.Methods[record.Signature];
+        var signature = extraction.Signatures.Methods[record.Signature];
 
         int abiIndex = extraction.Maps.Methods.Count + recordIndex;
 
@@ -227,23 +225,28 @@ internal static class SharedMethodChecks {
 
             extraction.Templates.Methods[templateIndex] = changed;
             extraction.Generics.Methods[recordIndex] = changedRecord;
-            extraction.Metadata.SignatureBuilder.SetMethod(record.Signature, changedSignature);
+            var graph = extraction.Signatures;
+            if (mutation is >= 6 and <= 8) {
+                var extension = SignatureBuilder.FromSnapshot(graph);
+                changedRecord.Signature = extension.AddMethod(changedSignature);
+                extraction.Generics.Methods[recordIndex] = changedRecord;
+                graph = extension.Publish();
+            }
 
             var expected = mutation < 6 ? AbiStatus.NoEntrypoint
                 : mutation == 6 ? AbiStatus.UnmanagedConvention
                 : mutation == 7 ? AbiStatus.Varargs
                 : AbiStatus.UnknownType;
-            Assert(new ManagedAbi(extraction, extraction.Metadata.SignatureBuilder.Publish())
+            Assert(new ManagedAbi(extraction, graph)
                 .Methods[abiIndex].Status == expected,
                 $"Unsupported or incomplete shared ABI was accepted after mutation {mutation}.");
 
             extraction.Shared.Templates[recordIndex] = templateIndex + 1;
             extraction.Templates.Methods[templateIndex] = template;
             extraction.Generics.Methods[recordIndex] = record;
-            extraction.Metadata.SignatureBuilder.SetMethod(record.Signature, signature);
         }
 
-        Assert(new ManagedAbi(extraction, extraction.Metadata.SignatureBuilder.Publish())
+        Assert(new ManagedAbi(extraction, extraction.Signatures)
             .Methods[abiIndex].Status == AbiStatus.SharedTemplate,
             "Restoring the template and signature must restore the shared ABI.");
     }
@@ -258,7 +261,7 @@ internal static class SharedMethodChecks {
         ulong argument = extraction.Generics.Arguments[record.Arguments.Start];
 
         var other = templates.First(value => value.Method.Identity.Name == template.Method.Identity.Name
-            && extraction.Metadata.SignatureBuilder.Methods[value.Method.Identity.Signature].Parameters.Count != 0);
+            && extraction.Signatures.Methods[value.Method.Identity.Signature].Parameters.Count != 0);
 
         for (int mutation = 0; mutation < 10; ++mutation) {
             var changed = template;
@@ -302,7 +305,7 @@ internal static class SharedMethodChecks {
             records[recordIndex] = changedRecord;
 
             int expected = mutation == 8 ? -1 : 0;
-            Assert(new SharedMethods(extraction, extraction.Metadata.SignatureBuilder.Publish())
+            Assert(new SharedMethods(extraction, extraction.Signatures)
                 .Templates[recordIndex] == expected,
                 $"Conflicting generic evidence was accepted after mutation {mutation}.");
 
@@ -314,14 +317,14 @@ internal static class SharedMethodChecks {
             records[recordIndex] = record;
             extraction.Generics.Arguments[record.Arguments.Start] = argument;
 
-            Assert(new SharedMethods(extraction, extraction.Metadata.SignatureBuilder.Publish())
+            Assert(new SharedMethods(extraction, extraction.Signatures)
                 .Templates[recordIndex] == templateIndex + 1,
                 $"Restoring evidence did not restore the unique template after mutation {mutation}.");
         }
     }
 
     private static void CheckArrayBounds(Extraction extraction, int recordIndex, ulong integerType) {
-        var signatures = extraction.Metadata.SignatureBuilder;
+        var signatures = SignatureBuilder.FromSnapshot(extraction.Signatures);
         int templateIndex = extraction.Shared.Templates[recordIndex] - 1;
         var record = extraction.Generics.Methods[recordIndex];
         var template = extraction.Templates.Methods[templateIndex];
@@ -346,7 +349,7 @@ internal static class SharedMethodChecks {
         int left = element + 1;
         int right = element + 2;
 
-        var bindings = new TypeBindings(extraction.Types, extraction.Maps, extraction.Metadata.SignatureBuilder.Publish());
+        var bindings = new TypeBindings(extraction.Types, extraction.Maps, signatures.Publish());
         Assert(bindings.Resolve(left) != 0 && bindings.Resolve(left) == bindings.Resolve(right),
             "Array-bound variants must share the fixture's actual multidimensional-array MethodTable; candidates: "
             + string.Join(", ", extraction.Types.Types.Where(type => type.Kind == 2 && type.ElementType == 0x17)
@@ -369,14 +372,14 @@ internal static class SharedMethodChecks {
         extraction.Generics.Methods[recordIndex] = changedRecord;
         extraction.Templates.Methods[templateIndex] = changedTemplate;
 
-        Assert(new SharedMethods(extraction, extraction.Metadata.SignatureBuilder.Publish())
+        Assert(new SharedMethods(extraction, signatures.Publish())
             .Templates[recordIndex] == 0,
             "Matching runtime array types must not erase distinct method-signature bounds.");
 
         signature.ReturnType = left;
         signatures.SetMethod(changedTemplate.Method.Identity.Signature, signature);
 
-        Assert(new SharedMethods(extraction, extraction.Metadata.SignatureBuilder.Publish())
+        Assert(new SharedMethods(extraction, signatures.Publish())
             .Templates[recordIndex] == templateIndex + 1,
             "Equal array signatures must restore the template match.");
 

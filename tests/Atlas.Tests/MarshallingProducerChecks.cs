@@ -20,20 +20,21 @@ internal static class MarshallingProducerChecks {
     internal static void Run(string binary, string linkerMap) {
         var image = PeImage.ReadFile(binary);
         var header = ReadyToRun.Read(image);
-        var metadata = Metadata.FromImage(image, header);
+        var metadata = MetadataBuilder.FromImage(image, header);
         metadata.ReadDefinitions();
         var fixups = RuntimeTables.ReadFixups(image, header.Find(RtrSectionId.CommonFixupsTable)).ToArray();
         var maps = ReflectionMaps.Decode(image, header, metadata, fixups);
+        var snapshot = metadata.Publish();
         var symbols = ReadSymbols(linkerMap);
-        var selected = new Extraction(image, header, metadata, maps, fixups, ExtractionStage.RuntimeTypes);
-        var full = new Extraction(image, header, metadata, maps, fixups);
+        var selected = Extraction.Read(image, ExtractionStage.RuntimeTypes);
+        var full = Extraction.Read(image);
 
         Check(selected.Stages == ExtractionStage.RuntimeTypes, "The narrow extraction added stages.");
         CheckConcurrentOwners(selected);
         CheckLayouts(selected, symbols);
         CheckLayouts(full, symbols);
         CheckOwners(selected, full);
-        CheckFaults(image, header, metadata, maps, fixups, selected, symbols);
+        CheckFaults(image, header, snapshot, maps, fixups, selected, symbols);
 
         Console.WriteLine($"Marshalling producer: {binary}; five layouts, thirteen fields, invalid layout, four conversion/cleanup triplets, delegate open/closed/create, narrow/full owners, raw records, hash/record faults and repaired retries passed.");
     }
@@ -232,7 +233,7 @@ internal static class MarshallingProducerChecks {
 
             for (int replay = 0; replay < 3; ++replay) {
                 try {
-                    _ = new Extraction(image, header, metadata, maps, fixups, ExtractionStage.RuntimeTypes);
+                    _ = Extraction.Read(image, ExtractionStage.RuntimeTypes);
                     throw new Exception("Malformed compiler marshalling record was accepted.");
                 } catch (InvalidDataException error) {
                     Check(error.Message.Contains(fault.Hash ? "marshalling hash" : "NativeFormat integer", StringComparison.Ordinal),
@@ -245,7 +246,7 @@ internal static class MarshallingProducerChecks {
             }
 
             data[offset] = saved;
-            var repaired = new Extraction(image, header, metadata, maps, fixups, ExtractionStage.RuntimeTypes);
+            var repaired = Extraction.Read(image, ExtractionStage.RuntimeTypes);
             CheckLayouts(repaired, symbols);
         }
     }

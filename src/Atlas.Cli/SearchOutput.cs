@@ -43,7 +43,7 @@ internal static class SearchOutput {
         json.WriteString("operation", "search");
         json.WriteNumber("schema_version", 1);
         json.WriteString("input_sha256", inputSha256);
-        ExtractionStatusOutput.Write(json, extraction.Stages, extraction.DictionarySignatureGaps);
+        ExtractionStatusOutput.Write(json, extraction);
         json.WriteString("map_format", extraction.Maps.Format switch {
             MapFormat.Legacy => "legacy",
             MapFormat.Metadata => "metadata",
@@ -51,7 +51,7 @@ internal static class SearchOutput {
         });
         JsonOutput.WriteString(json, "query", query);
         json.WriteString("comparison", "ordinal_ignore_case");
-        AnalysisOutput.Write(json, extraction.UnwindAnalysis);
+        AnalysisOutput.Write(json, products);
 
         json.WriteStartArray("matches");
 
@@ -104,6 +104,7 @@ internal static class SearchOutput {
                 var method = new MethodRecord(extraction, i);
 
                 text = renderer.Render(method);
+                hasSignature = method.Signature != 0;
                 section = method.Section;
                 offset = method.Vertex;
                 entrypoint = method.Entrypoint;
@@ -124,6 +125,7 @@ internal static class SearchOutput {
                     CollectionsMarshal.AsSpan(extraction.Templates.Methods)[i - traceEnd];
 
                 text = renderer.Render(method);
+                hasSignature = method.Method.Identity.Signature != 0;
                 section = (int)RtrSectionId.GenericMethodsTemplateMap;
                 offset = method.Vertex;
                 entrypoint = method.Method.Entrypoint;
@@ -140,6 +142,8 @@ internal static class SearchOutput {
 
             if (hasSignature)
                 JsonOutput.WriteString(json, "declared_signature", text);
+            else
+                json.WriteString("signature_status", "unavailable");
 
             if (!renderer.SignatureComplete)
                 MetadataIdentityOutput.WriteContext(json, renderer.SignatureIndex, method: true, renderer.Context);
@@ -406,7 +410,8 @@ internal static class SearchOutput {
         json.WriteEndArray();
 
         json.WriteNumber("match_count", hits);
-        MetadataIdentityOutput.EndObject(json, extraction.Metadata, extraction.Signatures);
+        MetadataIdentityOutput.EndObject(json, extraction.Metadata, extraction.Signatures,
+            includeSignatureGraph: renderer.HasAbbreviatedReferences);
 
         return hits;
 

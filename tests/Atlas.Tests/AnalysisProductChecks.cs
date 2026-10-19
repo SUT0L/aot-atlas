@@ -5,18 +5,12 @@ internal static class AnalysisProductChecks {
         foreach (string path in paths) {
             var image = PeImage.ReadFile(path);
             var header = ReadyToRun.Read(image);
-            var metadata = Metadata.FromImage(image, header);
+            var metadata = MetadataBuilder.FromImage(image, header);
             metadata.ReadDefinitions();
             var fixups = RuntimeTables.Fixups(image, header.Find(RtrSectionId.CommonFixupsTable));
             var maps = ReflectionMaps.Decode(image, header, metadata, fixups);
-            var source = metadata.PublishedSignatures;
-            var methods = metadata.MethodDefinitions.ToArray();
-            var fields = metadata.FieldDefinitions.ToArray();
             var products = new AnalysisProducts(image, header, metadata, maps, fixups);
 
-            Check(ReferenceEquals(source, metadata.PublishedSignatures)
-                && methods.AsSpan().SequenceEqual(metadata.MethodDefinitions)
-                && fields.AsSpan().SequenceEqual(metadata.FieldDefinitions));
             Check(products.Members is not null && products.Abi is not null && products.Properties is not null
                 && products.Code is not null && products.DispatchCells is not null && products.GcInfo is not null
                 && products.GenericContexts is not null && products.FunctionPointers is not null && products.Strings is not null);
@@ -47,23 +41,22 @@ internal static class AnalysisProductChecks {
                 Check(accessors.Any(row => row.Semantics == 1) && accessors.Any(row => row.Semantics == 2));
             }
 
-            var members = new MetadataMembers(metadata);
-            var shared = new AnalysisProducts(image, header, metadata, maps, fixups, members: members);
+            var shared = AnalysisProducts.Read(image);
             Check(ReferenceEquals(shared.Members, shared.Properties!.Members)
                 && shared.Properties.ProjectionEntries.SequenceEqual(products.Properties.ProjectionEntries)
                 && shared.Abi!.MethodEntries.SequenceEqual(products.Abi!.MethodEntries)
                 && shared.Code!.CallEdges.SequenceEqual(products.Code!.CallEdges));
 
-            var selected = new AnalysisProducts(image, header, metadata, maps, fixups,
-                requested: AnalysisProduct.Code,
-                stages: AnalysisProducts.RequiredExtractionStages(AnalysisProduct.Code));
+            var selected = AnalysisProducts.Read(image,
+                requested: AnalysisProduct.Code);
+            Check(selected.Extraction.Stages == AnalysisProducts.RequiredExtractionStages(AnalysisProduct.Code));
             Check(selected.Abi is not null && selected.Code is not null && selected.Members is null
                 && selected.Properties is null && selected.DispatchCells is null && selected.GcInfo is null
                 && selected.FunctionPointers is null && selected.GenericContexts is null && selected.Strings is null);
 
-            var contexts = new AnalysisProducts(image, header, metadata, maps, fixups,
-                requested: AnalysisProduct.GenericContexts,
-                stages: AnalysisProducts.RequiredExtractionStages(AnalysisProduct.GenericContexts));
+            var contexts = AnalysisProducts.Read(image,
+                requested: AnalysisProduct.GenericContexts);
+            Check(contexts.Extraction.Stages == AnalysisProducts.RequiredExtractionStages(AnalysisProduct.GenericContexts));
             Check(contexts.GenericContexts is not null && contexts.DictionaryConsumers is not null && contexts.GcInfo is not null
                 && contexts.FunctionPointers is null && contexts.Abi is null && contexts.Code is null
                 && contexts.Members is null && contexts.Properties is null && contexts.DispatchCells is null && contexts.Strings is null);
@@ -83,13 +76,12 @@ internal static class AnalysisProductChecks {
 
             using var canceled = new CancellationTokenSource();
             canceled.Cancel();
-            Reject<OperationCanceledException>(() => new AnalysisProducts(
-                image, header, metadata, maps, fixups, cancellationToken: canceled.Token));
-            Reject<ArgumentException>(() => new AnalysisProducts(image, header, metadata, maps, fixups,
+            Reject<OperationCanceledException>(() => AnalysisProducts.Read(image, cancellationToken: canceled.Token));
+            Reject<ArgumentException>(() => AnalysisProducts.Read(image,
                 requested: AnalysisProduct.Code, stages: ExtractionStage.RuntimeTypes));
-            Reject<ArgumentException>(() => new AnalysisProducts(image, header, metadata, maps, fixups,
+            Reject<ArgumentException>(() => AnalysisProducts.Read(image,
                 requested: AnalysisProduct.GenericContexts, stages: ExtractionStage.RuntimeTypes));
-            Reject<ArgumentException>(() => new PropertyProjections(shared.Extraction, products.Abi!, shared.Members!));
+            Reject<ArgumentException>(() => new PropertyProjections(shared.Extraction, products.Abi!));
             Reject<ArgumentException>(() => new CodeFlow(shared.Extraction, products.Abi!));
 
             Console.WriteLine($"Analysis products: {path}; shared members/signature publication, ABI/property/code facts, compiler auto-property, selective prerequisites, source isolation and owner rejection passed.");

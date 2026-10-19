@@ -8,11 +8,12 @@ internal static class TemplatesOutput {
         cancellationToken.ThrowIfCancellationRequested();
         json.WriteStartObject();
         json.WriteString("input_sha256", inputSha256);
-        ExtractionStatusOutput.Write(json, extraction.Stages, extraction.DictionarySignatureGaps);
+        ExtractionStatusOutput.Write(json, extraction);
 
-        bool hasTypeSignatures = Write(json, extraction, new MethodText(extraction), cancellationToken);
+        var renderer = new MethodText(extraction);
+        bool hasTypeSignatures = Write(json, extraction, renderer, cancellationToken);
         MetadataIdentityOutput.EndObject(json, extraction.Metadata, extraction.Signatures,
-            cancellationToken, includeSignatureGraph: hasTypeSignatures);
+            cancellationToken, includeSignatureGraph: hasTypeSignatures || renderer.HasAbbreviatedReferences);
     }
 
     internal static bool Write(Utf8JsonWriter json, Extraction extraction, MethodText renderer,
@@ -96,6 +97,7 @@ internal static class TemplatesOutput {
             json.WriteBoolean("has_unboxing_flag", (entry.Flags & 2) != 0);
             json.WriteBoolean("is_universal_canonical", template.UniversalCanonical);
             json.WriteBoolean("is_async_variant", template.AsyncVariant);
+            json.WriteBoolean("is_return_dropping_async_thunk", template.ReturnDroppingAsyncThunk);
 
             json.WriteStartArray("arguments");
 

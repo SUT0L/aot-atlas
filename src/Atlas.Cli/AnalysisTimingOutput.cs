@@ -5,7 +5,7 @@ internal static class AnalysisTimingOutput {
     internal static void Write(Utf8JsonWriter json, AnalysisProducts products,
         double metadataSeconds, double mapsSeconds) {
         json.WriteStartObject("analysis_measurements");
-        json.WriteNumber("metadata_definitions_and_members_seconds", metadataSeconds);
+        json.WriteNumber("metadata_definitions_seconds", metadataSeconds);
         json.WriteNumber("reflection_maps_seconds", mapsSeconds);
         Write(json, "analysis_total", products.TotalMeasurement);
         Write(json, "extraction_total", products.ExtractionMeasurement);
@@ -21,7 +21,6 @@ internal static class AnalysisTimingOutput {
         }
 
         json.WriteEndArray();
-        Write(json, "members", products.MetadataMemberMeasurement);
         Write(json, "abi", products.AbiMeasurement);
         Write(json, "properties", products.PropertyMeasurement);
         Write(json, "code", products.CodeMeasurement);

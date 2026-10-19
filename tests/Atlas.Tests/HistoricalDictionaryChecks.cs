@@ -80,7 +80,7 @@ internal static class HistoricalDictionaryChecks {
             var image = PeFixture.Create(TemplateFixture(version.Major, version.Minor), ".rdata", 0x40000040);
             var header = ReadyToRun.Read(image);
             var storage = header.Find(RtrSectionId.NativeLayoutInfo);
-            var metadata = new Metadata(default, header.MetadataHandleBits);
+            var metadata = new MetadataBuilder(default, header.MetadataHandleBits);
             var native = new NativeLayout(image.FileMemory(storage.Start, (int)storage.Length),
                 [0x1111, 0x2222, 0x3333, 0x4444, 0x5555, 0x6666, 0x7777, 0x8888,
                     0x9999, 0xaaaa, 0xbbbb, 0xcccc, 0xdddd], metadata.SignatureBuilder, takeOwnership: true);
@@ -114,7 +114,7 @@ internal static class HistoricalDictionaryChecks {
         var image = PeFixture.Create(changed, ".rdata", 0x40000040);
         var header = ReadyToRun.Read(image);
         var storage = header.Find(RtrSectionId.NativeLayoutInfo);
-        var metadata = new Metadata(default, 8);
+        var metadata = new MetadataBuilder(default, 8);
         ulong[] references = [0x1111, 0x2222, 0x3333, 0x4444, 0x5555, 0x6666, 0x7777, 0x8888,
             0x9999, 0xaaaa, 0xbbbb, 0xcccc, 0xdddd];
         var native = new NativeLayout(image.FileMemory(storage.Start, (int)storage.Length),
@@ -133,7 +133,7 @@ internal static class HistoricalDictionaryChecks {
         if (replacement == 0) {
             // Null is valid native grammar, rejected by the field owner. Replacing
             // successfully cached grammar requires the fresh owner used by Extraction.
-            metadata = new Metadata(default, 8);
+            metadata = new MetadataBuilder(default, 8);
             native = new NativeLayout(image.FileMemory(storage.Start, (int)storage.Length),
                 references, metadata.SignatureBuilder, takeOwnership: true);
         }
@@ -159,11 +159,11 @@ internal static class HistoricalDictionaryChecks {
         return Wrap(blob, major, minor);
     }
 
-    private static (GenericDictionaries Dictionaries, NativeLayout Native, Metadata Metadata) Decode(byte[] data, bool retainRecipes) {
+    private static (GenericDictionaries Dictionaries, NativeLayout Native, MetadataBuilder Metadata) Decode(byte[] data, bool retainRecipes) {
         var image = PeFixture.Create(data, ".rdata", 0x40000040);
         var header = ReadyToRun.Read(image);
         var storage = header.Find(RtrSectionId.NativeLayoutInfo);
-        var metadata = new Metadata(default, header.MetadataHandleBits);
+        var metadata = new MetadataBuilder(default, header.MetadataHandleBits);
         var native = new NativeLayout(image.FileMemory(storage.Start, (int)storage.Length),
             [0x1111, 0x2222, 0x3333, 0x4444, 0x5555, 0x6666, 0x7777, 0x8888], metadata.SignatureBuilder, takeOwnership: true);
         var templates = new TemplateMaps();
@@ -228,8 +228,8 @@ internal static class HistoricalDictionaryChecks {
     }
 
     private static void EqualGraph(
-        (GenericDictionaries Dictionaries, NativeLayout Native, Metadata Metadata) left,
-        (GenericDictionaries Dictionaries, NativeLayout Native, Metadata Metadata) right) {
+        (GenericDictionaries Dictionaries, NativeLayout Native, MetadataBuilder Metadata) left,
+        (GenericDictionaries Dictionaries, NativeLayout Native, MetadataBuilder Metadata) right) {
         Assert(left.Metadata.SignatureBuilder.Nodes.SequenceEqual(right.Metadata.SignatureBuilder.Nodes));
         Assert(left.Metadata.SignatureBuilder.Edges.SequenceEqual(right.Metadata.SignatureBuilder.Edges));
         Assert(left.Metadata.SignatureBuilder.Methods.SequenceEqual(right.Metadata.SignatureBuilder.Methods));

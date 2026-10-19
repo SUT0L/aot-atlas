@@ -86,9 +86,7 @@ internal static class TraceStageChecks {
         var image = new PeImage(bytes);
         var header = ReadyToRun.Read(image);
         var section = header.Find(RtrSectionId.EmbeddedMetadata);
-        var metadata = new Metadata(
-            section.Length == 0 ? default : image.FileMemory(section.Start, checked((int)section.Length)),
-            header.MetadataHandleBits, header.Format.LegacyMetadataConstants);
+        var metadata = MetadataBuilder.FromImage(image, header);
         metadata.ReadDefinitions();
 
         var fixups = RuntimeTables.Fixups(image, header.Find(RtrSectionId.CommonFixupsTable));
@@ -110,9 +108,9 @@ internal static class TraceStageChecks {
     }
 
     private static void EqualMetadata(Metadata left, Metadata right) {
-        Assert(left.SignatureBuilder.Nodes.SequenceEqual(right.SignatureBuilder.Nodes));
-        Assert(left.SignatureBuilder.Methods.SequenceEqual(right.SignatureBuilder.Methods));
-        Assert(left.SignatureBuilder.Edges.SequenceEqual(right.SignatureBuilder.Edges));
+        Assert(left.PublishedSignatures.Nodes.SequenceEqual(right.PublishedSignatures.Nodes));
+        Assert(left.PublishedSignatures.Methods.SequenceEqual(right.PublishedSignatures.Methods));
+        Assert(left.PublishedSignatures.Edges.SequenceEqual(right.PublishedSignatures.Edges));
         Assert(left.TypeSignatureHandles.SequenceEqual(right.TypeSignatureHandles));
 
         var leftScopes = left.ReferencedScopes.ToArray();

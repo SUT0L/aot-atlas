@@ -46,19 +46,7 @@ internal static unsafe class FrozenTypeChecks {
 
         foreach (string binary in binaries) {
             var image = new PeImage(File.ReadAllBytes(binary));
-            var header = ReadyToRun.Read(image);
-
-            var section = header.Find(313);
-            var metadata = new Metadata(
-                section.Length == 0 ? default : image.FileMemory(section.Start, checked((int)section.Length)),
-                header.MetadataHandleBits, header.Major < 10);
-            metadata.ReadDefinitions();
-
-            var fixups = RuntimeTables.Fixups(image, header.Find(308));
-            var maps = new ReflectionMaps();
-            maps.Read(image, header, metadata, fixups, MapFormat.Auto);
-
-            var extraction = new Extraction(image, header, metadata, maps, fixups);
+            var extraction = Extraction.Read(image);
             var objects = CollectionsMarshal.AsSpan(extraction.Frozen.Objects);
             var tables = CollectionsMarshal.AsSpan(extraction.Types.Types);
 

@@ -64,7 +64,7 @@ internal static class GcShapeChecks {
         PeImage image = new(File.ReadAllBytes(binary));
         ReadyToRun header = ReadyToRun.Read(image);
         RtrSection section = header.Find(RtrSectionId.EmbeddedMetadata);
-        Metadata metadata = new(image.FileMemory(section.Start, checked((int)section.Length)),
+        MetadataBuilder metadata = new(image.FileMemory(section.Start, checked((int)section.Length)),
             header.MetadataHandleBits, header.Format.LegacyMetadataConstants);
         metadata.ReadDefinitions();
         ulong[] fixups = RuntimeTables.Fixups(image, header.Find(RtrSectionId.CommonFixupsTable));
@@ -258,7 +258,7 @@ internal static class GcShapeChecks {
         PeImage image = new(File.ReadAllBytes(binary));
         ReadyToRun header = ReadyToRun.Read(image);
         RtrSection section = header.Find(RtrSectionId.EmbeddedMetadata);
-        Metadata metadata = new(image.FileMemory(section.Start, checked((int)section.Length)),
+        MetadataBuilder metadata = new(image.FileMemory(section.Start, checked((int)section.Length)),
             header.MetadataHandleBits, header.Format.LegacyMetadataConstants);
         metadata.ReadDefinitions();
         ulong[] fixups = RuntimeTables.Fixups(image, header.Find(RtrSectionId.CommonFixupsTable));
@@ -311,7 +311,7 @@ internal static class GcShapeChecks {
         PeImage image = new(File.ReadAllBytes(binary));
         ReadyToRun header = ReadyToRun.Read(image);
         RtrSection section = header.Find(RtrSectionId.EmbeddedMetadata);
-        Metadata metadata = new(image.FileMemory(section.Start, checked((int)section.Length)),
+        MetadataBuilder metadata = new(image.FileMemory(section.Start, checked((int)section.Length)),
             header.MetadataHandleBits, header.Format.LegacyMetadataConstants);
         metadata.ReadDefinitions();
         ulong[] fixups = RuntimeTables.Fixups(image, header.Find(RtrSectionId.CommonFixupsTable));
@@ -372,7 +372,7 @@ internal static class GcShapeChecks {
         PeImage image = new(File.ReadAllBytes(binary));
         ReadyToRun header = ReadyToRun.Read(image);
         RtrSection section = header.Find(RtrSectionId.EmbeddedMetadata);
-        Metadata metadata = new(image.FileMemory(section.Start, checked((int)section.Length)),
+        MetadataBuilder metadata = new(image.FileMemory(section.Start, checked((int)section.Length)),
             header.MetadataHandleBits, header.Format.LegacyMetadataConstants);
         metadata.ReadDefinitions();
         ulong[] fixups = RuntimeTables.Fixups(image, header.Find(RtrSectionId.CommonFixupsTable));
@@ -432,7 +432,7 @@ internal static class GcShapeChecks {
         PeImage image = new(File.ReadAllBytes(binary));
         ReadyToRun header = ReadyToRun.Read(image);
         RtrSection section = header.Find(RtrSectionId.EmbeddedMetadata);
-        Metadata metadata = new(image.FileMemory(section.Start, checked((int)section.Length)),
+        MetadataBuilder metadata = new(image.FileMemory(section.Start, checked((int)section.Length)),
             header.MetadataHandleBits, header.Format.LegacyMetadataConstants);
         metadata.ReadDefinitions();
         ulong[] fixups = RuntimeTables.Fixups(image, header.Find(RtrSectionId.CommonFixupsTable));

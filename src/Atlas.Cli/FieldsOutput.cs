@@ -10,7 +10,7 @@ internal static class FieldsOutput {
 
         json.WriteStartObject();
         json.WriteString("input_sha256", inputSha256);
-        ExtractionStatusOutput.Write(json, extraction.Stages, extraction.DictionarySignatureGaps);
+        ExtractionStatusOutput.Write(json, extraction);
 
         json.WriteStartArray("layouts");
 
@@ -58,6 +58,7 @@ internal static class FieldsOutput {
         var arguments = new string[maximumArguments];
         SignatureArgument[]? bindings = null;
         var builder = new System.Text.StringBuilder(256);
+        bool hasAbbreviatedReferences = false;
 
         foreach (ref readonly var field in CollectionsMarshal.AsSpan(layouts.FieldTypes)) {
             ref readonly var entry = ref CollectionsMarshal.AsSpan(extraction.Maps.Fields)[field.MapIndex];
@@ -82,6 +83,7 @@ internal static class FieldsOutput {
             JsonOutput.WriteString(json, "signature", builder.ToString());
 
             if (!complete) {
+                hasAbbreviatedReferences = true;
                 bindings ??= new SignatureArgument[maximumArguments];
 
                 for (int i = 0; i < args.Count; ++i)
@@ -101,6 +103,7 @@ internal static class FieldsOutput {
         }
 
         json.WriteEndArray();
-        MetadataIdentityOutput.EndObject(json, extraction.Metadata, extraction.Signatures);
+        MetadataIdentityOutput.EndObject(json, extraction.Metadata, extraction.Signatures,
+            includeSignatureGraph: hasAbbreviatedReferences);
     }
 }

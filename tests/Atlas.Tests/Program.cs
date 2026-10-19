@@ -17,6 +17,18 @@ if (args.Length == 1 && args[0] == "--json-output") {
     return;
 }
 
+if (args.Length is 1 or 2 && args[0] == "--rtr32") {
+    Rtr32Checks.Run();
+    if (args.Length == 2)
+        Rtr32Checks.Producer(args[1]);
+    return;
+}
+
+if (args.Length == 1 && args[0] == "--metadata-facts") {
+    MetadataFactsChecks.Run();
+    return;
+}
+
 if (args.Length == 1 && args[0] == "--metadata-payloads") {
     MetadataPayloadChecks.Run();
     return;
@@ -84,9 +96,7 @@ if (args.Length > 1 && args[0] == "--analysis-products") {
 }
 
 if (args.Length > 0 && args[0] == "--metadata-transactions") {
-    MetadataTransactionChecks.Run();
-    MetadataScopeJournalChecks.Run();
-    MetadataDefinitionTransactionChecks.Run(args.AsSpan(1));
+    MetadataDefinitionRecoveryChecks.Run(args.AsSpan(1));
     return;
 }
 
@@ -550,10 +560,11 @@ TemplateRelationChecks.Run();
 MethodControlFlowChecks.Run();
 ShortTailcallChecks.Run();
 
+Rtr32Checks.Run();
+MetadataFactsChecks.Run();
 MetadataChecks.Run();
 MetadataValueChecks.Run();
 MetadataPayloadChecks.Run();
-MetadataTransactionChecks.Run();
 OwnedReferenceChecks.Run();
 OwnedCollectionChecks.Run();
 TemplateFactChecks.Run();
@@ -588,7 +599,7 @@ foreach (string probe in args) {
     var rtr = ReadyToRun.Read(image);
 
     var section = rtr.Find(313);
-    var metadata = new Metadata(
+    var metadata = new MetadataBuilder(
         image.FileMemory(section.Start, checked((int)section.Length)),
         rtr.MetadataHandleBits, rtr.Major < 10);
     metadata.ReadDefinitions();

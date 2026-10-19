@@ -26,6 +26,15 @@ internal static class TraceOutput {
             json.WriteNumber("signature_offset", entry.SignatureOffset);
             json.WriteNumber("parameter_names_offset", entry.ParameterNamesOffset);
             json.WriteBoolean("hidden", entry.Hidden);
+            if ((entry.MetadataStatus & ~MetadataFactStatus.Absent) != MetadataFactStatus.Valid) {
+                json.WriteStartObject("metadata_status");
+                json.WriteString("declaring_type", entry.DeclaringTypeStatus.ToString());
+                json.WriteString("name", entry.NameStatus.ToString());
+                json.WriteString("signature", entry.SignatureStatus.ToString());
+                json.WriteString("generic_parameters", entry.ParameterNamesStatus.ToString());
+                json.WriteString("type_parameters", entry.TypeParameterNamesStatus.ToString());
+                json.WriteEndObject();
+            }
             JsonOutput.WriteString(json, "declaring_type", renderer.Owner);
 
             int binding = extraction.Bindings.Resolve(entry.DeclaringType);
@@ -53,6 +62,14 @@ internal static class TraceOutput {
             }
 
             json.WriteEndArray();
+
+            if (entry.ParameterNamesStatus != MetadataFactStatus.Valid) {
+                json.WriteStartArray("generic_parameter_statuses");
+                foreach (var status in traces.GenericParameterNameStatuses.Slice(entry.ParameterNames.Start, entry.ParameterNames.Count))
+                    json.WriteStringValue(status.ToString());
+                json.WriteEndArray();
+            }
+
             json.WriteEndObject();
         }
 

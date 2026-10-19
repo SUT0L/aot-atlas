@@ -61,7 +61,7 @@ internal static class TemplateRelationChecks {
 
     private static Extraction Extract(PeImage image, ExtractionStage stages) {
         var header = ReadyToRun.Read(image);
-        var metadata = new Metadata(default, 7);
+        var metadata = new MetadataBuilder(default, 7);
         metadata.SignatureBuilder.Named("Prefix");
         var maps = new ReflectionMaps();
         maps.Read(image, header, metadata, [DataAddress + 512]);

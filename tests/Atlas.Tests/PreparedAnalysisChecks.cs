@@ -9,6 +9,7 @@ internal static class PreparedAnalysisChecks {
             var healthy = Prepare(original);
             var image = healthy.Extraction.Image;
             var evidence = AnalysisEvidence.Read(healthy, image.ImageBase);
+            CheckMetadataRoots(healthy.Extraction);
 
             Assert(healthy.ManagedAbi is not null && healthy.GcInfo is not null,
                 "Fixture must retain healthy managed analysis.");
@@ -76,6 +77,35 @@ internal static class PreparedAnalysisChecks {
         }
     }
 
+    private static void CheckMetadataRoots(Extraction extraction) {
+        var metadata = extraction.Metadata;
+        var facts = metadata.Facts;
+        int offsetBits = 32 - metadata.HandleBits;
+        uint offsetMask = (1U << offsetBits) - 1;
+        foreach (var type in extraction.Maps.TypeEntries)
+            Present(new((MetadataRecordKind)(type.Handle >> offsetBits), type.Handle & offsetMask));
+        foreach (var method in extraction.Maps.MethodEntries)
+            Present(new(MetadataRecordKind.Method, method.MetadataOffset));
+        foreach (var field in extraction.Maps.FieldEntries)
+            Present(new(MetadataRecordKind.Field, field.MetadataOffset));
+        foreach (var method in extraction.Traces.MethodEntries) {
+            Present(new((MetadataRecordKind)(method.TypeToken >> offsetBits), method.TypeToken & offsetMask));
+            Present(new(MetadataRecordKind.ConstantStringValue, method.NameOffset));
+            Present(new(MetadataRecordKind.MethodSignature, method.SignatureOffset));
+            if (method.ParameterNamesOffset == 0)
+                continue;
+            var names = new NativeReader(metadata.Bytes, checked((int)method.ParameterNamesOffset));
+            uint count = names.Unsigned();
+            for (uint i = 0; i < count; ++i)
+                Present(new(MetadataRecordKind.ConstantStringValue, names.Unsigned() >> metadata.HandleBits));
+        }
+
+        void Present(MetadataRecordId id) {
+            if (!id.IsNil)
+                Assert(facts.Contains(id), $"Frozen metadata omitted external {id.Kind} root at 0x{id.Offset:X}.");
+        }
+    }
+
     private static void CheckPointers(PreparedAnalysis prepared, AnalysisEvidence evidence, ulong imageBase) {
         var image = prepared.Extraction.Image;
         var references = evidence.References.ToHashSet();
@@ -127,8 +157,7 @@ internal static class PreparedAnalysisChecks {
         var image = new PeImage(bytes);
         var header = ReadyToRun.Read(image);
         var section = header.Find(RtrSectionId.EmbeddedMetadata);
-        var metadata = new Metadata(image.FileMemory(section.Start, checked((int)section.Length)),
-            header.MetadataHandleBits, header.Format.LegacyMetadataConstants);
+        var metadata = MetadataBuilder.FromImage(image, header);
         metadata.ReadDefinitions();
 
         var fixups = RuntimeTables.Fixups(image, header.Find(RtrSectionId.CommonFixupsTable));

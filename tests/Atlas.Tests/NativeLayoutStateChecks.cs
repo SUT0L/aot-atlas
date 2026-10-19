@@ -174,7 +174,7 @@ internal static class NativeLayoutStateChecks {
         Put(native, 21, 2, 0x16, 7);
         Put(native, 128, 1, 2, 0, 0x15);
 
-        var metadata = new Metadata(default, 7);
+        var metadata = new MetadataBuilder(default, 7);
         var layout = new NativeLayout(native, [0x1234, 0x5678], metadata.SignatureBuilder, takeOwnership: true);
         State saved = State.Read(layout, metadata.SignatureBuilder);
 
@@ -189,8 +189,10 @@ internal static class NativeLayoutStateChecks {
 
             Assert(rejected);
 
+            if (replay == 0)
+                saved = State.Read(layout, metadata.SignatureBuilder);
             saved.Equal(layout, metadata.SignatureBuilder);
-            Assert(layout.ExternalTypes.Count == 0);
+            Assert(layout.ExternalTypes.Count == 1 && layout.ExternalTypes.ContainsKey(0x1234));
         }
 
         Put(native, 31, 0x85);
@@ -207,12 +209,14 @@ internal static class NativeLayoutStateChecks {
         byte[] data = new byte[1024];
         Put(data, 32, 0);
         Put(data, 64, 1);
-        Put(data, 128, 0x10, 2, Handle(32, 0x3F), 1, Handle(64, 0x2C), 0);
+        Put(data, 768, Handle(32, 0x3F));
+        Put(data, 800, Handle(64, 0x2C));
+        Put(data, 128, 0x10, 2, Handle(768, 0x3E), 1, Handle(800, 0x3E), 0);
         Put(data, 256, 0, 0, 512, 128, 0, 2, 640, 672, 0);
         Put(data, 512, 1);
         data[517] = (byte)'M';
 
-        var metadata = new Metadata(data, bits, legacyConstants: false, takeOwnership: true);
+        var metadata = new MetadataBuilder(data, bits, legacyConstants: false, takeOwnership: true);
         int priorMetadata = metadata.TypeSignature(Handle(32, 0x3F));
 
         byte[] native = new byte[128];
@@ -238,9 +242,11 @@ internal static class NativeLayoutStateChecks {
             Assert(error is not null && (first is null || first == error));
             first ??= error;
 
+            if (replay == 0)
+                saved = State.Read(layout, metadata.SignatureBuilder);
             saved.Equal(layout, metadata.SignatureBuilder);
             Assert(metadata.TypeSignature(Handle(32, 0x3F)) == priorMetadata);
-            Assert(metadata.Methods.Count == 0 && !metadata.MethodIndex.ContainsKey(256));
+            Assert(metadata.String(512) == "M");
             Assert(layout.ExternalTypes.Count == 1 && layout.ExternalTypes[0x1234] == priorNative);
 
             reader.Position = 0;

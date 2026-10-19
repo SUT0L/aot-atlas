@@ -55,8 +55,8 @@ internal static class MetadataIdentityOutput {
     internal static void EndObject(Utf8JsonWriter json, Metadata metadata,
         CancellationToken cancellationToken = default) {
         cancellationToken.ThrowIfCancellationRequested();
-        // Extract publishes the complete graph once, after all nested outputs.
-        if (json.CurrentDepth == 1 && metadata.SignatureBuilder.HasAbbreviatedReferences)
+        // Nested extract outputs share the graph written once at the outer boundary.
+        if (json.CurrentDepth == 1 && metadata.PublishedSignatures.HasAbbreviatedReferences)
             Write(json, metadata, cancellationToken);
 
         json.WriteEndObject();
@@ -65,19 +65,19 @@ internal static class MetadataIdentityOutput {
     internal static void Write(Utf8JsonWriter json, Metadata metadata,
         CancellationToken cancellationToken = default) {
         cancellationToken.ThrowIfCancellationRequested();
-        Write(json, metadata, metadata.SignatureBuilder.Publish(), cancellationToken);
+        Write(json, metadata, metadata.PublishedSignatures, cancellationToken);
     }
 
     internal static void Write(Utf8JsonWriter json, Metadata metadata, Signatures signatures,
         CancellationToken cancellationToken = default) {
         cancellationToken.ThrowIfCancellationRequested();
-        if (!metadata.SignatureBuilder.Owns(signatures))
+        if (!ReferenceEquals(metadata.PublishedSignatures, signatures))
             throw new ArgumentException("The published signature graph belongs to different metadata.", nameof(signatures));
 
         json.WriteStartObject("signature_graph");
         json.WriteStartArray("scope_definitions");
 
-        foreach (var scope in metadata.Scopes) {
+        foreach (var scope in metadata.ScopeDefinitions) {
             cancellationToken.ThrowIfCancellationRequested();
 
             json.WriteStartObject();
@@ -114,9 +114,7 @@ internal static class MetadataIdentityOutput {
         foreach (var signature in metadata.TypeSignatureHandles) {
             cancellationToken.ThrowIfCancellationRequested();
 
-            // Later parser operations may append roots in the same namespace.
-            if ((uint)signature.Value < (uint)signatures.Nodes.Length)
-                json.WriteNumber(signature.Key.ToString(), signature.Value);
+            json.WriteNumber(signature.Key.ToString(), signature.Value);
         }
 
         json.WriteEndObject();

@@ -87,7 +87,7 @@ public sealed class SharedMethods {
                 }
             }
 
-            if (template.UniversalCanonical || template.AsyncVariant)
+            if (template.UniversalCanonical || template.AsyncVariant || template.ReturnDroppingAsyncThunk)
                 continue;
 
             int owner = bindings.Resolve(method.DeclaringType);
@@ -122,7 +122,7 @@ public sealed class SharedMethods {
 
         for (int i = 0; i < Templates.Length; ++i) {
             ref readonly var record = ref CollectionsMarshal.AsSpan(extraction.Generics.Methods)[i];
-            if (record.Dictionary == 0 || record.AsyncVariant)
+            if (record.Dictionary == 0 || record.AsyncVariant || record.ReturnDroppingAsyncThunk)
                 continue;
 
             int owner = tables.Index[record.DeclaringType] + 1;

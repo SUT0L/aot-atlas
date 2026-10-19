@@ -220,7 +220,7 @@ public sealed class CodeOrigins {
                 Address = group.ThrowingStub,
                 Witness = stub.Map.Address + (uint)group.Vertex,
                 Index = stub.GroupIndex,
-                Kind = stub.Map.Section == RtrSectionId.ExternalTypeMap
+                Kind = stub.Map.Kind == InteropTypeMapKind.External
                     ? CodeOriginKind.InvalidExternalTypeMap : CodeOriginKind.InvalidProxyTypeMap,
                 Aliases = 1
             });

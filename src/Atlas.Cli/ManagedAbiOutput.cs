@@ -7,7 +7,10 @@ internal static class ManagedAbiOutput {
         ref readonly var method = ref abi.Methods[index];
 
         json.WriteStartObject(unboxed ? "unboxed_abi" : "abi");
-        json.WriteString("convention", "windows_x64_managed");
+        if (method.Status == AbiStatus.UnknownSignature)
+            json.WriteNull("convention");
+        else
+            json.WriteString("convention", "windows_x64_managed");
         json.WriteString("status", method.Status switch {
             AbiStatus.Complete => "complete",
             AbiStatus.SharedTemplate => "shared_template",
@@ -17,6 +20,7 @@ internal static class ManagedAbiOutput {
             AbiStatus.Varargs => "varargs",
             AbiStatus.UniversalCanonical => "universal_canonical",
             AbiStatus.UnknownType => "unknown_type",
+            AbiStatus.UnknownSignature => "unknown_signature",
             AbiStatus.GenericDefinition => "generic_definition",
             AbiStatus.HiddenRecord => "hidden_record",
             AbiStatus.TraceIdentity => "trace_identity",

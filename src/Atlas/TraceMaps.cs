@@ -19,6 +19,14 @@ public struct TraceMethod {
     public IndexRange ParameterNames;
     public IndexRange TypeParameterNames;
     public bool Hidden;
+    public MetadataFactStatus DeclaringTypeStatus;
+    public MetadataFactStatus NameStatus;
+    public MetadataFactStatus SignatureStatus;
+    public MetadataFactStatus ParameterNamesStatus;
+    public MetadataFactStatus TypeParameterNamesStatus;
+
+    public readonly MetadataFactStatus MetadataStatus => DeclaringTypeStatus | NameStatus | SignatureStatus
+        | ParameterNamesStatus | TypeParameterNamesStatus;
 }
 
 public readonly struct TracePoint(int nativeOffset, int line, int document) {
@@ -35,74 +43,67 @@ public readonly struct TraceLines(int vertex, ulong entrypoint, IndexRange point
 
 public sealed class TraceMaps {
     private readonly SignatureHistory signatureOrigin;
-    private readonly SignatureBuilder signatureBuilder;
     private readonly CancellationToken cancellationToken;
     private Signatures? signatures;
-    private Signatures SignaturePublication => signatures ??= signatureBuilder.Publish();
+    public Signatures Signatures => signatures
+        ?? throw new InvalidOperationException("Trace signatures have not been published.");
 
-    internal readonly List<TraceMethod> Methods = new(65536);
-    internal readonly List<string> ParameterNames = new(256);
-    internal readonly List<string> Documents = new(1024);
-    internal readonly List<TraceLines> Lines = new(8192);
-    internal readonly List<TracePoint> Points = new(65536);
+    internal readonly List<TraceMethod> Methods = new();
+    internal readonly List<string> ParameterNames = new();
+    private readonly List<MetadataFactStatus> parameterNameStatuses = new();
+    internal readonly List<string> Documents = new();
+    internal readonly List<TraceLines> Lines = new();
+    internal readonly List<TracePoint> Points = new();
 
     public ReadOnlySpan<TraceMethod> MethodEntries => CollectionsMarshal.AsSpan(Methods);
     public ReadOnlySpan<string> GenericParameterNames => CollectionsMarshal.AsSpan(ParameterNames);
+    public ReadOnlySpan<MetadataFactStatus> GenericParameterNameStatuses => CollectionsMarshal.AsSpan(parameterNameStatuses);
     public ReadOnlySpan<string> DocumentNames => CollectionsMarshal.AsSpan(Documents);
     public ReadOnlySpan<TraceLines> LineEntries => CollectionsMarshal.AsSpan(Lines);
     public ReadOnlySpan<TracePoint> PointEntries => CollectionsMarshal.AsSpan(Points);
-    public SignatureType DeclaringTypeAt(int position) => SignaturePublication.Types[Methods[position].DeclaringType];
-    public SignatureMethod MethodSignatureAt(int position) => SignaturePublication.MethodSignatures[Methods[position].Signature];
-
-    public TraceMaps(
-        PeImage image,
-        ReadyToRun rtr,
-        Metadata metadata,
-        ReadOnlySpan<ulong> fixups,
-        CancellationToken cancellationToken = default)
-        : this(image, rtr, metadata, fixups, ownsMetadataDraft: false, cancellationToken) {
-    }
+    public SignatureType DeclaringTypeAt(int position) => Signatures.Types[Methods[position].DeclaringType];
+    public SignatureMethod MethodSignatureAt(int position) => Signatures.MethodSignatures[Methods[position].Signature];
 
     internal TraceMaps(
         PeImage image,
         ReadyToRun rtr,
-        Metadata metadata,
+        MetadataBuilder metadata,
         ReadOnlySpan<ulong> fixups,
-        bool ownsMetadataDraft,
         CancellationToken cancellationToken = default) {
         cancellationToken.ThrowIfCancellationRequested();
         this.cancellationToken = cancellationToken;
 
         rtr = rtr.ValidateSource(image);
-
-        Metadata source = metadata;
-
-        if (!ownsMetadataDraft)
-            metadata = metadata.WorkingCopy();
-
         signatureOrigin = metadata.SignatureBuilder.Origin;
 
         var section = rtr.Find(RtrSectionId.StackTraceMethodMapping);
-        if (section.Length != 0)
+        if (section.Length != 0) {
             ReadMethods(
                 image.FileSpan(section.Start, checked((int)section.Length)),
                 section.Start,
                 image,
                 metadata);
+        }
 
         section = rtr.Find(RtrSectionId.StackTraceDocuments);
-        if (section.Length != 0)
+        if (section.Length != 0) {
             ReadDocuments(image.FileSpan(section.Start, checked((int)section.Length)));
+        }
 
         section = rtr.Find(RtrSectionId.StackTraceLineMapping);
-        if (section.Length != 0)
+        if (section.Length != 0) {
             ReadLines(image.FileSpan(section.Start, checked((int)section.Length)), image, fixups);
+        }
 
-        signatureBuilder = metadata.SignatureBuilder;
         cancellationToken.ThrowIfCancellationRequested();
+    }
 
-        if (!ownsMetadataDraft)
-            source.Adopt(metadata);
+    internal void Publish(Signatures publication, CancellationToken cancellationToken = default) {
+        if (signatures is not null) {
+            throw new InvalidOperationException("Trace signatures have already been published.");
+        }
+        ValidateSignatures(publication, cancellationToken);
+        signatures = publication;
     }
 
     internal void ValidateSignatures(Signatures signatures, CancellationToken cancellationToken = default) {
@@ -121,122 +122,271 @@ public sealed class TraceMaps {
         cancellationToken.ThrowIfCancellationRequested();
     }
 
-    private void ReadMethods(ReadOnlySpan<byte> data, ulong address, PeImage image, Metadata metadata) {
+    private void ReadMethods(ReadOnlySpan<byte> data, ulong address, PeImage image, MetadataBuilder metadata) {
         var reader = new NativeReader(data);
         int count = BinaryPrimitives.ReadInt32LittleEndian(reader.Take(4));
-        if (count < 0 || count > reader.Remaining / 5)
+        if (count < 0 || count > reader.Remaining / 5) {
             throw new InvalidDataException("Stack-trace entry count exceeds its storage.");
-
+        }
         Methods.EnsureCapacity(count);
 
         TraceMethod current = new() {
-            Name = ""
+            Name = "",
+            DeclaringTypeStatus = MetadataFactStatus.Absent,
+            NameStatus = MetadataFactStatus.Absent,
+            SignatureStatus = MetadataFactStatus.Absent
         };
-
-        var parameterIndex = new Dictionary<uint, IndexRange>();
-
+        var parameterIndex = new Dictionary<uint, (IndexRange Names, MetadataFactStatus Status)>();
         int offsetBits = 32 - metadata.HandleBits;
         uint offsetMask = (1U << offsetBits) - 1;
 
         for (int i = 0; i < count; ++i) {
             cancellationToken.ThrowIfCancellationRequested();
-
             current.Offset = reader.Position;
             byte command = reader.Take(1)[0];
-            if ((command & ~31) != 0 || (command & 12) == 12)
+            if ((command & ~31) != 0 || (command & 12) == 12) {
                 throw new InvalidDataException("Invalid stack-trace command flags.");
+            }
 
             if ((command & 1) != 0) {
                 current.TypeToken = BinaryPrimitives.ReadUInt32LittleEndian(reader.Take(4));
                 uint kind = current.TypeToken >> offsetBits;
-                if (current.TypeToken != 0 && kind is not (0x3A or 0x3D or 0x3E))
+                if (current.TypeToken != 0 && kind is not (0x3A or 0x3D or 0x3E)) {
                     throw new InvalidDataException("Stack-trace owner is not a metadata type handle.");
-
+                }
                 uint handle = ((current.TypeToken & offsetMask) << metadata.HandleBits) | kind;
-                current.DeclaringType = metadata.TypeSignature(handle);
+                current.DeclaringType = ReadDeclaringType(metadata, handle, out current.DeclaringTypeStatus);
                 current.TypeParameterNames = default;
+                current.TypeParameterNamesStatus = MetadataFactStatus.Valid;
 
-                if (kind == 0x3A && metadata.TypeIndex.TryGetValue(current.TypeToken & offsetMask, out int typeIndex)) {
-                    var parameters = metadata.Types[typeIndex].GenericParameters;
-                    current.TypeParameterNames = new IndexRange(ParameterNames.Count, parameters.Count);
-
-                    for (int j = 0; j < parameters.Count; ++j) {
-                        var parameter = metadata.Reader(metadata.Handles[parameters.Start + j]);
-                        if (parameter.Unsigned() != j)
-                            throw new InvalidDataException("Stack-trace type parameters are out of order.");
-
-                        parameter.Unsigned();
-                        parameter.Unsigned();
-                        ParameterNames.Add(metadata.String(parameter.Unsigned()));
-                    }
+                if (kind == 0x3A) {
+                    current.TypeParameterNames = ReadTypeParameterNames(
+                        metadata, current.TypeToken & offsetMask, out current.TypeParameterNamesStatus);
                 }
             }
 
             if ((command & 2) != 0) {
                 current.NameOffset = reader.Unsigned();
-                current.Name = metadata.String(current.NameOffset);
+                var name = ReadName(metadata, current.NameOffset, "trace name");
+                current.Name = name.Value;
+                current.NameStatus = name.Status;
             }
 
             if ((command & 12) != 0) {
                 current.SignatureOffset = reader.Unsigned();
-                current.Signature = current.SignatureOffset == 0
-                    ? 0
-                    : metadata.MethodSignature(current.SignatureOffset);
-
+                current.Signature = ReadMethodSignature(metadata, current.SignatureOffset, out current.SignatureStatus);
                 current.ParameterNames = default;
                 current.ParameterNamesOffset = 0;
+                current.ParameterNamesStatus = MetadataFactStatus.Valid;
             }
 
             if ((command & 8) != 0) {
                 current.ParameterNamesOffset = reader.Unsigned();
-                ref var range = ref CollectionsMarshal.GetValueRefOrAddDefault(
-                    parameterIndex,
-                    current.ParameterNamesOffset,
-                    out bool known);
-                if (!known) {
-                    var parameters = metadata.Reader(current.ParameterNamesOffset);
-                    int length = checked((int)parameters.Unsigned());
-                    if (length > parameters.Remaining)
-                        throw new InvalidDataException("Stack-trace generic parameter names exceed their storage.");
-
-                    range = new IndexRange(ParameterNames.Count, length);
-                    ParameterNames.EnsureCapacity(checked(ParameterNames.Count + length));
-
-                    uint kindMask = (1U << metadata.HandleBits) - 1;
-
-                    for (int j = 0; j < length; ++j) {
-                        uint handle = parameters.Unsigned();
-                        if ((handle & kindMask) != 0x1A)
-                            throw new InvalidDataException("Stack-trace generic parameter name is not a string handle.");
-
-                        string name = metadata.String(handle >> metadata.HandleBits);
-                        if (name.Length == 0)
-                            throw new InvalidDataException("Stack-trace generic parameter has no name.");
-
-                        ParameterNames.Add(name);
-                    }
+                if (!parameterIndex.TryGetValue(current.ParameterNamesOffset, out var names)) {
+                    names.Names = ReadParameterNames(metadata, current.ParameterNamesOffset, out names.Status);
+                    parameterIndex.Add(current.ParameterNamesOffset, names);
                 }
+                current.ParameterNames = names.Names;
+                current.ParameterNamesStatus = names.Status;
 
-                current.ParameterNames = range;
-                if (range.Count == 0 || range.Count != metadata.SignatureBuilder.Methods[current.Signature].GenericParameterCount)
-                    throw new InvalidDataException("Stack-trace generic parameter names do not match the signature arity.");
+                if (names.Names.Count == 0 || (current.Signature != 0
+                    && names.Names.Count != metadata.SignatureBuilder.Methods[current.Signature].GenericParameterCount)) {
+                    current.ParameterNamesStatus |= MetadataFactStatus.Incomplete;
+                    metadata.RecordFailure(
+                        RawHandle(metadata, current.SignatureOffset, MetadataRecordKind.MethodSignature),
+                        "trace generic parameter names",
+                        new InvalidDataException("Stack-trace generic parameter names do not match the signature arity."));
+                }
             }
 
             ulong cell = checked(address + (uint)reader.Position);
             int delta = BinaryPrimitives.ReadInt32LittleEndian(reader.Take(4));
             current.Entrypoint = checked((ulong)((long)cell + delta));
-            if (!image.IsExecutable(current.Entrypoint))
+            if (!image.IsExecutable(current.Entrypoint)) {
                 throw new InvalidDataException("Stack-trace entrypoint is outside executable storage.");
-
+            }
             current.Hidden = (command & 16) != 0;
-            if (!current.Hidden && (current.DeclaringType == 0 || current.Name.Length == 0 || current.Signature == 0))
-                throw new InvalidDataException("Visible stack-trace method has incomplete metadata.");
-
+            if (!current.Hidden) {
+                if (current.DeclaringType == 0 && current.DeclaringTypeStatus == MetadataFactStatus.Absent) {
+                    current.DeclaringTypeStatus |= MetadataFactStatus.Unresolved;
+                    metadata.RecordFailure(0, "trace declaring type", new InvalidDataException(
+                        $"Visible stack-trace entry at 0x{current.Offset:X} has no declaring type."));
+                }
+                if (current.Name.Length == 0 && current.NameStatus is MetadataFactStatus.Valid or MetadataFactStatus.Absent) {
+                    current.NameStatus |= MetadataFactStatus.InvalidName;
+                    metadata.RecordFailure(RawHandle(metadata, current.NameOffset, MetadataRecordKind.ConstantStringValue),
+                        "trace name", new InvalidDataException($"Visible stack-trace entry at 0x{current.Offset:X} has no name."));
+                }
+                if (current.Signature == 0 && current.SignatureStatus == MetadataFactStatus.Absent) {
+                    current.SignatureStatus |= MetadataFactStatus.Unresolved;
+                    metadata.RecordFailure(0, "trace method signature", new InvalidDataException(
+                        $"Visible stack-trace entry at 0x{current.Offset:X} has no signature."));
+                }
+            }
             Methods.Add(current);
         }
-
-        if (reader.Remaining != 0)
+        if (reader.Remaining != 0) {
             throw new InvalidDataException("Stack-trace data extends beyond its declared entry count.");
+        }
+    }
+
+    private static uint RawHandle(MetadataBuilder metadata, uint offset, MetadataRecordKind kind) =>
+        offset <= uint.MaxValue >> metadata.HandleBits ? (offset << metadata.HandleBits) | (uint)kind : 0;
+
+    private static void ValidateOffset(MetadataBuilder metadata, uint offset) {
+        if (offset > uint.MaxValue >> metadata.HandleBits) {
+            throw new InvalidDataException($"Stack-trace metadata offset 0x{offset:X} exceeds the handle width.");
+        }
+    }
+
+    private static int ReadDeclaringType(MetadataBuilder metadata, uint handle, out MetadataFactStatus status) {
+        status = handle >> metadata.HandleBits == 0 ? MetadataFactStatus.Absent : MetadataFactStatus.Valid;
+        try {
+            if (status != MetadataFactStatus.Absent) {
+                metadata.AddRoot(metadata.Encoding.DecodeHandle(handle));
+            }
+            return metadata.TypeSignature(handle);
+        } catch (Exception error) when (error is InvalidDataException or OverflowException or NotSupportedException) {
+            metadata.RecordFailure(handle, "trace declaring type", error);
+            status = MetadataFactStatus.Unresolved;
+            return 0;
+        }
+    }
+
+    private static int ReadMethodSignature(MetadataBuilder metadata, uint offset, out MetadataFactStatus status) {
+        status = offset == 0 ? MetadataFactStatus.Absent : MetadataFactStatus.Valid;
+        try {
+            ValidateOffset(metadata, offset);
+            if (offset != 0) {
+                metadata.AddRoot(new(MetadataRecordKind.MethodSignature, offset));
+            }
+            if (offset == 0) {
+                return 0;
+            }
+            if (!metadata.TryMethodSignature(offset, out int signature)) {
+                status = MetadataFactStatus.Unresolved;
+            }
+            return signature;
+        } catch (Exception error) when (error is InvalidDataException or OverflowException or NotSupportedException) {
+            metadata.RecordFailure(RawHandle(metadata, offset, MetadataRecordKind.MethodSignature), "trace method signature", error);
+            status = MetadataFactStatus.Unresolved;
+            return 0;
+        }
+    }
+
+    private static MetadataFact<string> ReadName(MetadataBuilder metadata, uint offset, string projection) {
+        if (offset == 0) {
+            return new("", MetadataFactStatus.Absent, MetadataSourceRange.Unavailable);
+        }
+        try {
+            ValidateOffset(metadata, offset);
+            var name = metadata.RecordName(new(offset));
+            if (!name.IsAvailable) {
+                metadata.RecordFailure(RawHandle(metadata, offset, MetadataRecordKind.ConstantStringValue), projection,
+                    new InvalidDataException($"Stack-trace metadata name at 0x{offset:X} is unavailable ({name.Status})."));
+                return name with { Value = "" };
+            }
+            return name with { Value = metadata.String(offset) };
+        } catch (Exception error) when (error is InvalidDataException or OverflowException or NotSupportedException) {
+            metadata.RecordFailure(RawHandle(metadata, offset, MetadataRecordKind.ConstantStringValue), projection, error);
+            return new("", MetadataFactStatus.Unresolved, MetadataSourceRange.Unavailable);
+        }
+    }
+
+    private void AddParameterName(MetadataBuilder metadata, uint offset, string projection, ref MetadataFactStatus status) {
+        var name = ReadName(metadata, offset, projection);
+        if (name.Value.Length == 0 && name.Status is MetadataFactStatus.Valid or MetadataFactStatus.Absent) {
+            name = name with { Status = name.Status | MetadataFactStatus.InvalidName };
+            metadata.RecordFailure(RawHandle(metadata, offset, MetadataRecordKind.ConstantStringValue), projection,
+                new InvalidDataException("Stack-trace generic parameter has no name."));
+        }
+        ParameterNames.Add(name.Value);
+        parameterNameStatuses.Add(name.Status);
+        status |= name.Status;
+    }
+
+    private IndexRange ReadTypeParameterNames(MetadataBuilder metadata, uint typeOffset, out MetadataFactStatus status) {
+        var owner = new MetadataRecordId(MetadataRecordKind.TypeDefinition, typeOffset);
+        var parameters = metadata.RecordField(owner, MetadataFieldName.GenericParameters).Items;
+        int start = ParameterNames.Count;
+        status = parameters.Status;
+        if (status != MetadataFactStatus.Valid) {
+            status |= MetadataFactStatus.Incomplete;
+            metadata.RecordFailure(metadata.Encoding.EncodeHandle(owner), "trace type parameters",
+                new InvalidDataException($"Stack-trace type parameter collection is partial ({parameters.Status})."));
+        }
+
+        // Declaration recovery filters missing references. Substitutions must retain the raw slots.
+        for (int i = 0; i < parameters.Count; ++i) {
+            cancellationToken.ThrowIfCancellationRequested();
+            var reference = parameters[i].Reference;
+            var parameterStatus = reference.Status;
+            uint nameOffset = 0;
+            if (!reference.IsAvailable || reference.Value.IsNil) {
+                parameterStatus |= MetadataFactStatus.InvalidHandle;
+                metadata.RecordFailure(metadata.Encoding.EncodeHandle(owner), $"trace type parameter {i}",
+                    new InvalidDataException($"Stack-trace type parameter {i} is unavailable ({parameterStatus})."));
+            } else {
+                var parameter = reference.Value;
+                uint handle = metadata.Encoding.EncodeHandle(parameter);
+                var number = metadata.RecordField(parameter, MetadataFieldName.Number).UInt32;
+                var kind = metadata.RecordField(parameter, MetadataFieldName.Kind).UInt32;
+                if (!number.IsAvailable || number.Value != i || !kind.IsAvailable || kind.Value != 0) {
+                    parameterStatus |= number.Status | kind.Status | MetadataFactStatus.InvalidNumeric;
+                    metadata.RecordFailure(handle, "trace type parameter number",
+                        new InvalidDataException($"Stack-trace type parameter {i} has an unavailable or inconsistent ordinal or kind."));
+                } else {
+                    var name = metadata.RecordField(parameter, MetadataFieldName.Name).Reference;
+                    parameterStatus |= name.Status;
+                    if (!name.IsAvailable) {
+                        metadata.RecordFailure(handle, "trace type parameter name",
+                            new InvalidDataException($"Stack-trace type parameter name is unavailable ({name.Status})."));
+                    } else {
+                        nameOffset = name.Value.Offset;
+                    }
+                }
+            }
+            if (parameterStatus == MetadataFactStatus.Valid) {
+                AddParameterName(metadata, nameOffset, "trace type parameter name", ref status);
+            } else {
+                parameterStatus |= MetadataFactStatus.Incomplete;
+                ParameterNames.Add("");
+                parameterNameStatuses.Add(parameterStatus);
+                status |= parameterStatus;
+            }
+        }
+        return new(start, ParameterNames.Count - start);
+    }
+
+    private IndexRange ReadParameterNames(MetadataBuilder metadata, uint offset, out MetadataFactStatus status) {
+        int start = ParameterNames.Count;
+        status = MetadataFactStatus.Valid;
+        try {
+            var parameters = metadata.Reader(offset);
+            int length = checked((int)parameters.Unsigned());
+            if (length > parameters.Remaining) {
+                throw new InvalidDataException("Stack-trace generic parameter names exceed their storage.");
+            }
+            ParameterNames.EnsureCapacity(checked(start + length));
+            parameterNameStatuses.EnsureCapacity(checked(start + length));
+            uint kindMask = (1U << metadata.HandleBits) - 1;
+            for (int i = 0; i < length; ++i) {
+                cancellationToken.ThrowIfCancellationRequested();
+                uint handle = parameters.Unsigned();
+                uint kind = handle & kindMask;
+                if (kind != (uint)MetadataRecordKind.ConstantStringValue) {
+                    if (kind is >= 1 and <= 63) {
+                        metadata.AddRoot(metadata.Encoding.DecodeHandle(handle));
+                    }
+                    throw new InvalidDataException("Stack-trace generic parameter name is not a string handle.");
+                }
+                AddParameterName(metadata, handle >> metadata.HandleBits, "trace generic parameter name", ref status);
+            }
+        } catch (Exception error) when (error is InvalidDataException or OverflowException or NotSupportedException) {
+            metadata.RecordFailure(0, $"trace generic parameter names at 0x{offset:X}", error);
+            status |= MetadataFactStatus.Incomplete | MetadataFactStatus.Unresolved;
+        }
+        return new(start, ParameterNames.Count - start);
     }
 
     private void ReadDocuments(ReadOnlySpan<byte> data) {

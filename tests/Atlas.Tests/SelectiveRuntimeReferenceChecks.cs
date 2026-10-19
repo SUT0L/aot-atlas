@@ -5,15 +5,10 @@ internal static class SelectiveRuntimeReferenceChecks {
     internal static void Run(ReadOnlySpan<string> paths) {
         foreach (string path in paths) {
             var image = PeImage.ReadFile(path);
-            var header = ReadyToRun.Read(image);
-            var metadata = Metadata.FromImage(image, header);
-            metadata.ReadDefinitions();
-            var fixups = RuntimeTables.ReadFixups(image, header.Find(RtrSectionId.CommonFixupsTable)).ToArray();
-            var maps = ReflectionMaps.Decode(image, header, metadata, fixups);
-            var full = new Extraction(image, header, metadata, maps, fixups);
+            var full = Extraction.Read(image);
 
             foreach (var stage in new[] { ExtractionStage.RuntimeTypes, ExtractionStage.Dispatch }) {
-                var selected = new Extraction(image, header, metadata, maps, fixups, stage);
+                var selected = Extraction.Read(image, stage);
                 Check(selected.Stages == (stage | ExtractionStage.RuntimeTypes));
                 CheckConcurrentReferences(selected);
                 CheckRuntimeReferences(selected, full);

@@ -12,7 +12,7 @@ internal static class DictionariesOutput {
 
         json.WriteStartObject();
         json.WriteString("input_sha256", inputSha256);
-        ExtractionStatusOutput.Write(json, extraction.Stages, extraction.DictionarySignatureGaps);
+        ExtractionStatusOutput.Write(json, extraction);
         json.WriteString("source", "native_layout_dictionary");
         json.WriteNumber("image_base", extraction.Image.ImageBase);
         json.WriteNumber("native_layout", nativeLayout);
@@ -81,6 +81,10 @@ internal static class DictionariesOutput {
                 json.WriteNumber("native_offset", recipe.Method.Identity.NativeOffset);
                 JsonOutput.WriteString(json, "declaring_type", signatures.Types[recipe.Method.DeclaringType].Render());
                 JsonOutput.WriteString(json, "method_name", recipe.Method.Identity.Name);
+                if (recipe.Method.Identity.NameStatus != MetadataFactStatus.Valid)
+                    json.WriteString("method_name_status", recipe.Method.Identity.NameStatus.ToString());
+                if (recipe.Method.Identity.SignatureStatus != MetadataFactStatus.Valid)
+                    json.WriteString("method_signature_status", recipe.Method.Identity.SignatureStatus.ToString());
 
                 json.WriteStartArray("arguments");
 
@@ -184,6 +188,15 @@ internal static class DictionariesOutput {
                         json.WriteNumber("dispatch_terminator", cell.Terminator);
                         json.WriteString("dispatch_register", cell.Register == 10 ? "r10" : "r11");
                     }
+                }
+
+                if (slot.GvmCellMetadata != 0) {
+                    var contract = extraction.DispatchCellMetadata.Entries[slot.GvmCellMetadata - 1];
+                    json.WriteNumber("gvm_dispatch_cell", slot.Value);
+                    json.WriteNumber("dispatch_metadata", slot.GvmCellMetadata - 1);
+                    json.WriteNumber("dispatch_metadata_witness",
+                        extraction.Header.Find(contract.Section).Start + (uint)contract.Vertex);
+                    json.WriteString("dispatch_register", "r11");
                 }
 
                 json.WriteNumber("recipe_address", nativeLayout + (uint)recipe.Offset);

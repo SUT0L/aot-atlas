@@ -8,6 +8,7 @@ internal enum AnalysisEvidenceKind : byte {
     GenericContext,
     FunctionPointer,
     RuntimeType,
+    DispatchCell,
     Status
 }
 
@@ -86,6 +87,8 @@ internal sealed class AnalysisEvidence {
                     ? "partial" : "complete";
 
             Add(AnalysisEvidenceKind.Status, address,
+                $"metadata::status={(extraction.Metadata.IsComplete ? "complete" : "partial")}::decode_status={extraction.Metadata.Facts.Status}::projection_failures={extraction.Metadata.ProjectionDiagnostics.Count}");
+            Add(AnalysisEvidenceKind.Status, address,
                 $"analysis::unwind={(analysis.Unwind is null ? "unavailable" : "available")}::managed_unwind={(analysis.Managed is null ? "unavailable" : "available")}::gcinfo={gcStatus}::constructor_map={prepared.FunctionPointers.ConstructorMapStatus}");
             Add(AnalysisEvidenceKind.Status, address,
                 $"function_pointers::failures={prepared.FunctionPointers.Failures.Count}::unproven_uses={prepared.FunctionPointers.UnprovenUses.Count}::unresolved_flow_owners={prepared.FunctionPointers.UnresolvedControlFlowOwners.Count}::dictionary_consumers={dictionaryStatus}");
@@ -93,6 +96,21 @@ internal sealed class AnalysisEvidence {
                 $"dictionary_signatures={(extraction.DictionarySignatureGaps.IsEmpty ? "complete" : "partial")}");
             Add(AnalysisEvidenceKind.Status, address,
                 $"type_maps::external={(extraction.TypeMaps.External.Present ? "decoded" : "absent")}::proxy={(extraction.TypeMaps.Proxy.Present ? "decoded" : "absent")}");
+
+            if (extraction.DispatchCellMetadata.Layout == DispatchCellLayout.CachedMethodTableAndCode
+                || !extraction.DispatchCellMetadata.Failures.IsEmpty) {
+                Add(AnalysisEvidenceKind.Status, address,
+                    $"dispatch_metadata::status={(extraction.DispatchCellMetadata.Failures.IsEmpty ? "complete" : "partial")}::failures={extraction.DispatchCellMetadata.Failures.Length}");
+            }
+
+            if ((extraction.Stages & ExtractionStage.Enums) != 0) {
+                Add(AnalysisEvidenceKind.Status, address,
+                    $"enums::status={(extraction.Enums.Failures.IsEmpty ? "complete" : "partial")}::failures={extraction.Enums.Failures.Length}");
+            }
+            if (prepared.Code is { } codeForStatus && !codeForStatus.UnprovenDispatchCellUseEntries.IsEmpty) {
+                Add(AnalysisEvidenceKind.Status, address,
+                    $"dispatch_uses::status=partial::unproven_uses={codeForStatus.UnprovenDispatchCellUseEntries.Length}");
+            }
 
             foreach (var failure in analysis.Failures)
                 Add(AnalysisEvidenceKind.Status, address, $"{failure.Phase}::error={failure.Error}");
@@ -103,6 +121,93 @@ internal sealed class AnalysisEvidence {
             }
 
             break;
+        }
+
+        if ((extraction.Stages & ExtractionStage.Enums) != 0) {
+            ulong metadataStart = extraction.Header.Find(RtrSectionId.EmbeddedMetadata).Start;
+            foreach (var definition in extraction.Enums.DefinitionEntries) {
+                if (definition.Status == MetadataFactStatus.Valid)
+                    continue;
+                uint typeOffset = extraction.Metadata.TypeDefinitions[definition.MetadataType].Offset;
+                Add(AnalysisEvidenceKind.Status, Rebase(metadataStart + typeOffset),
+                    $"enum::status={definition.Status}::failures={definition.Failures.Count}");
+                int shown = Math.Min(definition.Failures.Count, 8);
+                foreach (var failure in extraction.Enums.Failures.Slice(definition.Failures.Start, shown)) {
+                    ulong witness = metadataStart + (failure.FieldOffset == 0 ? typeOffset : failure.FieldOffset);
+                    Add(AnalysisEvidenceKind.Status, Rebase(witness),
+                        $"enum_member::status={failure.Status}::error={failure.Error}");
+                }
+            }
+        }
+
+        if (extraction.DispatchCellMetadata.Layout == DispatchCellLayout.CachedMethodTableAndCode) {
+            foreach (var info in extraction.DispatchCellMetadata.Entries) {
+                cancellationToken.ThrowIfCancellationRequested();
+                ulong witness = extraction.Header.Find(info.Section).Start + (uint)info.Vertex;
+                string contract = info.IsGvm
+                    ? $"gvm_dispatch_contract::declaring_type=0x{Rebase(info.Type):X}::method={info.Method.Name}::async={info.Method.AsyncVariant}::arguments={(info.Status == MetadataFactStatus.Valid ? info.Arguments.Count.ToString(System.Globalization.CultureInfo.InvariantCulture) : "unavailable")}"
+                    : $"interface_dispatch_contract::interface=0x{Rebase(info.Type):X}::slot={info.Slot}";
+                Add(AnalysisEvidenceKind.DispatchCell, Rebase(witness),
+                    $"{contract}::first_cell=0x{Rebase(info.FirstCell):X}::cell_count={info.CellCount}::status={info.Status}");
+                Reference(witness, info.Type);
+                if (info.IsGvm) {
+                    Reference(witness, info.Instantiation);
+                    ulong method = info.Method.MetadataOffset != 0
+                        ? extraction.Header.Find(RtrSectionId.EmbeddedMetadata).Start + info.Method.MetadataOffset
+                        : extraction.Header.Find(RtrSectionId.NativeLayoutInfo).Start + info.Method.NativeOffset;
+                    Reference(witness, method);
+                    for (int argument = 0; argument < info.Arguments.Count; ++argument) {
+                        ulong type = extraction.DispatchCellMetadata.ArgumentAddresses[info.Arguments.Start + argument];
+                        Reference(witness, type);
+                        Reference(info.Instantiation + (uint)argument * 4UL, type);
+                    }
+                }
+                for (int cell = 0; cell < info.CellCount; ++cell) {
+                    ulong address = info.FirstCell + (uint)cell * 16UL;
+                    Add(AnalysisEvidenceKind.DispatchCell, Rebase(address),
+                        $"dispatch_cell::kind={(info.IsGvm ? "gvm" : "interface")}::contract=0x{Rebase(witness):X}::layout=cached_method_table_and_code");
+                    Reference(witness, address);
+                    Reference(address, witness);
+                    Reference(address, info.Type);
+                }
+            }
+
+            if (prepared.DispatchCells is { } cells) {
+                foreach (var cell in cells.CellEntries)
+                    AddDispatchUses(cell.Address, cell.Uses, cell.DictionarySlots);
+                foreach (var cell in cells.GvmCellEntries)
+                    AddDispatchUses(cell.Address, cell.Uses, cell.DictionarySlots);
+
+                void AddDispatchUses(ulong address, IndexRange uses, IndexRange slots) {
+                    foreach (var use in cells.UseEntries.Slice(uses.Start, uses.Count)) {
+                        Reference(use.Definition, address);
+                        Reference(use.Instruction, address);
+                    }
+                    foreach (int position in cells.DictionarySlotPositions.Slice(slots.Start, slots.Count)) {
+                        ulong slot = extraction.Dictionaries.SlotEntries[position].Address;
+                        Reference(address, slot);
+                        Reference(slot, address);
+                    }
+                }
+            }
+
+        }
+
+        if (prepared.Code is { } code) {
+            foreach (var use in code.UnprovenDispatchCellUseEntries) {
+                string status = use.Cell == 0 ? "unknown_cell::cell=unavailable"
+                    : $"unknown_helper::cell=0x{Rebase(use.Cell):X}";
+                Add(AnalysisEvidenceKind.Status, Rebase(use.Instruction),
+                    $"dispatch_cell_use::status={status}::target=0x{Rebase(use.Target):X}");
+            }
+        }
+
+        foreach (var failure in extraction.DispatchCellMetadata.Failures) {
+            ulong witness = extraction.Header.Find(failure.Section).Start;
+            if (failure.Vertex >= 0)
+                witness += (uint)failure.Vertex;
+            Add(AnalysisEvidenceKind.Status, Rebase(witness),
+                $"dispatch_metadata::status=partial::section={(int)failure.Section}::cell_index={failure.CellIndex}::error={failure.Error}");
         }
 
         foreach (var association in extraction.Frozen.RuntimeTypes) {

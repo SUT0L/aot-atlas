@@ -25,19 +25,8 @@ internal static class ExtractionStageChecks {
 
         foreach (string binary in binaries) {
             var image = new PeImage(File.ReadAllBytes(binary));
-            var header = ReadyToRun.Read(image);
-            var section = header.Find(313);
-            var metadata = new Metadata(
-                image.FileMemory(section.Start, checked((int)section.Length)),
-                header.MetadataHandleBits, header.Major < 10);
-            metadata.ReadDefinitions();
-
-            var fixups = RuntimeTables.Fixups(image, header.Find(308));
-            var maps = new ReflectionMaps();
-            maps.Read(image, header, metadata, fixups);
-
-            var full = new Extraction(image, header, metadata, maps, fixups);
-            var types = new Extraction(image, header, metadata, maps, fixups, ExtractionStage.RuntimeTypes);
+            var full = Extraction.Read(image);
+            var types = Extraction.Read(image, ExtractionStage.RuntimeTypes);
 
             Assert(types.Stages == ExtractionStage.RuntimeTypes);
             Assert(types.Types.Types.SequenceEqual(full.Types.Types)
@@ -47,8 +36,18 @@ internal static class ExtractionStageChecks {
             Assert(types.Gc.Layouts.SequenceEqual(full.Gc.Layouts) && types.Gc.Runs.SequenceEqual(full.Gc.Runs));
             Assert(types.Frozen.Objects.SequenceEqual(full.Frozen.Objects));
             Assert(types.Statics.Fields.SequenceEqual(full.Statics.Fields));
-            Assert(types.Generics.Types.SequenceEqual(full.Generics.Types)
-                && types.Templates.Types.SequenceEqual(full.Templates.Types));
+            Assert(types.Generics.Types.SequenceEqual(full.Generics.Types));
+            Assert(types.Templates.Types.Count == full.Templates.Types.Count);
+            for (int i = 0; i < types.Templates.Types.Count; i++) {
+                var selected = types.Templates.Types[i];
+                var complete = full.Templates.Types[i];
+                Assert(selected.Vertex == complete.Vertex && selected.MethodTable == complete.MethodTable
+                    && selected.LayoutOffset == complete.LayoutOffset && selected.Facts.Equals(complete.Facts)
+                    && selected.BaseType.Offset == complete.BaseType.Offset
+                    && selected.Interfaces.Equals(complete.Interfaces));
+                Assert(types.Signatures.RenderType(selected.BaseType.Signature)
+                    == full.Signatures.RenderType(complete.BaseType.Signature));
+            }
 
             AssertMissing(() => types.Fields);
             AssertMissing(() => types.Shared);
@@ -58,16 +57,24 @@ internal static class ExtractionStageChecks {
             AssertMissing(() => types.Dictionaries);
             AssertMissing(() => types.Traces);
 
-            var members = new Extraction(image, header, metadata, maps, fixups, ExtractionStage.MemberLayouts);
+            var members = Extraction.Read(image, ExtractionStage.MemberLayouts);
 
             Assert(members.Fields.Fields.SequenceEqual(full.Fields.Fields)
-                && members.Fields.FieldTypes.SequenceEqual(full.Fields.FieldTypes));
+                && members.Fields.FieldTypes.Count == full.Fields.FieldTypes.Count);
+            for (int i = 0; i < members.Fields.FieldTypes.Count; i++) {
+                var selected = members.Fields.FieldTypes[i];
+                var complete = full.Fields.FieldTypes[i];
+                Assert(selected.MapIndex == complete.MapIndex && selected.Owner == complete.Owner
+                    && selected.Binding == complete.Binding && selected.MetadataOffset == complete.MetadataOffset
+                    && selected.Size == complete.Size && selected.Storage == complete.Storage && selected.Source == complete.Source);
+                Assert(members.Signatures.RenderType(selected.Signature) == full.Signatures.RenderType(complete.Signature));
+            }
             Assert(members.Shared.Templates.SequenceEqual(full.Shared.Templates));
             AssertMissing(() => members.Dispatch);
             AssertMissing(() => members.Dictionaries);
             AssertMissing(() => members.Traces);
 
-            var dispatch = new Extraction(image, header, metadata, maps, fixups, ExtractionStage.Dispatch);
+            var dispatch = Extraction.Read(image, ExtractionStage.Dispatch);
 
             Assert(dispatch.Dispatch.Targets.SequenceEqual(full.Dispatch.Targets)
                 && dispatch.Dispatch.Entries.SequenceEqual(full.Dispatch.Entries));
@@ -88,13 +95,13 @@ internal static class ExtractionStageChecks {
                 changed.AsSpan(image.FileRange(corruptible.Address + 8).Start), ushort.MaxValue);
 
             var corrupt = new PeImage(changed);
-            var independent = new Extraction(corrupt, header, metadata, maps, fixups, ExtractionStage.RuntimeTypes);
+            var independent = Extraction.Read(corrupt, ExtractionStage.RuntimeTypes);
             Assert(independent.Types.Types.SequenceEqual(types.Types.Types));
 
             bool rejected = false;
 
             try {
-                _ = new Extraction(corrupt, header, metadata, maps, fixups, ExtractionStage.Dispatch);
+                _ = Extraction.Read(corrupt, ExtractionStage.Dispatch);
             } catch (InvalidDataException error) when (error.Message.Contains("exceeds the interface list", StringComparison.Ordinal)) {
                 rejected = true;
             }

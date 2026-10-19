@@ -43,7 +43,6 @@ public sealed class AnalysisProducts {
     private readonly CodeEdge[] stringReferences = [];
     public ReadOnlySpan<CodeEdge> StringReferences => stringReferences;
 
-    public AnalysisMeasurement MetadataMemberMeasurement { get; }
     public AnalysisMeasurement ExtractionMeasurement { get; }
     public AnalysisMeasurement TotalMeasurement { get; }
     public AnalysisMeasurement AbiMeasurement { get; }
@@ -57,15 +56,29 @@ public sealed class AnalysisProducts {
     public AnalysisMeasurement StringMeasurement { get; }
     public AnalysisMeasurement StringReferenceMeasurement { get; }
 
-    public AnalysisProducts(
+    public static AnalysisProducts Read(
+        PeImage image,
+        AnalysisProduct requested = AnalysisProduct.All,
+        ExtractionStage? stages = null,
+        MapFormat mapFormat = MapFormat.Auto,
+        CancellationToken cancellationToken = default) {
+        var required = RequiredExtractionStages(requested);
+        var selected = stages ?? (requested == AnalysisProduct.All ? ExtractionStage.All : required);
+        if ((ExtractionPlan.Required(selected) & required) != required)
+            throw new ArgumentException("The extraction stages do not provide the requested analysis products.", nameof(stages));
+
+        var input = Extraction.ReadInputs(image, mapFormat, cancellationToken);
+        return new(image, input.Header, input.Metadata, input.Maps, input.Fixups, requested, selected, cancellationToken);
+    }
+
+    internal AnalysisProducts(
         PeImage image,
         ReadyToRun header,
-        Metadata metadata,
+        MetadataBuilder metadata,
         ReflectionMaps maps,
         ulong[] fixups,
         AnalysisProduct requested = AnalysisProduct.All,
         ExtractionStage stages = ExtractionStage.All,
-        MetadataMembers? members = null,
         CancellationToken cancellationToken = default) {
         long operationAllocated = GC.GetAllocatedBytesForCurrentThread();
         long operationStart = Stopwatch.GetTimestamp();
@@ -78,23 +91,6 @@ public sealed class AnalysisProducts {
 
         long allocated = GC.GetAllocatedBytesForCurrentThread();
         long start = Stopwatch.GetTimestamp();
-
-        if ((requested & AnalysisProduct.MetadataMembers) != 0) {
-            if (members is null) {
-                // Member roots precede native roots. The input remains intact
-                // if preparation, extraction or a later product fails.
-                metadata = metadata.WorkingCopy();
-                members = new MetadataMembers(metadata, cancellationToken, ownsMetadataDraft: true);
-            } else {
-                members.ValidateOwner(metadata);
-            }
-
-            MetadataMemberMeasurement = AnalysisMeasurement.Since(start, allocated);
-        }
-
-        cancellationToken.ThrowIfCancellationRequested();
-        allocated = GC.GetAllocatedBytesForCurrentThread();
-        start = Stopwatch.GetTimestamp();
         Extraction = new Extraction(image, header, metadata, maps, fixups, stages, cancellationToken);
         ExtractionMeasurement = AnalysisMeasurement.Since(start, allocated);
         var extraction = Extraction;
@@ -102,13 +98,7 @@ public sealed class AnalysisProducts {
 
         if ((requested & AnalysisProduct.MetadataMembers) != 0) {
             cancellationToken.ThrowIfCancellationRequested();
-            allocated = GC.GetAllocatedBytesForCurrentThread();
-            start = Stopwatch.GetTimestamp();
-            Members = members!.RebindTo(extraction.Metadata);
-            var rebound = AnalysisMeasurement.Since(start, allocated);
-            MetadataMemberMeasurement = new(
-                MetadataMemberMeasurement.Seconds + rebound.Seconds,
-                MetadataMemberMeasurement.AllocatedBytes + rebound.AllocatedBytes);
+            Members = extraction.Metadata.Members;
         }
 
         if (analysis.Managed is not null) {
@@ -135,7 +125,7 @@ public sealed class AnalysisProducts {
                 cancellationToken.ThrowIfCancellationRequested();
                 allocated = GC.GetAllocatedBytesForCurrentThread();
                 start = Stopwatch.GetTimestamp();
-                Properties = new PropertyProjections(extraction, Abi!, Members!, cancellationToken, ownsMetadataDraft: true);
+                Properties = new PropertyProjections(extraction, Abi!, cancellationToken);
                 PropertyMeasurement = AnalysisMeasurement.Since(start, allocated);
             }
 

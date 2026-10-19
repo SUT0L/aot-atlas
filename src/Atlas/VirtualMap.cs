@@ -39,7 +39,7 @@ public sealed class VirtualMap {
     internal void Read(
         PeImage image,
         ReadyToRun rtr,
-        Metadata metadata,
+        MetadataBuilder metadata,
         NativeLayout layout,
         ReadOnlySpan<ulong> fixups,
         MapFormat format,

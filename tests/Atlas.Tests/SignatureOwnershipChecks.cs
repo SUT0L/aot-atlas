@@ -108,66 +108,35 @@ internal static class SignatureOwnershipChecks {
 
     internal static void Binaries(ReadOnlySpan<string> paths) {
         foreach (string path in paths) {
-            var image = new PeImage(File.ReadAllBytes(path));
+            var image = PeImage.ReadFile(path);
             var header = ReadyToRun.Read(image);
-            var section = header.Find(RtrSectionId.EmbeddedMetadata);
-            var metadata = new Metadata(image.FileMemory(section.Start, checked((int)section.Length)),
-                header.MetadataHandleBits, header.Format.LegacyMetadataConstants);
-            metadata.ReadDefinitions();
-
+            var builder = MetadataBuilder.FromImage(image, header);
+            builder.ReadDefinitions();
             var fixups = RuntimeTables.Fixups(image, header.Find(RtrSectionId.CommonFixupsTable));
-            var maps = new ReflectionMaps();
-            maps.Read(image, header, metadata, fixups);
-            var extraction = new Extraction(image, header, metadata, maps, fixups);
-            metadata = extraction.Metadata;
+            var maps = ReflectionMaps.Decode(image, header, builder, fixups);
+            var extraction = new Extraction(image, header, builder, maps, fixups);
+            var metadata = extraction.Metadata;
+            var graph = metadata.PublishedSignatures;
             var abi = new ManagedAbi(extraction);
             var healthy = new PropertyProjections(extraction, abi);
-            bool exercised = false;
+            var methods = metadata.MethodDefinitions.ToArray();
+            var fields = metadata.FieldDefinitions.ToArray();
 
-            foreach (var projection in healthy.Projections) {
-                if (projection.Signature >= extraction.Signatures.Nodes.Length)
-                    continue;
-
-                var original = healthy.Signatures.Nodes[projection.Signature];
-
-                if (original.Kind != SignatureKind.Named || original.TypeAddress != 0 || projection.Storage.Binding == 0)
-                    continue;
-
-                for (int other = 1; other < extraction.Signatures.Nodes.Length; ++other) {
-                    var replacement = extraction.Signatures.Nodes[other];
-                    int binding = extraction.Bindings.Resolve(other);
-
-                    if (replacement.Kind != SignatureKind.Named || replacement.TypeAddress != 0
-                        || binding == 0 || binding == projection.Storage.Binding)
-                        continue;
-
-                    metadata.SignatureBuilder.SetNode(projection.Signature, replacement);
-                    bool rejected = false;
-
-                    try {
-                        _ = new PropertyProjections(extraction, abi);
-                    } catch (ArgumentException) {
-                        rejected = true;
-                    }
-
-                    Assert(rejected);
-
-                    metadata.SignatureBuilder.SetNode(projection.Signature, original);
-                    var restored = new PropertyProjections(extraction, abi);
-                    Assert(healthy.Projections.SequenceEqual(restored.Projections));
-                    Assert(healthy.Signatures.RenderType(projection.Signature)
-                        == extraction.Signatures.RenderType(projection.Signature));
-                    exercised = true;
-                    break;
-                }
-
-                if (exercised)
-                    break;
+            foreach (var method in methods.Reverse()) {
+                Assert(metadata.ReadMethodDefinition(method.Offset).Equals(method));
+                _ = metadata.ReadMethodSignature(method.SignatureOffset).Render(method.Name);
             }
+            foreach (var field in fields.Reverse())
+                Assert(metadata.ReadFieldDefinition(field.Offset).Equals(field));
 
-            Assert(exercised);
+            var repeated = new PropertyProjections(extraction, abi);
+            Assert(healthy.Projections.SequenceEqual(repeated.Projections));
+            Assert(ReferenceEquals(graph, metadata.PublishedSignatures)
+                && graph.Nodes.SequenceEqual(extraction.Signatures.Nodes)
+                && metadata.MethodDefinitions.SequenceEqual(methods)
+                && metadata.FieldDefinitions.SequenceEqual(fields));
             ConsumerOwnershipChecks.Binary(extraction);
-            Console.WriteLine($"{Path.GetFileName(path)}: rewriting a published property type rejects stale binding evidence; restoring it preserves every projection and prior display.");
+            Console.WriteLine($"{Path.GetFileName(path)}: reversed metadata queries preserve the frozen graph and every property projection.");
         }
 
         if (paths.Length >= 2)
@@ -205,12 +174,12 @@ internal static class SignatureOwnershipChecks {
         var fields = first.Maps.Fields.ToArray();
         var arguments = first.Maps.GenericArguments.ToArray();
         var format = first.Maps.Format;
-        var firstGraph = first.Metadata.SignatureBuilder.Publish();
-        var secondGraph = second.Metadata.SignatureBuilder.Publish();
+        var firstGraph = first.Signatures;
+        var secondGraph = second.Signatures;
         rejected = false;
 
         try {
-            first.Maps.Read(first.Image, first.Header, second.Metadata, first.CommonFixups);
+            first.Maps.Read(first.Image, first.Header, MetadataBuilder.FromImage(second.Image, second.Header), first.CommonFixups);
         } catch (ArgumentException) {
             rejected = true;
         }
@@ -221,25 +190,24 @@ internal static class SignatureOwnershipChecks {
             && methods.SequenceEqual(first.Maps.Methods)
             && fields.SequenceEqual(first.Maps.Fields)
             && arguments.SequenceEqual(first.Maps.GenericArguments)
-            && ReferenceEquals(firstGraph, first.Metadata.SignatureBuilder.Publish())
-            && ReferenceEquals(secondGraph, second.Metadata.SignatureBuilder.Publish()));
+            && ReferenceEquals(firstGraph, first.Signatures)
+            && ReferenceEquals(secondGraph, second.Signatures));
 
         rejected = false;
 
         try {
-            _ = new Extraction(first.Image, first.Header, second.Metadata, first.Maps,
+            _ = new Extraction(first.Image, first.Header, MetadataBuilder.FromImage(second.Image, second.Header), first.Maps,
                 first.CommonFixups, ExtractionStage.RuntimeTypes);
         } catch (ArgumentException) {
             rejected = true;
         }
 
-        Assert(rejected && ReferenceEquals(firstGraph, first.Metadata.SignatureBuilder.Publish())
-            && ReferenceEquals(secondGraph, second.Metadata.SignatureBuilder.Publish()));
+        Assert(rejected && ReferenceEquals(firstGraph, first.Signatures)
+            && ReferenceEquals(secondGraph, second.Signatures));
 
-        _ = new Extraction(first.Image, first.Header, second.Metadata, first.Maps, first.CommonFixups,
-            ExtractionStage.Resources | ExtractionStage.Linkage);
-        Assert(ReferenceEquals(firstGraph, first.Metadata.SignatureBuilder.Publish())
-            && ReferenceEquals(secondGraph, second.Metadata.SignatureBuilder.Publish()));
+        _ = Extraction.Read(first.Image, ExtractionStage.Resources | ExtractionStage.Linkage);
+        Assert(ReferenceEquals(firstGraph, first.Signatures)
+            && ReferenceEquals(secondGraph, second.Signatures));
 
         Console.WriteLine("Real source namespaces: different declarations at the same map ID reject foreign graph binding and parser rebinding without mutation; independent resources/linkage remain available.");
 
@@ -247,8 +215,7 @@ internal static class SignatureOwnershipChecks {
             var image = new PeImage(File.ReadAllBytes(path));
             var header = ReadyToRun.Read(image);
             var section = header.Find(RtrSectionId.EmbeddedMetadata);
-            var metadata = new Metadata(image.FileMemory(section.Start, checked((int)section.Length)),
-                header.MetadataHandleBits, header.Format.LegacyMetadataConstants);
+            var metadata = MetadataBuilder.FromImage(image, header);
             metadata.ReadDefinitions();
 
             var fixups = RuntimeTables.Fixups(image, header.Find(RtrSectionId.CommonFixupsTable));
@@ -261,7 +228,7 @@ internal static class SignatureOwnershipChecks {
 
     private static void RejectMixedParserOwners() {
         foreach (int bits in new[] { 7, 8 }) {
-            var metadata = new Metadata(new byte[64], bits);
+            var metadata = new MetadataBuilder(new byte[64], bits);
             var builder = new SignatureBuilder();
             var graph = builder.Publish();
             var layout = new NativeLayout(new byte[64], [], builder, takeOwnership: true);
@@ -294,34 +261,34 @@ internal static class SignatureOwnershipChecks {
                 Assert(earlier.RenderType(1) == "sig_ref_1");
 
             Assert(earlier.HasAbbreviatedReferences);
-            Assert(builder.HasAbbreviatedReferences == renderBeforeMutation
-                && later.HasAbbreviatedReferences == renderBeforeMutation);
+            Assert(builder.HasAbbreviatedReferences && later.HasAbbreviatedReferences);
         }
 
-        var metadata = new Metadata(new byte[16], 7);
+        var metadata = new MetadataBuilder(new byte[16], 7);
         var graph = metadata.SignatureBuilder.Publish();
         uint variable = (4U << 7) | 0x3F;
         Assert(metadata.TypeSignature(variable) == 1);
 
+        var snapshot = metadata.Publish();
         using var stream = new MemoryStream();
 
         using (var json = new Utf8JsonWriter(stream)) {
             json.WriteStartObject();
-            MetadataIdentityOutput.Write(json, metadata, graph);
+            MetadataIdentityOutput.Write(json, snapshot);
             json.WriteEndObject();
         }
 
         using var result = JsonDocument.Parse(stream.ToArray());
         var serialized = result.RootElement.GetProperty("signature_graph");
-        Assert(serialized.GetProperty("types").GetArrayLength() == 0
-            && !serialized.GetProperty("handles").EnumerateObject().Any());
+        Assert(serialized.GetProperty("types").GetArrayLength() == 1
+            && serialized.GetProperty("handles").EnumerateObject().Count() == 1);
 
         using var unused = new MemoryStream();
         using var writer = new Utf8JsonWriter(unused);
         bool rejected = false;
 
         try {
-            MetadataIdentityOutput.Write(writer, metadata, new SignatureBuilder().Publish());
+            MetadataIdentityOutput.Write(writer, snapshot, new SignatureBuilder().Publish());
         } catch (ArgumentException) {
             rejected = true;
         }
@@ -453,7 +420,7 @@ internal static class SignatureOwnershipChecks {
     }
 
     private static void RejectedRootAcquisition(int bits) {
-        var metadata = new Metadata(new byte[64], bits);
+        var metadata = new MetadataBuilder(new byte[64], bits);
         var builder = metadata.SignatureBuilder;
         var graph = builder.Publish();
         var begin = typeof(SignatureBuilder).GetMethod("BeginRead", BindingFlags.NonPublic | BindingFlags.Instance)!;

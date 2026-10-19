@@ -8,7 +8,7 @@ internal static class PInvokeOutput {
 
         json.WriteStartObject();
         json.WriteString("input_sha256", inputSha256);
-        ExtractionStatusOutput.Write(json, extraction.Stages, extraction.DictionarySignatureGaps);
+        ExtractionStatusOutput.Write(json, extraction);
         json.WriteNumber("image_base", image.ImageBase);
         json.WriteString("source", "MethodFixupCell::ModuleFixupCell::TypeMap::<Module>");
 

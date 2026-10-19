@@ -13,7 +13,7 @@ internal static class MethodsOutput {
 
         json.WriteStartObject();
         json.WriteString("input_sha256", inputSha256);
-        ExtractionStatusOutput.Write(json, extraction.Stages, extraction.DictionarySignatureGaps);
+        ExtractionStatusOutput.Write(json, extraction);
 
         StaticsOutput.WriteConstructors(json, extraction);
 
@@ -51,14 +51,20 @@ internal static class MethodsOutput {
             json.WriteNumber("dictionary", entry.Dictionary);
             json.WriteNumber("invoke_stub", entry.InvokeStub);
 
-            json.WriteNumber("flags", entry.Flags);
+            json.WriteNumber("flags", entry.SourceFlags);
             json.WriteNumber("token", entry.Token);
             json.WriteNumber("metadata_offset", entry.MetadataOffset);
             json.WriteNumber("native_offset", entry.NativeOffset);
             json.WriteBoolean("async_variant", entry.AsyncVariant);
+            json.WriteBoolean("return_dropping_async_thunk", entry.ReturnDroppingAsyncThunk);
             JsonOutput.WriteString(json, "method_name", entry.Name);
             JsonOutput.WriteString(json, "name", text[..renderer.NameLength]);
-            JsonOutput.WriteString(json, "declared_signature", text);
+            if (entry.Signature != 0)
+                JsonOutput.WriteString(json, "declared_signature", text);
+            else {
+                json.WriteNull("declared_signature");
+                json.WriteString("signature_status", "unavailable");
+            }
 
             if (!renderer.SignatureComplete)
                 MetadataIdentityOutput.WriteContext(json, renderer.SignatureIndex, method: true, renderer.Context);
@@ -86,11 +92,23 @@ internal static class MethodsOutput {
                 json.WriteEndObject();
             }
 
-            json.WriteNumber("calling_convention", signatures.Methods[entry.Signature].CallingConvention);
-            json.WriteString("convention_format", signatures.Methods[entry.Signature].NativeConvention
-                ? "native_layout"
-                : "metadata");
-            json.WriteNumber("signature_offset", signatures.Methods[entry.Signature].Offset);
+            if (entry.Signature != 0) {
+                json.WriteNumber("calling_convention", signatures.Methods[entry.Signature].CallingConvention);
+                json.WriteString("convention_format", signatures.Methods[entry.Signature].NativeConvention
+                    ? "native_layout"
+                    : "metadata");
+                json.WriteNumber("signature_offset", signatures.Methods[entry.Signature].Offset);
+            } else {
+                json.WriteNull("calling_convention");
+                json.WriteNull("convention_format");
+                var reference = entry.MetadataOffset != 0
+                    ? extraction.Metadata.Facts.Method(new(entry.MetadataOffset)).Signature
+                    : default;
+                if (entry.MetadataOffset != 0 && reference.IsAvailable && !reference.Value.IsNil)
+                    json.WriteNumber("signature_offset", reference.Value.Offset);
+                else
+                    json.WriteNull("signature_offset");
+            }
 
             ref readonly var methodAbi = ref abi.Methods[index];
 
@@ -144,6 +162,6 @@ internal static class MethodsOutput {
         bool hasTemplateTypeSignatures = TemplatesOutput.Write(json, extraction, renderer, cancellationToken);
         TraceOutput.Write(json, extraction, renderer, abi, cancellationToken);
         MetadataIdentityOutput.EndObject(json, extraction.Metadata, extraction.Signatures,
-            cancellationToken, includeSignatureGraph: hasTemplateTypeSignatures);
+            cancellationToken, includeSignatureGraph: hasTemplateTypeSignatures || renderer.HasAbbreviatedReferences);
     }
 }

@@ -34,14 +34,14 @@ public sealed class PInvokeFixups {
         int count = 0;
 
         foreach (ref readonly var entry in CollectionsMarshal.AsSpan(maps.Types)) {
-            if (entry.Name == "<Module>")
+            if (entry.IsGlobalModule)
                 ++count;
         }
 
         var targets = new Dictionary<ulong, int>(count);
 
         foreach (ref readonly var entry in CollectionsMarshal.AsSpan(maps.Types)) {
-            if (entry.Name != "<Module>")
+            if (!entry.IsGlobalModule)
                 continue;
 
             ref readonly var type = ref CollectionsMarshal.AsSpan(types.Types)[types.Index[entry.MethodTable]];

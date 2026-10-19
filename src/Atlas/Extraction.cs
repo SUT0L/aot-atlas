@@ -25,6 +25,7 @@ public sealed partial class Extraction {
     private readonly GvmTables? gvms;
     private readonly Marshalling? marshalling;
     private readonly TypeMaps? typeMaps;
+    private readonly DispatchCellMetadata? dispatchCellMetadata;
     private readonly VirtualMap? virtuals;
     private readonly TemplateMaps? templates;
     private readonly GenericDictionaries? dictionaries;
@@ -63,11 +64,12 @@ public sealed partial class Extraction {
     }
 
     public RuntimeMemory Memory => Require(memory, ExtractionStage.RuntimeTypes);
-    public NativeLayout Layout => Require(layout, ExtractionStage.RuntimeTypes);
+    private NativeLayout Layout => Require(layout, ExtractionStage.RuntimeTypes);
     public GenericMaps Generics => Require(generics, ExtractionStage.RuntimeTypes);
     public GvmTables Gvms => Require(gvms, ExtractionStage.RuntimeTypes);
     public Marshalling Marshalling => Require(marshalling, ExtractionStage.RuntimeTypes);
     public TypeMaps TypeMaps => Require(typeMaps, ExtractionStage.RuntimeTypes);
+    public DispatchCellMetadata DispatchCellMetadata => Require(dispatchCellMetadata, ExtractionStage.RuntimeTypes);
     public VirtualMap Virtuals => Require(virtuals, ExtractionStage.Dispatch);
     public TemplateMaps Templates => Require(templates, ExtractionStage.RuntimeTypes);
     public GenericDictionaries Dictionaries => Require(dictionaries, ExtractionStage.DictionaryBindings);
@@ -121,10 +123,41 @@ public sealed partial class Extraction {
         return value ?? throw new InvalidOperationException($"Extraction phase did not initialize {stage}.");
     }
 
-    public Extraction(
+    public static Extraction Read(
+        PeImage image,
+        ExtractionStage requested = ExtractionStage.All,
+        MapFormat mapFormat = MapFormat.Auto,
+        CancellationToken cancellationToken = default) {
+        var required = ExtractionPlan.Required(requested);
+        cancellationToken.ThrowIfCancellationRequested();
+        if ((required & ExtractionStage.RuntimeTypes) == 0) {
+            var header = ReadyToRun.Read(image);
+            var encoding = new MetadataEncoding(header.MetadataHandleBits, header.Format.LegacyMetadataConstants,
+                header.Format.CombinedMetadataTypeOwnership);
+            var metadata = new MetadataBuilder(ReadOnlyMemory<byte>.Empty, encoding, cancellationToken);
+            return new(image, header, metadata, new ReflectionMaps(), [], requested, cancellationToken);
+        }
+        var input = ReadInputs(image, mapFormat, cancellationToken);
+        return new(image, input.Header, input.Metadata, input.Maps, input.Fixups, requested, cancellationToken);
+    }
+
+    internal static (ReadyToRun Header, MetadataBuilder Metadata, ReflectionMaps Maps, ulong[] Fixups) ReadInputs(
+        PeImage image,
+        MapFormat mapFormat,
+        CancellationToken cancellationToken) {
+        cancellationToken.ThrowIfCancellationRequested();
+        var header = ReadyToRun.Read(image);
+        var metadata = MetadataBuilder.FromImage(image, header, cancellationToken);
+        metadata.ReadDefinitions(cancellationToken);
+        var fixups = RuntimeTables.Fixups(image, header.Find(RtrSectionId.CommonFixupsTable));
+        var maps = ReflectionMaps.Decode(image, header, metadata, fixups, mapFormat, cancellationToken);
+        return (header, metadata, maps, fixups);
+    }
+
+    internal Extraction(
         PeImage image,
         ReadyToRun rtr,
-        Metadata metadata,
+        MetadataBuilder metadata,
         ReflectionMaps maps,
         ulong[] commonFixups,
         ExtractionStage requested = ExtractionStage.All,
@@ -140,16 +173,8 @@ public sealed partial class Extraction {
         if ((schedule.Stages & ExtractionStage.RuntimeTypes) != 0)
             maps.ValidateSignatureOrigin(metadata.SignatureBuilder.Origin);
 
-        // Each result owns its parsing branch. Successful earlier metadata
-        // and maps survive any later source, binding, or publication failure.
-        metadata = metadata.Fork();
-        maps = maps.Fork((schedule.Stages & ExtractionStage.RuntimeTypes) != 0
-            ? metadata.SignatureBuilder.Origin
-            : null);
-
         Image = image;
         Header = rtr;
-        Metadata = metadata;
         Maps = maps;
         CommonFixups = (ulong[])commonFixups.Clone();
         commonFixups = CommonFixups;
@@ -172,7 +197,8 @@ public sealed partial class Extraction {
                     break;
 
                 case ExtractionPhase.EnumDefinitions:
-                    enums = new Enumerations(metadata, cancellationToken);
+                    System.Diagnostics.Debug.Assert(Metadata is not null);
+                    enums = new Enumerations(Metadata, cancellationToken);
                     break;
 
                 case ExtractionPhase.RuntimeSources:
@@ -189,7 +215,8 @@ public sealed partial class Extraction {
                             : image.FileMemory(section.Start, checked((int)section.Length)),
                         NativeReferences,
                         metadata.SignatureBuilder,
-                        takeOwnership: true);
+                        takeOwnership: true,
+                        methodFlags: rtr.Format.ReturnDroppingAsyncThunks ? 31U : 15U);
 
                     gc = new GcLayouts();
                     generics = new GenericMaps();
@@ -210,6 +237,8 @@ public sealed partial class Extraction {
                     Gvms.Read(image, rtr, metadata, Layout, commonFixups, maps.Format, Types, cancellationToken);
                     Marshalling.Read(image, rtr, commonFixups, Types, cancellationToken);
                     typeMaps = new TypeMaps(image, rtr, commonFixups, Types, cancellationToken);
+                    dispatchCellMetadata = new DispatchCellMetadata(
+                        image, rtr, Memory, NativeReferences, metadata, Layout, maps.Format, Types, cancellationToken);
                     virtuals!.Read(image, rtr, metadata, Layout, commonFixups, maps.Format, cancellationToken);
                     Templates.Read(image, rtr, metadata, Layout, commonFixups, NativeStatics, maps.Format, cancellationToken);
 
@@ -221,17 +250,17 @@ public sealed partial class Extraction {
                     break;
 
                 case ExtractionPhase.TraceSignatures:
-                    traces = new TraceMaps(image, rtr, metadata, commonFixups, ownsMetadataDraft: true, cancellationToken);
+                    traces = new TraceMaps(image, rtr, metadata, commonFixups, cancellationToken);
                     break;
 
                 case ExtractionPhase.StaticSources:
                     statics = new StaticStorage(image, rtr, Memory, commonFixups, NativeReferences, NativeStatics, cancellationToken);
 
-                    foreach (var entry in maps.Methods) {
+                    foreach (ref var entry in CollectionsMarshal.AsSpan(maps.Methods)) {
                         cancellationToken.ThrowIfCancellationRequested();
 
-                        if (entry.Signature == 0)
-                            Layout.Method(entry.NativeSignatureOffset);
+                        if (entry.MetadataOffset == 0)
+                            entry.Signature = Layout.Method(entry.NativeSignatureOffset).Signature;
                     }
 
                     break;
@@ -329,11 +358,14 @@ public sealed partial class Extraction {
                     Gvms.Bind(Types, metadata.SignatureBuilder, cancellationToken);
                     Marshalling.Bind(Types, metadata, maps, rtr.Format.LegacyTypeLayout, cancellationToken);
                     TypeMaps.ValidateHashes(Types, cancellationToken);
+                    DispatchCellMetadata.ValidateTypes(Types, cancellationToken);
                     Statics.BindFields(image, Memory, maps, Types);
                     break;
 
                 case ExtractionPhase.SignaturePublication:
-                    signatures = metadata.SignatureBuilder.Publish();
+                    Metadata = metadata.Publish(cancellationToken);
+                    signatures = Metadata.PublishedSignatures;
+                    traces?.Publish(signatures);
                     maps.SetSignatureOrigin(signatures);
                     break;
 
@@ -342,7 +374,7 @@ public sealed partial class Extraction {
                     break;
 
                 case ExtractionPhase.MemberLayouts:
-                    fields = new FieldLayouts(metadata, maps, Types, memberSignatures!, Bindings, cancellationToken);
+                    fields = new FieldLayouts(maps, Types, memberSignatures!, Bindings, cancellationToken);
                     shared = new SharedMethods(this);
                     break;
 
@@ -395,6 +427,10 @@ public sealed partial class Extraction {
                 typesSeconds += seconds;
         }
 
+        Metadata ??= metadata.Publish(cancellationToken);
+        // Source readers and their mutable signature buffers belong to construction.
+        // Consumers retain the published graph and resolved IDs on their own rows.
+        layout = null;
         TypesSeconds = typesSeconds;
         TotalSeconds = Stopwatch.GetElapsedTime(operationStart).TotalSeconds;
         TotalAllocatedBytes = GC.GetAllocatedBytesForCurrentThread() - operationAllocated;

@@ -69,7 +69,7 @@ internal static class MetadataValueChecks {
             Put(data, 848, H(128, 0x3d));
             Put(data, 880, 2, H(816, 0x3e), H(512, 0x14));
 
-            var metadata = new Metadata(data, bits, legacyConstants: false, takeOwnership: true);
+            var metadata = new MetadataBuilder(data, bits, legacyConstants: false, takeOwnership: true);
             Assert(metadata.Constant(0).Kind == "absent");
 
             var typeValue = metadata.Constant(H(816, 0x3e));
@@ -86,7 +86,7 @@ internal static class MetadataValueChecks {
 
             var array = metadata.Constant(H(432, 0x10));
             Assert(array.Type == "int32[]"
-                && ((System.Collections.ObjectModel.ReadOnlyCollection<object>)array.Value!).SequenceEqual(new object[] { -1, 7, 123456 }));
+                && ((System.Collections.ObjectModel.ReadOnlyCollection<int>)array.Value!).SequenceEqual(new[] { -1, 7, 123456 }));
 
             var strings = (System.Collections.ObjectModel.ReadOnlyCollection<MetadataValue>)metadata.Constant(H(464, 0x19)).Value!;
             Assert((string)strings[0].Value! == "Marker" && strings[1].Kind == "null");
@@ -111,24 +111,78 @@ internal static class MetadataValueChecks {
             Reject(() => metadata.Constant(H(528, 0x1c)));
             Reject(() => metadata.Constant(H(560, 4)));
             Reject(() => metadata.Constant(H(2048, 0x11)));
-            Reject(() => new Metadata(new byte[] { 0, 2, 15 }, bits).Constant(H(1, 0x10)));
+            Reject(() => new MetadataBuilder(new byte[] { 0, 2, 15 }, bits).Constant(H(1, 0x10)));
 
             Put(data, 352, 2);
-            Reject(() => metadata.AttributePayload(256));
+            Reject(() => new MetadataBuilder(data, bits).AttributePayload(256));
 
             Put(data, 352, 0);
 
             // Invalid constructor kinds fail even when their target record is readable.
             Put(data, 256, H(224, 0x11));
-            Reject(() => metadata.AttributePayload(256));
+            Reject(() => new MetadataBuilder(data, bits).AttributePayload(256));
         }
 
-        var legacy = new Metadata(new byte[] { 0, 255 }, 8, legacyConstants: true);
+        var legacy = new MetadataBuilder(new byte[] { 0, 255 }, 8, legacyConstants: true);
         Assert((byte)legacy.Constant((1U << 8) | 7).Value! == 255);
 
+        LegacyConstantKinds();
         HandleArrayBudget();
 
         Console.WriteLine("Metadata values: both handle formats, constants, arrays, attributes, TypeSpecification values, invalid encodings and shared allocation budgets passed.");
+    }
+
+    private static void LegacyConstantKinds() {
+        uint H(int offset, uint kind) => ((uint)offset << 8) | kind;
+        var data = new byte[1024];
+        Text(data, 32, "Protocol");
+        Text(data, 64, "Marker");
+        Text(data, 96, "Wire");
+        Put(data, 128, H(160, 0x30), 64);
+        Put(data, 160, H(192, 0x39), 32);
+        Put(data, 192, 0, 96);
+
+        int bytes = Put(data, 224, 2);
+        data[bytes] = 17;
+        data[bytes + 1] = 34;
+        data[256] = 255;
+        Put(data, 288, 2, 65, 0xd800);
+        Put(data, 320, 0xd800);
+        int doubles = Put(data, 352, 2);
+        BinaryPrimitives.WriteInt64LittleEndian(data.AsSpan(doubles), BitConverter.DoubleToInt64Bits(1.25));
+        BinaryPrimitives.WriteInt64LittleEndian(data.AsSpan(doubles + 8), long.MinValue);
+        BinaryPrimitives.WriteInt64LittleEndian(data.AsSpan(384), BitConverter.DoubleToInt64Bits(-3.5));
+        Put(data, 416, H(600, 0x11), H(128, 0x3d));
+        Put(data, 464, H(128, 0x3d), H(632, 0x10));
+        Put(data, 600, unchecked((uint)-7));
+        Put(data, 632, 2, unchecked((uint)-7), 10);
+
+        var legacy = new MetadataBuilder(data, 8, legacyConstants: true);
+        var modern = new MetadataBuilder(data, 8);
+        // Independently specified by the .NET 8 and .NET 9 HandleType enums.
+        foreach (var (offset, oldKind, newKind) in new (int, uint, uint)[] {
+            (416, 5, 12), (224, 6, 5), (256, 7, 6), (288, 8, 7),
+            (320, 9, 8), (352, 10, 9), (384, 11, 10), (464, 12, 11)
+        }) {
+            var value = legacy.Constant(H(offset, oldKind));
+            var expected = modern.Constant(H(offset, newKind));
+            Assert(value.Handle == H(offset, oldKind) && value.Kind == expected.Kind && value.Type == expected.Type);
+            Assert(EqualPayload(value.Value, expected.Value));
+        }
+
+        Assert((ushort)legacy.Constant(H(320, 9)).Value! == 0xd800);
+        var array = (System.Collections.ObjectModel.ReadOnlyCollection<double>)legacy.Constant(H(352, 10)).Value!;
+        Assert(BitConverter.DoubleToInt64Bits((double)array[1]) == long.MinValue);
+        Put(data, 320, 70000);
+        Reject(() => new MetadataBuilder(data, 8, legacyConstants: true).Constant(H(320, 9)));
+
+        static bool EqualPayload(object? actual, object? expected) => (actual, expected) switch {
+            (MetadataValue left, MetadataValue right) => left.Handle == right.Handle
+                && left.Kind == right.Kind && left.Type == right.Type && EqualPayload(left.Value, right.Value),
+            (System.Collections.IEnumerable left, System.Collections.IEnumerable right) =>
+                left.Cast<object>().SequenceEqual(right.Cast<object>()),
+            _ => Equals(actual, expected)
+        };
     }
 
     private static void HandleArrayBudget() {
@@ -140,7 +194,7 @@ internal static class MetadataValueChecks {
             uint handle = (1U << bits) | 0x0d;
             Put(bytes, 1, count, handle);
 
-            var metadata = new Metadata(bytes, bits, legacyConstants: false, takeOwnership: true);
+            var metadata = new MetadataBuilder(bytes, bits, legacyConstants: false, takeOwnership: true);
             bool rejected = false;
 
             try {

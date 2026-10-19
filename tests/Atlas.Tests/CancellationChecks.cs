@@ -51,9 +51,7 @@ internal static class CancellationChecks {
         byte[] bytes = File.ReadAllBytes(binary);
         var image = new PeImage(bytes);
         var header = ReadyToRun.Read(image);
-        var section = header.Find(RtrSectionId.EmbeddedMetadata);
-        var data = image.FileMemory(section.Start, checked((int)section.Length));
-        var metadata = new Metadata(data, header.MetadataHandleBits, header.Format.LegacyMetadataConstants);
+        var metadata = MetadataBuilder.FromImage(image, header);
 
         using (var early = new CancellationTokenSource()) {
             early.Cancel();
@@ -65,52 +63,51 @@ internal static class CancellationChecks {
         using (var cancellation = new CancellationTokenSource()) {
             cancellation.CancelAfter(1);
             Cancel(() => metadata.ReadDefinitions(cancellation.Token));
-            Assert(metadata.Types.Count == 0 && metadata.Methods.Count == 0,
-                "Late definition cancellation published a partial parser state.");
+            Assert(bytes.AsSpan().SequenceEqual(File.ReadAllBytes(binary)),
+                "Canceled metadata construction changed caller bytes.");
         }
 
-        metadata.ReadDefinitions();
-        var fixups = RuntimeTables.Fixups(image, header.Find(RtrSectionId.CommonFixupsTable));
-        var maps = ReflectionMaps.Decode(image, header, metadata, fixups);
-        var publication = metadata.SignatureBuilder.Publish();
-        int methods = metadata.Methods.Count;
-        int fields = metadata.Fields.Count;
+        var accepted = Extraction.Read(image);
+        var snapshot = accepted.Metadata;
+        var maps = accepted.Maps;
+        var publication = accepted.Signatures;
+        int methods = snapshot.MethodDefinitions.Length;
+        int fields = snapshot.FieldDefinitions.Length;
         var mappedMethods = maps.MethodEntries.ToArray();
 
         using (var cancellation = new CancellationTokenSource()) {
             cancellation.CancelAfter(1);
-            Cancel(() => new Extraction(image, header, metadata, maps, fixups, cancellationToken: cancellation.Token));
+            Cancel(() => Extraction.Read(image, cancellationToken: cancellation.Token));
         }
 
-        Assert(ReferenceEquals(publication, metadata.SignatureBuilder.Publish())
-            && methods == metadata.Methods.Count && fields == metadata.Fields.Count
+        Assert(ReferenceEquals(publication, accepted.Signatures)
+            && methods == snapshot.MethodDefinitions.Length && fields == snapshot.FieldDefinitions.Length
             && maps.MethodEntries.SequenceEqual(mappedMethods),
             "Canceled extraction changed previously prepared metadata or maps.");
 
-        var retry = new Extraction(image, header, metadata, maps, fixups,
-            ExtractionStage.MemberLayouts | ExtractionStage.MethodTracing);
+        var retry = Extraction.Read(image, ExtractionStage.MemberLayouts | ExtractionStage.MethodTracing);
         var names = retry.Names.Values.ToArray();
-        publication = retry.Metadata.SignatureBuilder.Publish();
+        publication = retry.Signatures;
 
         using (var early = new CancellationTokenSource()) {
             early.Cancel();
             Cancel(() => new ManagedAbi(retry, early.Token));
-            Cancel(() => new MetadataMembers(retry.Metadata, early.Token));
+            Cancel(() => retry.Metadata.Constant(0, early.Token));
         }
 
-        Assert(ReferenceEquals(publication, retry.Metadata.SignatureBuilder.Publish())
+        Assert(ReferenceEquals(publication, retry.Signatures)
             && retry.Names.Values.SequenceEqual(names), "Canceled products altered the previous extraction.");
 
-        var complete = new Extraction(image, header, metadata, maps, fixups);
+        var complete = Extraction.Read(image);
         var abi = new ManagedAbi(complete);
-        publication = complete.Metadata.SignatureBuilder.Publish();
+        publication = complete.Signatures;
 
         using (var cancellation = new CancellationTokenSource()) {
             cancellation.CancelAfter(1);
             Cancel(() => new PropertyProjections(complete, abi, cancellation.Token));
         }
 
-        Assert(ReferenceEquals(publication, complete.Metadata.SignatureBuilder.Publish()),
+        Assert(ReferenceEquals(publication, complete.Signatures),
             "Canceled property records adopted a partial metadata draft.");
 
         using (var cancellation = new CancellationTokenSource()) {
@@ -118,7 +115,7 @@ internal static class CancellationChecks {
             Cancel(() => new CodeFlow(complete, abi, cancellation.Token));
         }
 
-        Assert(ReferenceEquals(publication, complete.Metadata.SignatureBuilder.Publish()),
+        Assert(ReferenceEquals(publication, complete.Signatures),
             "Canceled late function preparation altered the existing metadata namespace.");
         Assert(new PropertyProjections(complete, abi).ProjectionEntries.Length != 0,
             "Property preparation could not retry after cancellation.");

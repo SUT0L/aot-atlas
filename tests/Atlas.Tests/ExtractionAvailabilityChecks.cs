@@ -180,8 +180,7 @@ internal static class ExtractionAvailabilityChecks {
         var image = new PeImage(bytes);
         var header = ReadyToRun.Read(image);
         var section = header.Find(RtrSectionId.EmbeddedMetadata);
-        var metadata = new Metadata(image.FileMemory(section.Start, checked((int)section.Length)),
-            header.MetadataHandleBits, header.Major < 10);
+        var metadata = MetadataBuilder.FromImage(image, header);
         metadata.ReadDefinitions();
 
         var fixups = RuntimeTables.Fixups(image, header.Find(RtrSectionId.CommonFixupsTable));
@@ -192,8 +191,8 @@ internal static class ExtractionAvailabilityChecks {
     }
 
     private static void CompareIndependent(Extraction healthy, Extraction damaged) {
-        Assert(damaged.Metadata.Types.Count == healthy.Metadata.Types.Count, "Metadata definitions changed.");
-        Assert(damaged.Metadata.Methods.Count == healthy.Metadata.Methods.Count, "Metadata methods changed.");
+        Assert(damaged.Metadata.Types.Length == healthy.Metadata.Types.Length, "Metadata definitions changed.");
+        Assert(damaged.Metadata.Methods.Length == healthy.Metadata.Methods.Length, "Metadata methods changed.");
         Assert(damaged.Maps.Types.Count == healthy.Maps.Types.Count, "Type map changed.");
 
         foreach (var entry in healthy.Maps.Types) {

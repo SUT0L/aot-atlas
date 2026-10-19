@@ -54,6 +54,8 @@ internal static class HeaderOutput {
         });
         writer.Write("// dictionary_signatures: ");
         writer.WriteLine(extraction.DictionarySignatureGaps.IsEmpty ? "complete" : "partial");
+        writer.Write("// metadata: ");
+        writer.WriteLine(extraction.Metadata.Bytes.IsEmpty ? "absent" : extraction.Metadata.IsComplete ? "complete" : "partial");
         writer.WriteLine("struct atlas_method_table;\n");
 
         foreach (ref readonly var name in typeNames.AsSpan()) {

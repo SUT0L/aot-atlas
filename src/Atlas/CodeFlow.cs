@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Buffers.Binary;
 using Iced.Intel;
 
 namespace Atlas;
@@ -9,7 +10,8 @@ public readonly record struct DispatchCellUse(
     ulong Definition,
     ulong Instruction,
     ulong Cell,
-    byte Register = 11);
+    byte Register = 11,
+    ulong Target = 0);
 
 public enum MemoryAccessKind : byte {
     None,
@@ -68,6 +70,7 @@ public sealed class CodeFlow {
     internal readonly List<CodeMetadataReference> MetadataReferences = new();
     internal readonly List<ulong> IndirectBranches = new();
     internal readonly List<DispatchCellUse> DispatchCellUses = new();
+    private List<DispatchCellUse>? unprovenDispatchCellUses;
 
     public ReadOnlySpan<ulong> FunctionEntrypoints => Entrypoints;
     public ReadOnlySpan<CodeEdge> CallEdges => CollectionsMarshal.AsSpan(Calls);
@@ -78,6 +81,9 @@ public sealed class CodeFlow {
     public ReadOnlySpan<CodeMetadataReference> MetadataReferenceEntries => CollectionsMarshal.AsSpan(MetadataReferences);
     public ReadOnlySpan<ulong> IndirectBranchAddresses => CollectionsMarshal.AsSpan(IndirectBranches);
     public ReadOnlySpan<DispatchCellUse> DispatchCellUseEntries => CollectionsMarshal.AsSpan(DispatchCellUses);
+    // A zero Cell/Definition marks a proved helper with an unavailable register value.
+    public ReadOnlySpan<DispatchCellUse> UnprovenDispatchCellUseEntries => unprovenDispatchCellUses is null
+        ? [] : CollectionsMarshal.AsSpan(unprovenDispatchCellUses);
 
     public int InstructionCount { get; private set; }
     private readonly CancellationToken cancellationToken;
@@ -177,7 +183,8 @@ public sealed class CodeFlow {
         Entrypoints = entries.ToArray();
         Array.Sort(Entrypoints);
 
-        Read(extraction.Image);
+        Read(extraction.Image, extraction.DispatchCellMetadata.Layout == DispatchCellLayout.CachedMethodTableAndCode
+            ? extraction.DispatchCellMetadata : null);
 
         // Build metadata target membership before linking decoded address references.
         int targetCapacity = checked(
@@ -313,7 +320,70 @@ public sealed class CodeFlow {
         }
     }
 
-    private void Read(PeImage image) {
+    internal static bool IsIndexedDispatchHelper(PeImage image, ulong address) {
+        int sectionIndex = image.FindSection(address);
+        if (sectionIndex < 0 || !image.Sections[sectionIndex].Executable)
+            return false;
+        ref readonly var section = ref image.Sections[sectionIndex];
+        ulong offset = address - image.ImageBase - section.Rva;
+        if (offset >= (uint)section.FileSize)
+            return false;
+        var bytes = image.FileData.AsSpan(section.FileOffset + (int)offset, section.FileSize - (int)offset);
+        ReadOnlySpan<byte> cet = [0xf3, 0x0f, 0x1e, 0xfa];
+        if (bytes.StartsWith(cet)) {
+            address += 4;
+            bytes = bytes[4..];
+        }
+
+        // DispatchResolve.asm: receiver MethodTable, monomorphic cache comparison,
+        // cached code load and tail dispatch, followed by the slow-path argument spills.
+        ReadOnlySpan<byte> cache = [0x4c, 0x8b, 0x11, 0x4d, 0x39, 0x13];
+        if (bytes.Length < 34 || !bytes.StartsWith(cache))
+            return false;
+        int next;
+        long miss;
+        if (bytes[6] == 0x75) {
+            next = 8;
+            miss = next + unchecked((sbyte)bytes[7]);
+        } else if (bytes[6] == 0x0f && bytes[7] == 0x85) {
+            next = 12;
+            miss = next + (long)BinaryPrimitives.ReadInt32LittleEndian(bytes[8..]);
+        } else {
+            return false;
+        }
+        ReadOnlySpan<byte> cachedCode = [0x49, 0x8b, 0x43, 0x08];
+        if (!bytes[next..].StartsWith(cachedCode))
+            return false;
+        next += cachedCode.Length;
+        if (bytes[next] == 0xff && bytes[next + 1] == 0xe0) {
+            next += 2;
+        } else if (bytes[next] == 0xff && bytes[next + 1] == 0x25) {
+            long pointer = (long)address + next + 6 + BinaryPrimitives.ReadInt32LittleEndian(bytes[(next + 2)..]);
+            if (pointer < 0)
+                return false;
+            int pointerSection = image.FindSection((ulong)pointer);
+            if (pointerSection < 0)
+                return false;
+            ref readonly var storage = ref image.Sections[pointerSection];
+            ulong pointerOffset = (ulong)pointer - image.ImageBase - storage.Rva;
+            if (storage.VirtualSize - pointerOffset < 8)
+                return false;
+            next += 6;
+        } else {
+            return false;
+        }
+        ReadOnlySpan<byte> spills = [
+            0x48, 0x89, 0x4c, 0x24, 0x08,
+            0x48, 0x89, 0x54, 0x24, 0x10,
+            0x4c, 0x89, 0x44, 0x24, 0x18,
+            0x4c, 0x89, 0x4c, 0x24, 0x20
+        ];
+        return miss == next && bytes[next..].StartsWith(spills);
+    }
+
+    private void Read(PeImage image, DispatchCellMetadata? dispatchMetadata = null) {
+        Dictionary<ulong, bool>? dispatchHelpers = dispatchMetadata is null ? null : new();
+        ulong dispatchCodeOffset = dispatchMetadata is null ? 0UL : 8UL;
         var readers = new ByteArrayCodeReader[image.Sections.Length];
         var decoders = new Decoder[image.Sections.Length];
         var visited = new uint[image.Sections.Length][];
@@ -393,13 +463,29 @@ public sealed class CodeFlow {
                 seen[position >> 5] |= bit;
                 ++InstructionCount;
 
+                if (dispatchMetadata is not null
+                    && instruction.FlowControl is FlowControl.Call or FlowControl.UnconditionalBranch
+                    && instruction.Op0Kind == OpKind.NearBranch64) {
+                    ulong target = instruction.NearBranchTarget;
+                    ref bool helper = ref CollectionsMarshal.GetValueRefOrAddDefault(dispatchHelpers!, target, out bool seenHelper);
+                    if (!seenHelper)
+                        helper = IsIndexedDispatchHelper(image, target);
+                    if (helper && dispatchCells[1] != 0) {
+                        DispatchCellUses.Add(new(dispatchDefinitions[1], instruction.IP, dispatchCells[1], 11, target));
+                    } else if (helper) {
+                        (unprovenDispatchCellUses ??= new()).Add(new(0, instruction.IP, 0, 11, target));
+                    } else if (dispatchCells[1] != 0 && dispatchMetadata.Find(dispatchCells[1]) >= 0) {
+                        (unprovenDispatchCellUses ??= new()).Add(new(dispatchDefinitions[1], instruction.IP, dispatchCells[1], 11, target));
+                    }
+                }
+
                 int dispatchRegister = instruction.MemoryBase - Register.R10;
                 if ((uint)dispatchRegister < 2
                     && dispatchCells[dispatchRegister] != 0
                     && instruction.FlowControl is FlowControl.IndirectCall or FlowControl.IndirectBranch
                     && instruction.Op0Kind == OpKind.Memory
                     && instruction.MemoryIndex == Register.None
-                    && instruction.MemoryDisplacement64 == 0
+                    && instruction.MemoryDisplacement64 == dispatchCodeOffset
                     && instruction.SegmentPrefix is not (Register.FS or Register.GS)) {
                     DispatchCellUses.Add(new DispatchCellUse(
                         dispatchDefinitions[dispatchRegister],
@@ -596,19 +682,29 @@ public sealed class CodeFlow {
         ReceiverAccesses.RemoveRange(accessCount, ReceiverAccesses.Count - accessCount);
         ReceiverAccesses.Sort(static (a, b) => a.Instruction.CompareTo(b.Instruction));
 
-        int useCount = 0;
+        RemoveJoinedDispatchUses(DispatchCellUses, preserveHelperCalls: true);
+        if (unprovenDispatchCellUses is not null)
+            RemoveJoinedDispatchUses(unprovenDispatchCellUses, preserveHelperCalls: false);
 
-        for (int i = 0; i < DispatchCellUses.Count; ++i) {
-            var use = DispatchCellUses[i];
-            int join = joins.BinarySearch(use.Definition + 1);
-            if (join < 0)
-                join = ~join;
-
-            if (join == joins.Count || joins[join] > use.Instruction)
-                DispatchCellUses[useCount++] = use;
+        void RemoveJoinedDispatchUses(List<DispatchCellUse> uses, bool preserveHelperCalls) {
+            int count = 0;
+            for (int i = 0; i < uses.Count; ++i) {
+                var use = uses[i];
+                if (use.Cell == 0) {
+                    uses[count++] = use;
+                    continue;
+                }
+                int join = joins.BinarySearch(use.Definition + 1);
+                if (join < 0)
+                    join = ~join;
+                if (join == joins.Count || joins[join] > use.Instruction) {
+                    uses[count++] = use;
+                } else if (preserveHelperCalls && use.Target != 0) {
+                    (unprovenDispatchCellUses ??= new()).Add(new(0, use.Instruction, 0, 11, use.Target));
+                }
+            }
+            uses.RemoveRange(count, uses.Count - count);
+            uses.Sort(static (left, right) => left.Instruction.CompareTo(right.Instruction));
         }
-
-        DispatchCellUses.RemoveRange(useCount, DispatchCellUses.Count - useCount);
-        DispatchCellUses.Sort(static (left, right) => left.Instruction.CompareTo(right.Instruction));
     }
 }

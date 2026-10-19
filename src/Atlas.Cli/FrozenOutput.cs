@@ -11,7 +11,7 @@ internal static class FrozenOutput {
 
         json.WriteStartObject();
         json.WriteString("input_sha256", inputSha256);
-        ExtractionStatusOutput.Write(json, extraction.Stages, extraction.DictionarySignatureGaps);
+        ExtractionStatusOutput.Write(json, extraction);
         json.WriteNumber("region_start", frozen.Start);
         json.WriteNumber("region_length", frozen.Data.Length);
         json.WriteString("region_storage", frozen.Data.IsEmpty

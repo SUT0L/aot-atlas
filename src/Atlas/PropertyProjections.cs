@@ -92,45 +92,20 @@ public sealed class PropertyProjections {
 
     private readonly record struct SlotProperty(int Contract, ushort Slot, int Accessor);
 
-    public PropertyProjections(Extraction extraction, ManagedAbi abi, CancellationToken cancellationToken = default)
-        : this(extraction, abi, null, cancellationToken, ownsMetadataDraft: false) {
-    }
-
     public PropertyProjections(
         Extraction extraction,
         ManagedAbi abi,
-        MetadataMembers? members,
-        CancellationToken cancellationToken = default)
-        : this(extraction, abi, members, cancellationToken, ownsMetadataDraft: false) {
-    }
-
-    internal PropertyProjections(
-        Extraction extraction,
-        ManagedAbi abi,
-        MetadataMembers? members,
-        CancellationToken cancellationToken,
-        bool ownsMetadataDraft) {
+        CancellationToken cancellationToken = default) {
         cancellationToken.ThrowIfCancellationRequested();
         if (!abi.IsFrom(extraction))
             throw new ArgumentException("The ABI belongs to a different extraction.", nameof(abi));
 
-        members?.ValidateOwner(extraction.Metadata);
         this.extraction = extraction;
         this.cancellationToken = cancellationToken;
-        metadata = ownsMetadataDraft ? extraction.Metadata : extraction.Metadata.WorkingCopy();
-
-        Members = members ?? new MetadataMembers(metadata, cancellationToken, ownsMetadataDraft: true);
-
-        foreach (var accessor in Members.Accessors) {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            var method = metadata.Methods[metadata.ReadMethod(accessor.Method)];
-            if (method.Signature == 0)
-                metadata.MethodSignature(method.SignatureOffset);
-        }
-
-        Signatures = metadata.SignatureBuilder.Publish();
-        bindings = extraction.Bindings.WithSignatures(Signatures);
+        metadata = extraction.Metadata;
+        Members = metadata.Members;
+        Signatures = metadata.PublishedSignatures;
+        bindings = extraction.Bindings;
 
         scanner = new PropertyAccessCode(extraction.Image);
 
@@ -170,7 +145,9 @@ public sealed class PropertyProjections {
             int start = accessors.Count;
 
             for (int p = type.Properties.Start; p < type.Properties.End; ++p) {
-                var property = Members.Properties[metadata.Handles[p]];
+                if (!Members.Properties.TryGetValue(metadata.Handles[p], out var property)) {
+                    continue;
+                }
 
                 for (int a = property.Accessors.Start; a < property.Accessors.End; ++a) {
                     var entry = Members.Accessors[a];
@@ -364,13 +341,11 @@ public sealed class PropertyProjections {
 
         Functions = PropertyFunctions.Bind(extraction, abi, this, accessorSlots);
         cancellationToken.ThrowIfCancellationRequested();
-        if (!ownsMetadataDraft)
-            extraction.Metadata.Adopt(metadata);
     }
 
     private int FindAccessor(int owner, uint method, string name, int signature) {
         uint definition = definitions[owner];
-        if (definition == 0) {
+        if (definition == 0 || signature == 0) {
             return 0;
         }
 
@@ -388,10 +363,9 @@ public sealed class PropertyProjections {
 
         for (int i = range.Start; i < range.End; ++i) {
             var candidate = metadata.Methods[metadata.ReadMethod(accessors[i].Method)];
-            int candidateSignature = candidate.Signature != 0
-                ? candidate.Signature
-                : metadata.MethodSignature(candidate.SignatureOffset);
-            if (candidate.Name != name || !SameSignature(owner, signature, candidateSignature)) {
+            if (candidate.Signature == 0
+                || candidate.Name != name
+                || !SameSignature(owner, signature, candidate.Signature)) {
                 continue;
             }
 
@@ -486,8 +460,12 @@ public sealed class PropertyProjections {
         PropertyOrigin origin) {
         var property = Members.Properties[accessor.Property];
         var method = metadata.Methods[metadata.ReadMethod(accessor.Method)];
-        int index = method.Signature != 0 ? method.Signature : metadata.MethodSignature(method.SignatureOffset);
-        var signature = Signatures.Methods[index];
+        if (method.Signature == 0) {
+            ++Rejected[(int)PropertyRejection.UnsupportedAbi];
+            return;
+        }
+
+        var signature = Signatures.Methods[method.Signature];
 
         bool setter = accessor.Semantics == 1;
         bool valid = accessor.Semantics is 1 or 2

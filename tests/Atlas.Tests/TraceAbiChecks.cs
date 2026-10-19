@@ -7,9 +7,7 @@ internal static class TraceAbiChecks {
         var header = ReadyToRun.Read(image);
 
         var section = header.Find(313);
-        var metadata = new Metadata(
-            image.FileMemory(section.Start, checked((int)section.Length)),
-            header.MetadataHandleBits, header.Major < 10);
+        var metadata = MetadataBuilder.FromImage(image, header);
         metadata.ReadDefinitions();
 
         var fixups = RuntimeTables.Fixups(image, header.Find(308));
@@ -17,8 +15,8 @@ internal static class TraceAbiChecks {
         maps.Read(image, header, metadata, fixups, MapFormat.Auto);
 
         var extraction = new Extraction(image, header, metadata, maps, fixups);
-        var abi = new ManagedAbi(extraction, extraction.Metadata.SignatureBuilder.Publish());
-        var signatures = metadata.SignatureBuilder;
+        var abi = new ManagedAbi(extraction, extraction.Signatures);
+        var signatures = SignatureBuilder.FromSnapshot(extraction.Signatures);
 
         var audit = new List<string>();
         var accepted = new Dictionary<string, int>();
@@ -152,15 +150,14 @@ internal static class TraceAbiChecks {
                     break;
             }
 
+            changedTrace.Signature = signatures.AddMethod(changedSignature);
             extraction.Traces.Methods[traceIndex] = changedTrace;
-            signatures.SetMethod(originalTrace.Signature, changedSignature);
 
             try {
-                var changed = new ManagedAbi(extraction, extraction.Metadata.SignatureBuilder.Publish());
+                var changed = new ManagedAbi(extraction, signatures.Publish());
                 Assert(changed.Methods[accepted["Signed"]].Status == expected, $"Mutation {mutation} accepted.");
             } finally {
                 extraction.Traces.Methods[traceIndex] = originalTrace;
-                signatures.SetMethod(originalTrace.Signature, originalSignature);
             }
         }
 

@@ -56,7 +56,7 @@ public sealed class Signatures {
     private readonly SignatureNode[] nodes;
     private readonly int[] edges;
     private readonly MethodSignature[] methods;
-    private bool hasAbbreviatedReferences;
+    private readonly bool hasAbbreviatedReferences;
 
     internal Signatures(
         SignatureHistory history,
@@ -68,7 +68,8 @@ public sealed class Signatures {
         this.nodes = nodes;
         this.edges = edges;
         this.methods = methods;
-        this.hasAbbreviatedReferences = hasAbbreviatedReferences;
+        this.hasAbbreviatedReferences = hasAbbreviatedReferences
+            || SignatureDisplayBounds.RequiresReferences(nodes, edges, methods);
     }
 
     internal bool SharesOrigin(Signatures other) => ReferenceEquals(history, other.history);
@@ -198,13 +199,7 @@ public sealed class Signatures {
         int index,
         ReadOnlySpan<string> typeArguments = default,
         ReadOnlySpan<string> methodArguments = default) {
-        bool complete = SignatureRendering.AppendType(
-            builder, index, Nodes, Edges, Methods, typeArguments, methodArguments);
-
-        if (!complete)
-            hasAbbreviatedReferences = true;
-
-        return complete;
+        return SignatureRendering.AppendType(builder, index, Nodes, Edges, Methods, typeArguments, methodArguments);
     }
 
     internal bool AppendMethodWithStatus(
@@ -212,13 +207,7 @@ public sealed class Signatures {
         int index,
         ReadOnlySpan<string> typeArguments = default,
         ReadOnlySpan<string> methodArguments = default) {
-        bool complete = SignatureRendering.AppendMethod(
-            builder, index, Nodes, Edges, Methods, typeArguments, methodArguments);
-
-        if (!complete)
-            hasAbbreviatedReferences = true;
-
-        return complete;
+        return SignatureRendering.AppendMethod(builder, index, Nodes, Edges, Methods, typeArguments, methodArguments);
     }
 }
 
@@ -390,7 +379,7 @@ internal static class SignatureRendering {
 
                 case SignatureKind.Named:
                 case SignatureKind.ParameterName:
-                    return Text(node.Name);
+                    return node.Name is not null && Text(node.Name);
 
                 case SignatureKind.RuntimeType:
                     return Text("mt_ref_") && Text(node.TypeAddress.ToString("X"));

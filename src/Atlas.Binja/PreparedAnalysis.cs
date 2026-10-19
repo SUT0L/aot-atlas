@@ -14,25 +14,34 @@ internal sealed class PreparedAnalysis {
     internal NativeStrings Strings => Products.Strings!;
     internal ReadOnlySpan<CodeEdge> StringReferences => Products.StringReferences;
 
+    internal static PreparedAnalysis Read(PeImage image, MapFormat mapFormat = MapFormat.Auto,
+        CancellationToken cancellationToken = default) =>
+        new(AnalysisProducts.Read(image, mapFormat: mapFormat, cancellationToken: cancellationToken), cancellationToken);
+
     internal PreparedAnalysis(
         PeImage image,
         ReadyToRun header,
-        Metadata metadata,
+        MetadataBuilder metadata,
         ReflectionMaps maps,
         ulong[] fixups,
-        CancellationToken cancellationToken = default) {
-        Products = new AnalysisProducts(image, header, metadata, maps, fixups,
-            cancellationToken: cancellationToken);
-        metadata = Extraction.Metadata;
+        CancellationToken cancellationToken = default)
+        : this(new AnalysisProducts(image, header, metadata, maps, fixups,
+            cancellationToken: cancellationToken), cancellationToken) {
+    }
+
+    private PreparedAnalysis(AnalysisProducts products, CancellationToken cancellationToken) {
+        cancellationToken.ThrowIfCancellationRequested();
+        Products = products;
+        var snapshot = Extraction.Metadata;
 
         // All graph consumers are checked before the host receives any publication.
-        ValidateSignatures(metadata, Extraction.Signatures);
-        ValidateSignatures(metadata, Extraction.Bindings.Signatures);
+        ValidateSignatures(snapshot, Extraction.Signatures);
+        ValidateSignatures(snapshot, Extraction.Bindings.Signatures);
         if (ManagedAbi is not null)
-            ValidateSignatures(metadata, ManagedAbi.Signatures);
+            ValidateSignatures(snapshot, ManagedAbi.Signatures);
 
         if (Properties is not null)
-            ValidateSignatures(metadata, Properties.Signatures);
+            ValidateSignatures(snapshot, Properties.Signatures);
 
         if (Code is not null && Code.Context.Origins.Text.Span.Contains('\0'))
             throw new InvalidDataException("A contextual function name contains a NUL and cant be represented by a native symbol.");
@@ -44,7 +53,7 @@ internal sealed class PreparedAnalysis {
     }
 
     internal static void ValidateSignatures(Metadata metadata, Signatures signatures) {
-        if (!metadata.SignatureBuilder.Owns(signatures))
+        if (!ReferenceEquals(metadata.PublishedSignatures, signatures))
             throw new ArgumentException("The published signature graph belongs to different metadata.", nameof(signatures));
     }
 }

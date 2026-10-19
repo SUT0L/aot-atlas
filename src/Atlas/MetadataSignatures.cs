@@ -1,408 +1,290 @@
-using System.Runtime.InteropServices;
-
 namespace Atlas;
 
-public sealed partial class Metadata {
-    internal SignatureBuilder SignatureBuilder => state.Signatures;
-    public Signatures PublishedSignatures => SignatureBuilder.Publish();
-
-    private Dictionary<uint, int> signatureIndex => state.SignatureIndex;
-    private Dictionary<uint, int> methodSignatureIndex => state.MethodSignatureIndex;
-
-    private Dictionary<uint, (string Name, uint Scope)> referenceNames => state.ReferenceNames;
-    private Dictionary<uint, string> otherDefinitionNames => state.OtherDefinitionNames;
+internal sealed partial class MetadataBuilder {
     private readonly HashSet<uint> activeNames = new();
+    private readonly HashSet<uint> activeTypeSignatures = new();
+    private readonly HashSet<uint> activeMethodSignatures = new();
+    private readonly List<(bool Method, uint Value)> addedSignatures = new();
+    private readonly Dictionary<uint, string> failedMethodSignatures = new();
+    private bool readingSignatures;
 
-    public string DefinitionName(uint offset, int depth = 0) {
-        if (TypeIndex.TryGetValue(offset, out int index))
-            return Types[index].Name;
-
-        if (otherDefinitionNames.TryGetValue(offset, out string? cached))
+    internal string DefinitionName(uint offset, int depth = 0) {
+        if (DefinitionNames.TryGetValue(offset, out string? cached))
             return cached;
-
-        if (depth > 256 || !activeNames.Add((offset << HandleBits) | 0x3A))
+        var id = Id(MetadataRecordKind.TypeDefinition, offset);
+        if (depth > 256 || !activeNames.Add(id.Value))
             throw new InvalidDataException("Cyclic or excessively nested type definition.");
-
         try {
-            var reader = Reader(offset);
-            reader.Unsigned();
-            reader.Unsigned();
-
-            uint ns = reader.Unsigned();
-            string name = String(reader.Unsigned());
-
-            reader.Unsigned();
-            reader.Unsigned();
-            uint enclosing = reader.Unsigned();
-
-            string prefix = enclosing != 0
-                ? DefinitionName(enclosing, depth + 1)
-                : NamespaceName(ns, depth + 1);
-            string result = prefix.Length == 0
-                ? name
-                : prefix + (enclosing != 0 ? "+" : ".") + name;
-
+            var owner = TypeOwnership(id);
+            string name = Name(id);
+            string prefix = owner.Enclosing != 0
+                ? DefinitionName(owner.Enclosing, depth + 1)
+                : NamespaceName(owner.Namespace, depth + 1);
+            string result = prefix.Length == 0 ? name : prefix + (owner.Enclosing != 0 ? "+" : ".") + name;
             if (name.Length == 0)
-                throw new InvalidDataException("Type definition has no name.");
-
-            otherDefinitionNames.Add(offset, result);
-
+                throw new InvalidDataException("Type definition has no available name.");
+            DefinitionNames.Add(offset, result);
             return result;
         } finally {
-            activeNames.Remove((offset << HandleBits) | 0x3A);
+            activeNames.Remove(id.Value);
         }
     }
 
     private string NamespaceName(uint offset, int depth) {
         if (offset == 0)
             return "";
-
         if (namespaces.TryGetValue(offset, out var known))
             return known.Name;
-
-        if (depth > 256 || !activeNames.Add((offset << HandleBits) | 0x2F))
+        var id = Id(MetadataRecordKind.NamespaceDefinition, offset);
+        if (depth > 256 || !activeNames.Add(id.Value))
             throw new InvalidDataException("Cyclic or excessively nested namespace definition.");
-
         try {
-            var reader = Reader(offset);
-            uint parent = reader.Unsigned();
-            string name = String(reader.Unsigned());
+            var parent = Reference(id, MetadataFieldName.ParentScopeOrNamespace);
+            if (parent.IsNil) {
+                throw new InvalidDataException("Namespace has a nil parent.");
+            }
 
-            int kind = (int)(parent & ((1U << HandleBits) - 1));
-            uint parentOffset = parent >> HandleBits;
-
+            string name = String(Offset(id, MetadataFieldName.Name));
             string prefix;
             uint scope;
-
-            if (kind == 0x38) {
-                if (!scopeIndex.ContainsKey(parentOffset))
-                    throw new InvalidDataException("Namespace refers to an unknown assembly scope.");
-
+            if (parent.Kind == MetadataRecordKind.ScopeDefinition) {
                 prefix = "";
-                scope = parentOffset;
-            } else if (kind == 0x2F) {
-                prefix = NamespaceName(parentOffset, depth + 1);
-                scope = namespaces[parentOffset].Scope;
+                scope = parent.Offset;
+            } else if (parent.Kind == MetadataRecordKind.NamespaceDefinition) {
+                prefix = NamespaceName(parent.Offset, depth + 1);
+                scope = namespaces[parent.Offset].Scope;
             } else
                 throw new InvalidDataException("Namespace has an invalid parent kind.");
-
-            string full = prefix.Length != 0 && name.Length != 0
-                ? prefix + "." + name
-                : prefix + name;
-
+            string full = prefix.Length != 0 && name.Length != 0 ? prefix + "." + name : prefix + name;
             namespaces.Add(offset, (scope, full));
-
             return full;
         } finally {
-            activeNames.Remove((offset << HandleBits) | 0x2F);
+            activeNames.Remove(id.Value);
         }
     }
 
     private (string Name, uint Scope) ReferenceIdentity(uint raw, int depth) {
-        if (referenceNames.TryGetValue(raw, out var identity))
-            return identity;
-
-        if (depth > 256 || !activeNames.Add(raw))
+        if (referenceNames.TryGetValue(raw, out var known))
+            return known;
+        var id = Decode(raw);
+        if (depth > 256 || !activeNames.Add(id.Value))
             throw new InvalidDataException("Cyclic or excessively nested metadata reference.");
-
         try {
-            int kind = (int)(raw & ((1U << HandleBits) - 1));
-            var reader = Reader(raw >> HandleBits);
+            var parent = id.Kind == MetadataRecordKind.NamespaceReference
+                ? Reference(id, MetadataFieldName.ParentScopeOrNamespace)
+                : ReferenceOwner(id);
+            string part = String(Offset(id, id.Kind == MetadataRecordKind.TypeReference
+                ? MetadataFieldName.TypeName : MetadataFieldName.Name));
+            if (id.Kind == MetadataRecordKind.TypeReference && part.Length == 0) {
+                throw new InvalidDataException("Type reference has no available name.");
+            }
 
-            uint parent = reader.Unsigned();
-            string part = String(reader.Unsigned());
-
-            int parentKind = (int)(parent & ((1U << HandleBits) - 1));
             string prefix;
             uint scope;
-
-            if (kind == 0x30 && parentKind == 0x39) {
-                ReadScopeReference(parent >> HandleBits);
+            if (id.Kind == MetadataRecordKind.NamespaceReference && parent.Kind == MetadataRecordKind.ScopeReference) {
+                ReadScopeReference(parent.Offset);
                 prefix = "";
-                scope = parent;
-            } else if ((kind == 0x30 && parentKind == 0x30)
-                || (kind == 0x3D && parentKind is 0x30 or 0x3D)) {
-                var parentIdentity = ReferenceIdentity(parent, depth + 1);
-                prefix = parentIdentity.Name;
-                scope = parentIdentity.Scope;
+                scope = Raw(parent);
+            } else if ((id.Kind == MetadataRecordKind.NamespaceReference && parent.Kind == MetadataRecordKind.NamespaceReference)
+                || (id.Kind == MetadataRecordKind.TypeReference && parent.Kind is MetadataRecordKind.NamespaceReference or MetadataRecordKind.TypeReference)) {
+                var owner = ReferenceIdentity(Raw(parent), depth + 1);
+                prefix = owner.Name;
+                scope = owner.Scope;
             } else
-                throw new InvalidDataException($"Invalid metadata reference parent 0x{parentKind:X} for 0x{kind:X}.");
-
-            string name = prefix.Length == 0
-                ? part
-                : part.Length == 0
-                    ? prefix
-                    : prefix + (parentKind == 0x3D ? "+" : ".") + part;
-
+                throw new InvalidDataException($"Invalid metadata reference parent {parent.Kind} for {id.Kind}.");
+            string name = prefix.Length == 0 ? part : part.Length == 0 ? prefix
+                : prefix + (parent.Kind == MetadataRecordKind.TypeReference ? "+" : ".") + part;
             referenceNames.Add(raw, (name, scope));
-
             return (name, scope);
         } finally {
-            activeNames.Remove(raw);
+            activeNames.Remove(id.Value);
         }
     }
 
-    private IndexRange SignatureCollection(
-        ref NativeReader reader,
-        int depth,
-        bool dimensions = false) {
-        int count = checked((int)reader.Unsigned());
-
-        if (count > reader.Remaining)
-            throw new InvalidDataException("Signature collection exceeds the metadata blob.");
-
+    private IndexRange SignatureCollection(MetadataRecordId id, MetadataFieldName field, int depth, bool dimensions = false) {
+        var items = RecordField(id, field).Items;
+        if (items.Status != MetadataFactStatus.Valid)
+            throw new InvalidDataException($"Signature {field} collection is partial ({items.Status}).");
         int start = SignatureBuilder.Edges.Length;
-
-        // Child resolution may append more edges; indices keep the reserved argument range stable across those appends and any buffer growth
-        SignatureBuilder.ReserveEdges(count);
-
-        for (int i = 0; i < count; ++i)
-            SignatureBuilder.SetEdge(
-                start + i,
-                dimensions ? reader.Signed() : TypeSignature(reader.Unsigned(), depth + 1));
-
-        return new IndexRange(start, count);
+        SignatureBuilder.ReserveEdges(items.Count);
+        for (int i = 0; i < items.Count; i++) {
+            int value = dimensions ? Required(items[i].Int32, id, field)
+                : TypeSignature(Raw(Required(items[i].Reference, id, field)), depth + 1);
+            SignatureBuilder.SetEdge(start + i, value);
+        }
+        return new(start, items.Count);
     }
 
-    // Completed caches never contain recursion sentinels. A failed root read
-    // discards its graph and cache additions, preserving every previously published ID.
-    private readonly HashSet<uint> activeTypeSignatures = new();
-    private readonly HashSet<uint> activeMethodSignatures = new();
-    private readonly List<(bool Method, uint Value)> addedSignatures = new();
-    private int signatureOperations;
-
-    private bool readingSignatures;
-    private SignatureBuilder.Checkpoint signatureStart;
-
-    internal int TypeSignature(uint raw, int depth = 0) => ReadSignature(raw, depth, method: false);
-    internal int MethodSignature(uint offset, int depth = 0) => ReadSignature(offset, depth, method: true);
-
-    public SignatureType ReadTypeSignature(uint handle) {
-        if (signatureIndex.TryGetValue(handle, out int cached))
-            return SignatureBuilder.Publish().Types[cached];
-
-        using var operation = new SignatureOperation(this);
-
+    internal int TypeSignature(uint raw, int depth = 0) => ReadSignature(raw, depth, false);
+    internal int MethodSignature(uint offset, int depth = 0) => ReadSignature(offset, depth, true);
+    internal bool TryMethodSignature(uint offset, out int signature) {
+        signature = 0;
+        if (offset == 0 || failedMethodSignatures.ContainsKey(offset))
+            return false;
         try {
-            int index = TypeSignature(handle);
-            return SignatureBuilder.Publish().Types[index];
-        } catch {
-            operation.Rollback();
-            throw;
+            signature = MethodSignature(offset);
+            return true;
+        } catch (Exception error) when (error is InvalidDataException or OverflowException or NotSupportedException) {
+            return false;
         }
     }
-
-    public SignatureMethod ReadMethodSignature(uint offset) {
-        if (methodSignatureIndex.TryGetValue(offset, out int cached))
-            return SignatureBuilder.Publish().MethodSignatures[cached];
-
-        using var operation = new SignatureOperation(this);
-
-        try {
-            int index = MethodSignature(offset);
-            return SignatureBuilder.Publish().MethodSignatures[index];
-        } catch {
-            operation.Rollback();
-            throw;
-        }
+    internal SignatureType ReadTypeSignature(uint handle) {
+        int index = TypeSignature(handle);
+        return SignatureBuilder.Publish().Types[index];
+    }
+    internal SignatureMethod ReadMethodSignature(uint offset) {
+        int index = MethodSignature(offset);
+        return SignatureBuilder.Publish().MethodSignatures[index];
     }
 
     private int ReadSignature(uint value, int depth, bool method) {
-        if (method ? value == 0 : (value >> HandleBits) == 0)
+        EnsureMutable();
+        if (method ? value == 0 : value >> HandleBits == 0)
             return 0;
+        if (depth > 256)
+            throw new InvalidDataException("Signature nesting exceeds 256 records.");
+        var cache = method ? MethodSignatureIndex : SignatureIndex;
+        if (cache.TryGetValue(value, out int cached))
+            return cached;
+        if (method && failedMethodSignatures.TryGetValue(value, out string? failure))
+            throw new InvalidDataException(failure);
+        if (readingSignatures) {
+            return ProjectSignature(value, depth, method);
+        }
 
-        if (!method && depth > 256)
-            throw new NotSupportedException("Type signature exceeds the supported nesting depth of 256.");
-
-        var cache = method ? methodSignatureIndex : signatureIndex;
-
-        if (cache.TryGetValue(value, out int index))
-            return index;
-
-        var active = method ? activeMethodSignatures : activeTypeSignatures;
-        bool root = !readingSignatures;
-        int signatureChanges = addedSignatures.Count;
-
-        bool started = false;
-        bool activeAdded = false;
+        var signatureStart = SignatureBuilder.BeginRead();
+        readingSignatures = true;
         bool complete = false;
-
         try {
-            if (root) {
-                signatureStart = SignatureBuilder.BeginRead();
-                readingSignatures = true;
-                started = true;
-            }
-
-            if (!(activeAdded = active.Add(value)))
-                throw new InvalidDataException(method ? "Cyclic method signature." : "Cyclic type signature.");
-
-            index = method ? ReadMethodSignature(value, depth) : ReadTypeSignature(value, depth);
-
-            addedSignatures.Add((method, value));
-            cache.Add(value, index);
+            int index = ProjectSignature(value, depth, method);
             complete = true;
-
             return index;
-        } finally {
-            if (activeAdded)
-                active.Remove(value);
-
-            if (root && started) {
-                if (!complete) {
-                    SignatureBuilder.RollbackRead(signatureStart);
-
-                    RemoveSignatureChanges(signatureChanges);
-                } else {
-                    SignatureBuilder.CompleteRead(signatureStart);
-                }
-
-                readingSignatures = false;
-
-                if (signatureOperations == 0)
-                    ClearSignatureChanges();
+        } catch (Exception error) when (error is InvalidDataException or OverflowException or NotSupportedException) {
+            if (method && depth == 0) {
+                failedMethodSignatures.TryAdd(value, error.Message);
+                if (value <= 0x01FFFFFF)
+                    RecordFailure(Raw(Id(MetadataRecordKind.MethodSignature, value)), "method signature", error);
             }
+            throw;
+        } finally {
+            if (complete) {
+                SignatureBuilder.CompleteRead(signatureStart);
+            } else {
+                SignatureBuilder.RollbackRead(signatureStart);
+                foreach (var added in addedSignatures) {
+                    (added.Method ? MethodSignatureIndex : SignatureIndex).Remove(added.Value);
+                }
+            }
+            addedSignatures.Clear();
+            readingSignatures = false;
         }
     }
 
-    private int ReadTypeSignature(uint raw, int depth) {
-        int kind = (int)(raw & ((1U << HandleBits) - 1));
-        uint offset = raw >> HandleBits;
-        var reader = Reader(offset);
+    private int ProjectSignature(uint value, int depth, bool method) {
+        var active = method ? activeMethodSignatures : activeTypeSignatures;
+        if (!active.Add(value)) {
+            throw new InvalidDataException(method ? "Cyclic method signature." : "Cyclic type signature.");
+        }
 
+        try {
+            int index = method ? ProjectMethodSignature(value, depth) : ProjectTypeSignature(value, depth);
+            addedSignatures.Add((method, value));
+            (method ? MethodSignatureIndex : SignatureIndex).Add(value, index);
+            return index;
+        } finally {
+            active.Remove(value);
+        }
+    }
+
+    private int ProjectTypeSignature(uint raw, int depth) {
+        var id = Decode(raw);
+        AddRoot(id);
         SignatureNode node = new();
-        int index = -1;
-
-        switch (kind) {
-            case 0x3A:
+        switch (id.Kind) {
+            case MetadataRecordKind.TypeDefinition:
                 node.Kind = SignatureKind.Named;
-                node.Name = DefinitionName(offset);
-                uint scope = DefinitionScope(offset);
-                node.MetadataScope = scope == 0 ? 0 : checked(scope << HandleBits) | 0x38;
+                node.Name = DefinitionName(id.Offset);
+                uint scope = DefinitionScope(id.Offset);
+                node.MetadataScope = scope == 0 ? 0 : Raw(Id(MetadataRecordKind.ScopeDefinition, scope));
                 break;
-
-            case 0x3D:
-
-                // Stack-trace formals use parentless TypeReferences
-                // Their names identify parameters, not resolvable runtime types
-                if (reader.Unsigned() == 0) {
+            case MetadataRecordKind.TypeReference:
+                if (ReferenceOwner(id).IsNil) {
                     node.Kind = SignatureKind.ParameterName;
-                    node.Name = String(reader.Unsigned());
-
+                    node.Name = Name(id, MetadataFieldName.TypeName);
                     if (node.Name.Length == 0)
                         throw new InvalidDataException("Parentless type reference has no parameter name.");
                 } else {
-                    node.Kind = SignatureKind.Named;
                     var identity = ReferenceIdentity(raw, depth);
+                    node.Kind = SignatureKind.Named;
                     node.Name = identity.Name;
                     node.MetadataScope = identity.Scope;
                 }
-
                 break;
-
-            case 0x3F:
-            case 0x2C:
-                node.Kind = kind == 0x3F ? SignatureKind.TypeVariable : SignatureKind.MethodVariable;
-                node.Value = reader.Signed();
-
+            case MetadataRecordKind.TypeVariableSignature:
+            case MetadataRecordKind.MethodTypeVariableSignature:
+                node.Kind = id.Kind == MetadataRecordKind.TypeVariableSignature ? SignatureKind.TypeVariable : SignatureKind.MethodVariable;
+                node.Value = Int(id, MetadataFieldName.Number);
                 if (node.Value < 0)
                     throw new InvalidDataException("Negative generic variable index.");
-
                 break;
-
-            case 0x01:
+            case MetadataRecordKind.ArraySignature:
                 node.Kind = SignatureKind.Array;
-                node.Element = TypeSignature(reader.Unsigned(), depth + 1);
-                node.Value = reader.Signed();
-
+                node.Element = TypeSignature(Handle(id, MetadataFieldName.ElementType), depth + 1);
+                node.Value = Int(id, MetadataFieldName.Rank);
                 if (node.Value is < 1 or > 32)
                     throw new InvalidDataException("Array rank exceeds the runtime range 1..32.");
-
-                node.Sizes = SignatureCollection(ref reader, depth, dimensions: true);
-                node.LowerBounds = SignatureCollection(ref reader, depth, dimensions: true);
-
+                node.Sizes = SignatureCollection(id, MetadataFieldName.Sizes, depth, true);
+                node.LowerBounds = SignatureCollection(id, MetadataFieldName.LowerBounds, depth, true);
                 if (node.Sizes.Count > node.Value || node.LowerBounds.Count > node.Value)
                     throw new InvalidDataException("Array dimensions exceed its rank.");
-
                 break;
-
-            case 0x37:
-            case 0x32:
-            case 0x02:
-                node.Kind = kind == 0x37
-                    ? SignatureKind.SzArray
-                    : kind == 0x32
-                        ? SignatureKind.Pointer
-                        : SignatureKind.ByReference;
-
-                node.Element = TypeSignature(reader.Unsigned(), depth + 1);
+            case MetadataRecordKind.SZArraySignature:
+            case MetadataRecordKind.PointerSignature:
+            case MetadataRecordKind.ByReferenceSignature:
+                node.Kind = id.Kind == MetadataRecordKind.SZArraySignature ? SignatureKind.SzArray
+                    : id.Kind == MetadataRecordKind.PointerSignature ? SignatureKind.Pointer : SignatureKind.ByReference;
+                node.Element = TypeSignature(Handle(id, id.Kind == MetadataRecordKind.SZArraySignature ? MetadataFieldName.ElementType : MetadataFieldName.Type), depth + 1);
                 break;
-
-            case 0x3C:
+            case MetadataRecordKind.TypeInstantiationSignature:
                 node.Kind = SignatureKind.Instantiation;
-                node.Element = TypeSignature(reader.Unsigned(), depth + 1);
-                node.Arguments = SignatureCollection(ref reader, depth);
+                node.Element = TypeSignature(Handle(id, MetadataFieldName.GenericType), depth + 1);
+                node.Arguments = SignatureCollection(id, MetadataFieldName.GenericTypeArguments, depth);
                 break;
-
-            case 0x3E:
-                index = TypeSignature(reader.Unsigned(), depth + 1);
-                break;
-
-            case 0x2D:
+            case MetadataRecordKind.TypeSpecification:
+                return TypeSignature(Handle(id, MetadataFieldName.Signature), depth + 1);
+            case MetadataRecordKind.ModifiedType:
                 node.Kind = SignatureKind.Modified;
-                byte optional = reader.Take(1)[0];
-
-                if (optional > 1)
-                    throw new InvalidDataException("Invalid modifier optional flag.");
-
-                node.Optional = optional != 0;
-                node.Value = TypeSignature(reader.Unsigned(), depth + 1);
-                node.Element = TypeSignature(reader.Unsigned(), depth + 1);
+                node.Optional = Required(RecordField(id, MetadataFieldName.IsOptional).Boolean, id, MetadataFieldName.IsOptional);
+                node.Value = TypeSignature(Handle(id, MetadataFieldName.ModifierType), depth + 1);
+                node.Element = TypeSignature(Handle(id, MetadataFieldName.Type), depth + 1);
                 break;
-
-            case 0x25:
-                int signatureId = MethodSignature(reader.Unsigned(), depth + 1);
+            case MetadataRecordKind.FunctionPointerSignature:
+                int signatureId = MethodSignature(Offset(id, MetadataFieldName.Signature), depth + 1);
                 var signature = SignatureBuilder.Methods[signatureId];
-
                 node.Kind = SignatureKind.FunctionPointer;
                 node.Element = signature.ReturnType;
                 node.Arguments = signature.Parameters;
                 node.Varargs = signature.Varargs;
                 node.Value = checked((int)signature.CallingConvention);
                 break;
-
             default:
-                throw new InvalidDataException($"Handle kind 0x{kind:X} is not a type signature.");
+                throw new InvalidDataException($"Metadata record {id.Kind} is not a type signature.");
         }
-
-        if (index < 0) {
-            index = SignatureBuilder.Nodes.Length;
-            SignatureBuilder.AddNode(node);
-        }
-
-        return index;
+        return SignatureBuilder.AddNode(node);
     }
 
-    private int ReadMethodSignature(uint offset, int depth) {
-        var reader = Reader(offset);
-
+    private int ProjectMethodSignature(uint offset, int depth) {
+        var id = Id(MetadataRecordKind.MethodSignature, offset);
         MethodSignature signature = new() {
             Offset = offset,
-            CallingConvention = reader.Unsigned()
+            CallingConvention = UInt(id, MetadataFieldName.CallingConvention),
+            GenericParameterCount = Int(id, MetadataFieldName.GenericParameterCount),
+            ReturnType = TypeSignature(Handle(id, MetadataFieldName.ReturnType), depth + 1),
+            Parameters = SignatureCollection(id, MetadataFieldName.Parameters, depth),
+            Varargs = SignatureCollection(id, MetadataFieldName.VarArgParameters, depth)
         };
-
-        signature.GenericParameterCount = reader.Signed();
-
         if (signature.GenericParameterCount < 0)
             throw new InvalidDataException("Negative generic parameter count.");
-
-        signature.ReturnType = TypeSignature(reader.Unsigned(), depth + 1);
-        signature.Parameters = SignatureCollection(ref reader, depth);
-        signature.Varargs = SignatureCollection(ref reader, depth);
-
-        int index = SignatureBuilder.Methods.Length;
-        SignatureBuilder.AddMethod(signature);
-
-        return index;
+        return SignatureBuilder.AddMethod(signature);
     }
 }

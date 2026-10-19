@@ -25,19 +25,20 @@ public sealed partial class SignatureBuilder {
         methods = new(methodCapacity) { default };
     }
 
-    private SignatureBuilder(SignatureBuilder source, bool newOrigin) {
-        if (source.reading)
-            throw new InvalidOperationException("A signature graph cannot be forked during a record read.");
+    private SignatureBuilder(Signatures source) {
+        history = source.Origin;
+        nodes = new(source.Nodes.Length);
+        edges = new(source.Edges.Length);
+        methods = new(source.Methods.Length);
 
-        history = newOrigin ? new() : source.history;
-        nodes = new(source.nodes);
-        edges = new(source.edges);
-        methods = new(source.methods);
+        nodes.AddRange(source.Nodes);
+        edges.AddRange(source.Edges);
+        methods.AddRange(source.Methods);
         hasAbbreviatedReferences = source.HasAbbreviatedReferences;
-        published = newOrigin ? null : source.published;
+        published = source;
     }
 
-    internal SignatureBuilder Fork(bool newOrigin) => new(this, newOrigin);
+    internal static SignatureBuilder FromSnapshot(Signatures source) => new(source);
 
     public bool HasAbbreviatedReferences => hasAbbreviatedReferences
         || published is { HasAbbreviatedReferences: true };

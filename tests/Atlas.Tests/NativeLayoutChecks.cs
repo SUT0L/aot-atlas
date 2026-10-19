@@ -64,7 +64,7 @@ internal static class NativeLayoutChecks {
         var many = signatures.Methods[manySignature];
         Assert(many.Parameters.Count == 65 && many.CallingConvention == 2 && many.GenericParameterCount == 0);
 
-        var metadata = new Metadata(default, 7);
+        var metadata = new MetadataBuilder(default, 7);
         var entry = layout.MethodEntry(77, metadata, MapFormat.Legacy);
         Assert(entry.Flags == 5 && entry.Entrypoint == 0x5678 && entry.Identity.Signature == method.Signature);
         Assert(signatures.Nodes[entry.DeclaringType].TypeAddress == 0x1234);

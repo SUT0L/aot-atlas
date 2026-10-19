@@ -7,7 +7,7 @@ public readonly record struct MethodGcSlot(int Register, int StackBase, int Stac
 public readonly record struct MethodGcRange(uint Start, uint End);
 public readonly record struct MethodGcTransition(uint Offset, int Slot, bool Live, bool ChunkStart = false);
 
-// AMD64 NativeAOT GCINFO versions 2–4, as emitted by the runtime GC info encoder.
+// AMD64 NativeAOT GCINFO versions 2–5. Version 5 changes only the x86 encoding.
 public sealed class MethodGcInfo {
     public ushort Flags { get; internal set; }
     public uint CodeLength { get; internal set; }
@@ -41,7 +41,7 @@ public sealed class MethodGcInfo {
         CancellationToken cancellationToken = default) {
         cancellationToken.ThrowIfCancellationRequested();
         try {
-            if (version is < 2 or > 4)
+            if (version is < 2 or > 5)
                 throw new NotSupportedException($"Unsupported AMD64 GC info version {version}.");
 
             var result = ReadCore(data, version, cancellationToken);
@@ -60,8 +60,8 @@ public sealed class MethodGcInfo {
         };
         uint flags = result.Flags;
 
-        if (version == 4 && (flags & 0xA) != 0)
-            throw new InvalidDataException($"Reserved GCINFO v4 header flags 0x{flags & 0xA:X}.");
+        if (version >= 4 && (flags & 0xA) != 0)
+            throw new InvalidDataException($"Reserved GCINFO v{version} header flags 0x{flags & 0xA:X}.");
 
         if (version < 4)
             result.ReturnKind = (int)bits.Read(slim ? 2 : 4);

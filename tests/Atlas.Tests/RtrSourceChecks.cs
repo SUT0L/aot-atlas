@@ -14,9 +14,9 @@ internal static class RtrSourceChecks {
             var secondHeader = ReadyToRun.Read(second);
             var correct = new ResourceMap(second, secondHeader);
             Assert(correct.ResourceEntries.Length == 1 && correct.Bytes[0] == 0x22);
-            var absentMetadata = Metadata.FromImage(second, secondHeader);
+            var absentMetadata = MetadataBuilder.FromImage(second, secondHeader);
             absentMetadata.ReadDefinitions();
-            Assert(absentMetadata.Bytes.IsEmpty && absentMetadata.ScopeDefinitions.IsEmpty);
+            Assert(absentMetadata.Bytes.IsEmpty && absentMetadata.Scopes.Count == 0);
             Reject<ArgumentException>(() => _ = new ResourceMap(second, firstHeader));
 
             var clone = new PeImage((byte[])second.FileData.Clone());
@@ -26,7 +26,7 @@ internal static class RtrSourceChecks {
             changedBytes[512 + 96] = 0xCC;
             var changed = new PeImage(changedBytes);
             Assert(new ResourceMap(changed, secondHeader).Bytes[0] == 0x22);
-            Assert(new Extraction(changed, secondHeader, new Metadata(default, 7), new ReflectionMaps(), [],
+            Assert(new Extraction(changed, secondHeader, new MetadataBuilder(default, 7), new ReflectionMaps(), [],
                 ExtractionStage.Resources).Resources.Bytes[0] == 0x22);
 
             int headerLength = 16 + 2 * secondHeader.EntrySize;
@@ -38,14 +38,14 @@ internal static class RtrSourceChecks {
                 .SequenceEqual(duplicate.FileData.AsSpan(secondHeader.FileOffset, headerLength)));
             Reject<InvalidDataException>(() => _ = new ResourceMap(duplicate, secondHeader));
 
-            var metadata = new Metadata(default, 7);
+            var metadata = new MetadataBuilder(default, 7);
             var publication = metadata.PublishedSignatures;
             var maps = new ReflectionMaps();
             var memory = new RuntimeMemory(second, default);
             var unwind = new UnwindTables(second);
             var managed = new ManagedUnwind(second, unwind, null);
 
-            Reject<ArgumentException>(() => _ = Metadata.FromImage(second, firstHeader));
+            Reject<ArgumentException>(() => _ = MetadataBuilder.FromImage(second, firstHeader));
             Reject<ArgumentException>(() => _ = ReflectionMaps.Decode(second, firstHeader, metadata, []));
             Reject<ArgumentException>(() => _ = new TraceMaps(second, firstHeader, metadata, []));
             Reject<ArgumentException>(() => _ = new Extraction(second, firstHeader, metadata, maps, [],

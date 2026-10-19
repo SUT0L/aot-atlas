@@ -8,7 +8,7 @@ internal static class MarshallingOutput {
 
         json.WriteStartObject();
         json.WriteString("input_sha256", inputSha256);
-        ExtractionStatusOutput.Write(json, extraction.Stages, extraction.DictionarySignatureGaps);
+        ExtractionStatusOutput.Write(json, extraction);
         json.WriteNumber("struct_table", extraction.Header.Find(RtrSectionId.StructMarshallingStubMap).Start);
         json.WriteNumber("delegate_table", extraction.Header.Find(RtrSectionId.DelegateMarshallingStubMap).Start);
 

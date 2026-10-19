@@ -14,51 +14,42 @@ internal static class ConsumerOwnershipChecks {
 
         var image = PeFixture.Create(data, ".rdata", 0x40000040);
         var header = ReadyToRun.Read(image);
-        var metadata = new Metadata(default, 7);
-        metadata.Scopes.Add(new MetadataScope {
-            Offset = 1,
-            Name = "System.Private.CoreLib",
-            Culture = ""
-        });
-
-        var own = metadata.SignatureBuilder;
-        Populate(own, "Not.Delegate");
-        var earlier = own.Publish();
-        var traces = new TraceMaps(image, header, metadata, []);
-        traces.Methods.Add(new TraceMethod {
-            DeclaringType = 1,
-            Signature = 1,
-            Name = "InitializeClosedInstanceWithoutNullCheck",
-            Entrypoint = 0x1234
-        });
-
-        Assert(ManagedFunctionPointerConsumers.Read(metadata, traces, earlier).Length == 0,
+        var unrelated = Build("Not.Delegate");
+        Assert(ManagedFunctionPointerConsumers.Read(unrelated.Metadata, unrelated.Traces, unrelated.Graph).Length == 0,
             "A same-name method on an unrelated type became a delegate initializer.");
 
         var foreign = new SignatureBuilder();
         Populate(foreign, "System.Delegate");
-        Reject(() => ManagedFunctionPointerConsumers.Read(metadata, traces, foreign.Publish()));
+        Reject(() => ManagedFunctionPointerConsumers.Read(unrelated.Metadata, unrelated.Traces, foreign.Publish()));
 
-        var declaring = own.Nodes[1];
-        own.SetNode(1, declaring with { Name = "System.Delegate" });
-        var valid = own.Publish();
-        Assert(ManagedFunctionPointerConsumers.Read(metadata, traces, valid)
+        var valid = Build("System.Delegate");
+        Assert(ManagedFunctionPointerConsumers.Read(valid.Metadata, valid.Traces, valid.Graph)
             .SequenceEqual(new[] { new FunctionPointerConsumer(0x1234, 8) }),
             "An independently specified CoreLib delegate initializer was lost.");
+        Reject(() => ManagedFunctionPointerConsumers.Read(valid.Metadata, unrelated.Traces, valid.Graph));
 
-        var otherMetadata = new Metadata(default, 7);
-        Populate(otherMetadata.SignatureBuilder, "System.Delegate");
-        otherMetadata.Scopes.Add(metadata.Scopes[0]);
-        Reject(() => ManagedFunctionPointerConsumers.Read(
-            otherMetadata, traces, otherMetadata.SignatureBuilder.Publish()));
+        var incomplete = Build("System.Delegate", priorGraph: true);
+        Reject(() => ManagedFunctionPointerConsumers.Read(incomplete.Metadata, incomplete.Traces, incomplete.Graph));
 
-        var absent = new Metadata(default, 7);
-        var absentGraph = absent.SignatureBuilder.Publish();
-        var absentTraces = new TraceMaps(image, header, absent, []);
-        Populate(absent.SignatureBuilder, "System.Delegate");
-        absent.Scopes.Add(metadata.Scopes[0]);
-        absentTraces.Methods.Add(traces.Methods[0]);
-        Reject(() => ManagedFunctionPointerConsumers.Read(absent, absentTraces, absentGraph));
+        (Metadata Metadata, TraceMaps Traces, Signatures Graph) Build(string declaring, bool priorGraph = false) {
+            var builder = new MetadataBuilder(default, 7);
+            builder.Scopes.Add(new MetadataScope {
+                Offset = 1,
+                Name = "System.Private.CoreLib",
+                Culture = ""
+            });
+            var prior = builder.PublishedSignatures;
+            Populate(builder.SignatureBuilder, declaring);
+            var traces = new TraceMaps(image, header, builder, []);
+            traces.Methods.Add(new TraceMethod {
+                DeclaringType = 1,
+                Signature = 1,
+                Name = "InitializeClosedInstanceWithoutNullCheck",
+                Entrypoint = 0x1234
+            });
+            var snapshot = builder.Publish();
+            return (snapshot, traces, priorGraph ? prior : snapshot.PublishedSignatures);
+        }
 
         Console.WriteLine("Consumer ownership: foreign metadata graphs, crossed trace origins and missing prior roots reject; exact delegate initializer remains available.");
     }
@@ -66,27 +57,28 @@ internal static class ConsumerOwnershipChecks {
     internal static void Binary(Extraction extraction) {
         var metadata = extraction.Metadata;
         var expected = ManagedFunctionPointerConsumers.Read(metadata, extraction.Traces, extraction.Signatures);
-        var foreign = new Metadata(metadata.Data, metadata.HandleBits, extraction.Header.Format.LegacyMetadataConstants);
+        var foreign = MetadataBuilder.FromImage(extraction.Image, extraction.Header);
         foreign.ReadDefinitions();
         var foreignTraces = new TraceMaps(extraction.Image, extraction.Header, foreign, extraction.CommonFixups);
 
         Reject(() => ManagedFunctionPointerConsumers.Read(metadata, foreignTraces, extraction.Signatures));
         Reject(() => ManagedFunctionPointerConsumers.Read(
-            foreign, extraction.Traces, foreign.SignatureBuilder.Publish()));
+            foreign.Publish(), extraction.Traces, foreign.SignatureBuilder.Publish()));
         Assert(ManagedFunctionPointerConsumers.Read(metadata, extraction.Traces, extraction.Signatures)
             .SequenceEqual(expected), "Rejected trace origins altered prior consumers.");
 
         var owner = extraction.Maps.Types.First(entry => extraction.Bindings.Resolve(entry.Signature) != 0);
         int ownerIndex = extraction.Types.Index[owner.MethodTable] + 1;
-        int element = metadata.SignatureBuilder.AddNode(new SignatureNode {
+        var extension = SignatureBuilder.FromSnapshot(metadata.PublishedSignatures);
+        int element = extension.AddNode(new SignatureNode {
             Kind = SignatureKind.Modified,
             Element = owner.Signature
         });
-        int pointer = metadata.SignatureBuilder.AddNode(new SignatureNode {
+        int pointer = extension.AddNode(new SignatureNode {
             Kind = SignatureKind.Pointer,
             Element = element
         });
-        var graph = metadata.SignatureBuilder.Publish();
+        var graph = extension.Publish();
         var lateAbi = new ManagedAbi(extraction, graph);
 
         Assert(lateAbi.Signatures.Nodes[pointer].Element == element,

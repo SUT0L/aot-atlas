@@ -39,8 +39,7 @@ internal static class GenericContextReferenceChecks {
         var image = new PeImage(File.ReadAllBytes(imagePath));
         var header = ReadyToRun.Read(image);
         var section = header.Find(RtrSectionId.EmbeddedMetadata);
-        var metadata = new Metadata(
-            image.FileMemory(section.Start, checked((int)section.Length)), header.MetadataHandleBits);
+        var metadata = MetadataBuilder.FromImage(image, header);
         metadata.ReadDefinitions();
 
         var fixups = RuntimeTables.Fixups(image, header.Find(RtrSectionId.CommonFixupsTable));

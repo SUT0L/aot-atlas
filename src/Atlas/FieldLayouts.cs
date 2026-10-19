@@ -54,10 +54,33 @@ public sealed class FieldLayouts {
     public ReadOnlySpan<InstanceField> FieldEntries => Fields;
 
     internal static List<FieldType> ReadSignatures(
-        Metadata metadata,
+        MetadataBuilder metadata,
         ReflectionMaps maps,
         MethodTables tables,
         CancellationToken cancellationToken = default) {
+        metadata.ReadFieldSignatures(cancellationToken);
+        return ResolveFields(CollectionsMarshal.AsSpan(metadata.Types), CollectionsMarshal.AsSpan(metadata.Fields),
+            CollectionsMarshal.AsSpan(metadata.Handles),
+            metadata.FieldIndex, metadata.HandleBits, maps, tables, cancellationToken);
+    }
+
+    private static List<FieldType> ReadSignatures(
+        Metadata metadata,
+        ReflectionMaps maps,
+        MethodTables tables,
+        CancellationToken cancellationToken) =>
+        ResolveFields(metadata.Types, metadata.Fields, metadata.Handles,
+            metadata.FieldIndex, metadata.HandleBits, maps, tables, cancellationToken);
+
+    private static List<FieldType> ResolveFields(
+        ReadOnlySpan<MetadataType> metadataTypes,
+        ReadOnlySpan<MetadataField> metadataFields,
+        ReadOnlySpan<uint> handles,
+        IReadOnlyDictionary<uint, int> fieldIndex,
+        int handleBits,
+        ReflectionMaps maps,
+        MethodTables tables,
+        CancellationToken cancellationToken) {
         cancellationToken.ThrowIfCancellationRequested();
 
         tables.ValidateBaseTypes();
@@ -66,22 +89,25 @@ public sealed class FieldLayouts {
         CollectionsMarshal.SetCount(fields, maps.Fields.Count);
 
         var owners = new Dictionary<ulong, uint>(maps.Types.Count);
-        int bits = 32 - metadata.HandleBits;
+        int bits = 32 - handleBits;
 
         foreach (ref readonly var entry in CollectionsMarshal.AsSpan(maps.Types)) {
             if (entry.Handle >> bits == 0x3A)
                 owners.Add(entry.MethodTable, entry.Handle & ((1U << bits) - 1));
         }
 
-        var declared = new Dictionary<(uint Owner, string Name), int>(metadata.Fields.Count);
+        var declared = new Dictionary<(uint Owner, string Name), int>(metadataFields.Length);
 
-        foreach (ref readonly var type in CollectionsMarshal.AsSpan(metadata.Types)) {
+        foreach (ref readonly var type in metadataTypes) {
             cancellationToken.ThrowIfCancellationRequested();
 
             for (int i = type.Fields.Start; i < type.Fields.End; ++i) {
-                uint offset = metadata.Handles[i];
-                int binding = metadata.FieldIndex[offset] + 1;
-                var field = metadata.Fields[binding - 1];
+                uint offset = handles[i];
+                if (!fieldIndex.TryGetValue(offset, out int metadataIndex)) {
+                    continue;
+                }
+                int binding = metadataIndex + 1;
+                var field = metadataFields[metadataIndex];
                 ref int slot = ref CollectionsMarshal.GetValueRefOrAddDefault(
                     declared,
                     (type.Offset, field.Name),
@@ -110,11 +136,7 @@ public sealed class FieldLayouts {
                 && owners.TryGetValue(definition, out uint typeOffset)
                 && declared.TryGetValue((typeOffset, field.Name), out int member)
                 && member > 0) {
-                ref var record = ref CollectionsMarshal.AsSpan(metadata.Fields)[member - 1];
-                if (record.Signature == 0) {
-                    var reader = metadata.Reader(record.SignatureOffset);
-                    record.Signature = metadata.TypeSignature(reader.Unsigned());
-                }
+                ref readonly var record = ref metadataFields[member - 1];
 
                 resolved.Signature = record.Signature;
                 resolved.MetadataOffset = record.Offset;
@@ -125,33 +147,11 @@ public sealed class FieldLayouts {
     }
 
     public FieldLayouts(Metadata metadata, ReflectionMaps maps, MethodTables tables, CancellationToken cancellationToken = default)
-        : this(metadata, metadata.WorkingCopy(), maps, tables, cancellationToken) {
-    }
-
-    private FieldLayouts(
-        Metadata source,
-        Metadata working,
-        ReflectionMaps maps,
-        MethodTables tables,
-        CancellationToken cancellationToken)
-        : this(working, maps, tables, ReadSignatures(working, maps, tables, cancellationToken),
-            working.SignatureBuilder.Publish(), cancellationToken) {
-        cancellationToken.ThrowIfCancellationRequested();
-        source.Adopt(working);
-    }
-
-    private FieldLayouts(
-        Metadata metadata,
-        ReflectionMaps maps,
-        MethodTables tables,
-        List<FieldType> memberSignatures,
-        Signatures signatures,
-        CancellationToken cancellationToken)
-        : this(metadata, maps, tables, memberSignatures, new TypeBindings(tables, maps, signatures), cancellationToken) {
+        : this(maps, tables, ReadSignatures(metadata, maps, tables, cancellationToken),
+            new TypeBindings(tables, maps, metadata.PublishedSignatures), cancellationToken) {
     }
 
     internal FieldLayouts(
-        Metadata metadata,
         ReflectionMaps maps,
         MethodTables tables,
         List<FieldType> memberSignatures,

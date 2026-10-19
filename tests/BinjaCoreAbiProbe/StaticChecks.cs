@@ -46,19 +46,7 @@ internal static unsafe class StaticChecks {
 
         foreach (string binary in binaries) {
             var image = new PeImage(File.ReadAllBytes(binary));
-            var rtr = ReadyToRun.Read(image);
-
-            var section = rtr.Find(313);
-            var metadata = new Metadata(
-                section.Length == 0 ? default : image.FileMemory(section.Start, checked((int)section.Length)),
-                rtr.MetadataHandleBits, rtr.Major < 10);
-            metadata.ReadDefinitions();
-
-            var fixups = RuntimeTables.Fixups(image, rtr.Find(308));
-            var maps = new ReflectionMaps();
-            maps.Read(image, rtr, metadata, fixups, MapFormat.Auto);
-
-            var extraction = new Extraction(image, rtr, metadata, maps, fixups);
+            var extraction = Extraction.Read(image);
             var statics = extraction.Statics;
             string digest = Convert.ToHexStringLower(SHA256.HashData(image.FileData));
 
@@ -83,9 +71,9 @@ internal static unsafe class StaticChecks {
                         StaticRecord.Allocation => statics.Allocations[i].Address,
                         StaticRecord.Cell => statics.GcCells[i].Cell,
                         StaticRecord.ThreadIndex => statics.ThreadIndices[i].Address,
-                        StaticRecord.Constructor => rtr.Find(310).Start + (uint)statics.Constructors[i].Vertex,
-                        StaticRecord.Generic => rtr.Find(334).Start + (uint)statics.Generics[i].Vertex,
-                        _ => rtr.Find(309).Start + (uint)maps.Fields[statics.Fields[i].FieldMapIndex].Vertex
+                        StaticRecord.Constructor => extraction.Header.Find(310).Start + (uint)statics.Constructors[i].Vertex,
+                        StaticRecord.Generic => extraction.Header.Find(334).Start + (uint)statics.Generics[i].Vertex,
+                        _ => extraction.Header.Find(309).Start + (uint)extraction.Maps.Fields[statics.Fields[i].FieldMapIndex].Vertex
                     };
                     Assert(addresses.Add(address));
 

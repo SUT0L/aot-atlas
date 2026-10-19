@@ -87,7 +87,7 @@ internal static class OwnedReferenceChecks {
     internal static void Binary(string path) {
         var image = PeImage.ReadFile(path);
         var header = ReadyToRun.Read(image);
-        var metadata = Metadata.FromImage(image, header);
+        var metadata = MetadataBuilder.FromImage(image, header);
         metadata.ReadDefinitions();
         var fixups = RuntimeTables.Fixups(image, header.Find(RtrSectionId.CommonFixupsTable));
         var maps = ReflectionMaps.Decode(image, header, metadata, fixups);

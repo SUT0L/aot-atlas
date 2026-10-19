@@ -40,24 +40,29 @@ internal static class MetadataChecks {
 
             Put(data, 256, 0);
             Put(data, 288, 1);
-            Put(data, 320, Handle(256, 0x3F));
-            Put(data, 352, Handle(288, 0x2C));
-            Put(data, 384, Handle(192, 0x3D), 2, Handle(320, 0x37), Handle(352, 0x02));
+            Put(data, 2112, Handle(256, 0x3F));
+            Put(data, 2144, Handle(288, 0x2C));
+            Put(data, 2048, Handle(320, 0x37));
+            Put(data, 2080, Handle(352, 0x02));
+            Put(data, 2176, Handle(384, 0x3C));
+            Put(data, 320, Handle(2112, 0x3E));
+            Put(data, 352, Handle(2144, 0x3E));
+            Put(data, 384, Handle(192, 0x3D), 2, Handle(2048, 0x3E), Handle(2080, 0x3E));
             Put(data, 432, Handle(224, 0x3D), 2, 1, 3, 2, unchecked((uint)-2), 0);
             data[480] = 1;
-            Put(data, 481, Handle(224, 0x3D), Handle(384, 0x3C));
-            Put(data, 512, 5, 2, Handle(256, 0x3F), 1, Handle(384, 0x3C), 1, Handle(288, 0x2C));
+            Put(data, 481, Handle(224, 0x3D), Handle(2176, 0x3E));
+            Put(data, 512, 5, 2, Handle(2112, 0x3E), 1, Handle(2176, 0x3E), 1, Handle(2144, 0x3E));
             Put(data, 560, 512);
             Put(data, 592, Handle(592, 0x3E));
             Put(data, 624, 0);
 
-            int position = Put(data, 656, 0x20, 0, Handle(256, 0x3F), 65);
+            int position = Put(data, 656, 0x20, 0, Handle(2112, 0x3E), 65);
 
             for (int i = 0; i < 65; ++i)
-                position = Put(data, position, Handle(288, 0x2C));
+                position = Put(data, position, Handle(2144, 0x3E));
             Put(data, position, 0);
 
-            var metadata = new Metadata(data, bits, legacyConstants: false, takeOwnership: true);
+            var metadata = new MetadataBuilder(data, bits, legacyConstants: false, takeOwnership: true);
             int nested = metadata.TypeSignature(Handle(224, 0x3D));
             Assert(metadata.SignatureBuilder.RenderType(nested) == "N.Outer`1+Inner");
 
@@ -115,7 +120,7 @@ internal static class MetadataChecks {
             failed = false;
 
             try {
-                new Metadata(data, bits).TypeSignature(Handle(224, 0x3D));
+                new MetadataBuilder(data, bits).TypeSignature(Handle(224, 0x3D));
             } catch (InvalidDataException) {
                 failed = true;
             }
@@ -140,63 +145,79 @@ internal static class MetadataChecks {
             Text(data, 1152, "B");
             Text(data, 1184, "Other");
 
-            metadata = new Metadata(data, bits, legacyConstants: false, takeOwnership: true);
+            metadata = new MetadataBuilder(data, bits, legacyConstants: false, takeOwnership: true);
             metadata.ReadDefinitions();
             Assert(metadata.Forwarders.Select(f => f.Name).SequenceEqual(new[] { "Parent", "Parent+A", "Parent+B", "Other", "Other+A" }));
             Assert(metadata.Forwarders.All(f => f.Assembly == "Target" && f.SourceScope == 64));
 
             Put(data, 320, 192, 1120, 1, 256);
-            failed = false;
-
-            try {
-                new Metadata(data, bits).ReadDefinitions();
-            } catch (InvalidDataException) {
-                failed = true;
-            }
-
-            Assert(failed);
+            var cyclic = new MetadataBuilder(data, bits).Publish();
+            Assert(cyclic.ProjectionDiagnostics.Count != 0
+                && cyclic.Facts.Record(new(MetadataRecordKind.TypeForwarder, 320)).Status
+                    .HasFlag(MetadataFactStatus.ContainerCycle));
         }
 
         Console.WriteLine("Metadata: 7/8-bit references, structured substitution, array bounds, modifiers, varargs, shared forwarders, and cycles passed.");
 
         foreach (int bits in new[] { 7, 8 }) {
-            var empty = new MetadataMembers(new Metadata(default, bits));
-            Assert(empty.Properties.Count == 0 && empty.Events.Count == 0 && empty.Parameters.Count == 0
-                && empty.GenericParameters.Count == 0 && empty.Handles.Count == 0 && empty.Accessors.Count == 0);
+            var empty = Metadata.Read(default, new(bits)).Members;
+            Assert(empty.PropertyDefinitions.Count == 0 && empty.EventDefinitions.Count == 0
+                && empty.ParameterDefinitions.Count == 0 && empty.GenericParameterDefinitions.Count == 0
+                && empty.MemberHandles.IsEmpty && empty.AccessorEntries.IsEmpty);
 
             byte[] data = new byte[256];
             Put(data, 32, 0, 0, 128, 1, 96, 0, 0);
             Put(data, 96, 2, 160);
             Put(data, 128, 0, 0, 0);
-
-            var metadata = new Metadata(data, bits, legacyConstants: false, takeOwnership: true);
-            metadata.Types.Add(new MetadataType { Properties = new IndexRange(0, 1) });
-            metadata.Handles.Add(32);
-            metadata.MethodIndex.Add(160, 0);
-            metadata.Methods.Add(new MetadataMethod { Offset = 160 });
-
-            var members = new MetadataMembers(metadata);
-            Assert(members.Properties.Count == 1 && members.Accessors.Count == 1
-                && members.Accessors[0].Semantics == 2 && members.Accessors[0].Method == 160);
+            var roots = new[] { new MetadataRecordId(MetadataRecordKind.Property, 32) };
+            var metadata = Metadata.Read(data, new(bits), roots);
+            var members = metadata.Members;
+            Assert(members.PropertyDefinitions.Count == 1 && members.AccessorEntries.Length == 1
+                && members.AccessorEntries[0].Semantics == 2 && members.AccessorEntries[0].Method == 160);
 
             for (int mutation = 0; mutation < 2; ++mutation) {
                 Put(data, 32, 0, 0, 128, mutation == 0 ? 1U : 256U, 96, 0, 0);
                 Put(data, 96, 2, mutation == 0 ? 0U : 160U);
-                bool failed = false;
-
-                try {
-                    new MetadataMembers(metadata);
-                } catch (InvalidDataException) {
-                    failed = true;
-                }
-
-                Assert(failed);
+                var partial = Metadata.Read(data, new(bits), roots);
+                Assert(partial.ProjectionDiagnostics.Count != 0);
+                Assert(metadata.Members.AccessorEntries.Length == 1
+                    && metadata.Members.AccessorEntries[0].Method == 160);
             }
         }
 
         Console.WriteLine("Metadata members: empty state, accessor identity and collection extent boundaries passed.");
 
-        var definitions = new Metadata(default, 7);
+        foreach (int bits in new[] { 7, 8 }) {
+            byte[] data = new byte[192];
+            BinaryPrimitives.WriteUInt32LittleEndian(data, 0xDEADDFFD);
+            Text(data, 32, "Field");
+            Text(data, 48, "T");
+            Put(data, 80, ((uint)160 << bits) | (uint)MetadataRecordKind.TypeReference);
+            Put(data, 96, 0x10, 32, 80, 0, 12, 0);
+            Put(data, 160, 0, 48);
+            var roots = new[] { new MetadataRecordId(MetadataRecordKind.Field, 96) };
+            var healthy = Metadata.Read(data, new(bits), roots);
+            Assert(healthy.Fields.Length == 1 && healthy.Fields[0].ExplicitOffset == 12);
+
+            data[111] = 255; // Invalid varint begins after the known flags/name/signature prefix.
+            var partial = Metadata.Read(data, new(bits), roots);
+            Assert(partial.Fields.Length == 1 && !partial.IsComplete);
+            var field = partial.Fields[0];
+            Assert(field.Name == "Field" && field.Flags == 0x10 && field.SignatureOffset == 80
+                && field.Signature != 0 && field.FlagsStatus == MetadataFactStatus.Valid);
+            Assert(field.DefaultValue == 0 && field.DefaultValueStatus.HasFlag(MetadataFactStatus.InvalidEncoding)
+                && field.ExplicitOffset == 0 && field.ExplicitOffsetStatus != MetadataFactStatus.Valid);
+            Assert(healthy.Fields[0].ExplicitOffset == 12
+                && healthy.Fields[0].DefaultValueStatus == MetadataFactStatus.Valid);
+
+            data[111] = 15;
+            var restored = Metadata.Read(data, new(bits), roots);
+            Assert(restored.IsComplete && restored.Fields[0].ExplicitOffset == 12);
+        }
+
+        Console.WriteLine("Metadata field recovery: known prefixes, unavailable tails, owned snapshots and corrected-source progress passed.");
+
+        var definitions = new MetadataBuilder(default, 7);
         definitions.MethodIndex.Add(32, 0);
 
         byte[] invokeMap = new byte[64];
@@ -208,7 +229,7 @@ internal static class MetadataChecks {
         Put(layout, 38, 10);
 
         Assert(ReflectionMaps.SelectFormat(12, invokeMap, [], [], definitions) == MapFormat.Metadata);
-        Assert(ReflectionMaps.SelectFormat(12, invokeMap, [], layout, new Metadata(default, 7)) == MapFormat.Legacy);
+        Assert(ReflectionMaps.SelectFormat(12, invokeMap, [], layout, new MetadataBuilder(default, 7)) == MapFormat.Legacy);
         Assert(ReflectionMaps.SelectFormat(12, [], [], [], definitions) == MapFormat.Auto);
         Assert(ReflectionMaps.SelectFormat(9, [], [], [], definitions) == MapFormat.Legacy);
         Assert(ReflectionMaps.SelectFormat(16, [], [], [], definitions) == MapFormat.Metadata);
@@ -217,7 +238,7 @@ internal static class MetadataChecks {
             bool failed = false;
 
             try {
-                ReflectionMaps.SelectFormat(12, invokeMap, [], nativeLayout, nativeLayout.Length == 0 ? new Metadata(default, 7) : definitions);
+                ReflectionMaps.SelectFormat(12, invokeMap, [], nativeLayout, nativeLayout.Length == 0 ? new MetadataBuilder(default, 7) : definitions);
             } catch (InvalidDataException) {
                 failed = true;
             }

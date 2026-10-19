@@ -1,7 +1,9 @@
 namespace Atlas;
 
-// NativeAOT module sections; reflection blob IDs occupy the 300-based range.
+// NativeAOT module sections, including shared reflection data.
 public enum RtrSectionId {
+    SharedExternalTypeMap = 124,
+    SharedProxyTypeMap = 125,
     GcStaticRegion = 201,
     ThreadStaticRegion = 202,
     TypeManagerIndirection = 204,
@@ -9,8 +11,12 @@ public enum RtrSectionId {
     FrozenObjectRegion = 206,
     DehydratedData = 207,
     ThreadStaticOffsetRegion = 208,
+    InterfaceDispatchCellInfoRegion = 209,
+    InterfaceDispatchCellRegion = 210,
     ImportAddressTables = 212,
     ModuleInitializerList = 213,
+    GvmDispatchCellInfoRegion = 214,
+    GvmDispatchCellRegion = 215,
 
     TypeMap = 301,
     ArrayMap = 302,

@@ -34,81 +34,43 @@ public readonly record struct MetadataScopeReference {
     }
 }
 
-public sealed partial class Metadata {
-    private Dictionary<uint, MetadataScopeReference> referencedScopes => state.ReferencedScopes;
-
-    public IEnumerable<MetadataScopeReference> ReferencedScopes {
-        get => Array.AsReadOnly(referencedScopes.Values.ToArray());
-    }
-
-    internal IEnumerable<KeyValuePair<uint, int>> TypeSignatureHandles {
-        get {
-            foreach (var signature in signatureIndex)
-                yield return signature;
-        }
-    }
-
-    public IEnumerable<KeyValuePair<uint, SignatureType>> SignatureDeclarations {
-        get {
-            var publication = SignatureBuilder.Publish();
-            var declarations = new KeyValuePair<uint, SignatureType>[signatureIndex.Count];
-            int position = 0;
-
-            foreach (var signature in signatureIndex)
-                declarations[position++] = new(signature.Key, publication.Types[signature.Value]);
-
-            return Array.AsReadOnly(declarations);
-        }
-    }
-
+internal sealed partial class MetadataBuilder {
     private void ReadScopeReference(uint offset) {
         if (referencedScopes.ContainsKey(offset))
             return;
-
-        var reader = Reader(offset);
-        uint flags = reader.Unsigned();
-        string name = String(reader.Unsigned());
-
-        ushort major = checked((ushort)reader.Unsigned());
-        ushort minor = checked((ushort)reader.Unsigned());
-        ushort build = checked((ushort)reader.Unsigned());
-        ushort revision = checked((ushort)reader.Unsigned());
-
-        uint length = reader.Unsigned();
-        int start = reader.Position;
-        reader.Take(checked((int)length));
-        string culture = String(reader.Unsigned());
-
-        state.ReferencedScopeOrder.EnsureCapacity(checked(state.ReferencedScopeOrder.Count + 1));
-        referencedScopes.Add(offset, new(
-            offset, flags, name,
-            major, minor, build, revision,
-            Data.Slice(start, (int)length), culture));
-        state.ReferencedScopeOrder.Add(offset);
+        var id = Id(MetadataRecordKind.ScopeReference, offset);
+        var key = RecordField(id, MetadataFieldName.PublicKeyOrToken).Items;
+        byte[] bytes = new byte[key.Count];
+        for (int i = 0; i < bytes.Length; i++)
+            bytes[i] = checked((byte)key[i].UInt32.Value);
+        referencedScopes.Add(offset, new(offset,
+            UInt(id, MetadataFieldName.Flags), Name(id),
+            checked((ushort)UInt(id, MetadataFieldName.MajorVersion)),
+            checked((ushort)UInt(id, MetadataFieldName.MinorVersion)),
+            checked((ushort)UInt(id, MetadataFieldName.BuildNumber)),
+            checked((ushort)UInt(id, MetadataFieldName.RevisionNumber)),
+            bytes, Name(id, MetadataFieldName.Culture)));
     }
 
     private uint DefinitionScope(uint offset) {
-        // DefinitionName already validated this ancestry and populated its namespace.
-        for (int depth = 0; depth <= 256; ++depth) {
+        if (TypeIndex.TryGetValue(offset, out int index))
+            return Types[index].Scope;
+        uint ns = DefinitionNamespace(offset);
+        if (ns == 0)
+            return 0;
+        NamespaceName(ns, 0);
+        return namespaces[ns].Scope;
+    }
+
+    private uint DefinitionNamespace(uint offset) {
+        for (int depth = 0; depth <= 256; depth++) {
             if (TypeIndex.TryGetValue(offset, out int index))
-                return Types[index].Scope;
-
-            var reader = Reader(offset);
-            reader.Unsigned();
-            reader.Unsigned();
-
-            uint ns = reader.Unsigned();
-            reader.Unsigned();
-            reader.Unsigned();
-            reader.Unsigned();
-            uint enclosing = reader.Unsigned();
-
-            if (enclosing == 0)
-                return ns == 0 ? 0 : namespaces[ns].Scope;
-
-            offset = enclosing;
+                return Types[index].Namespace;
+            var owner = TypeOwnership(Id(MetadataRecordKind.TypeDefinition, offset));
+            if (owner.Enclosing == 0)
+                return owner.Namespace;
+            offset = owner.Enclosing;
         }
-
-        throw new InvalidDataException("Type definition scope exceeds the supported nesting depth.");
+        throw new InvalidDataException("Type definition namespace exceeds the supported nesting depth.");
     }
 }

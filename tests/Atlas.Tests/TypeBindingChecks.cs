@@ -179,7 +179,7 @@ internal static class TypeBindingChecks {
 
         Console.WriteLine("Method bindings: 20000 seeded context changes preserve exact runtime identities and reject incomplete arguments.");
 
-        var metadata = new Metadata(default, 7);
+        var metadata = new MetadataBuilder(default, 7);
         tables = new MethodTables();
         maps = new ReflectionMaps();
 
@@ -234,7 +234,7 @@ internal static class TypeBindingChecks {
             });
         }
 
-        var layouts = new FieldLayouts(metadata, maps, tables);
+        var layouts = new FieldLayouts(metadata.Publish(), maps, tables);
 
         uint[] expectedSizes = [2, 8, 0, 8, 8, 8, 0];
         FieldStorageKind[] expectedStorage = [FieldStorageKind.Value, FieldStorageKind.Value, FieldStorageKind.Unknown,

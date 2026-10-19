@@ -31,7 +31,7 @@ internal static class OwnedCollectionChecks {
         Assert(image.Bytes[0] == (byte)'M');
 
         byte[] source = [0, 2, 3, 4];
-        var metadata = new Metadata(source, 7);
+        var metadata = Metadata.Read(source, new(7));
         var hydration = new HydratedRegion(0x1000, source, source.Length);
         source[1] = 0xFF;
         Assert(metadata.Bytes[1] == 2 && hydration.Bytes[1] == 2);

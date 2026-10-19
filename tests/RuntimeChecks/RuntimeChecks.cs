@@ -45,17 +45,17 @@ internal static class RuntimeChecks {
             int handleBits = rtr.MetadataHandleBits;
             var section = rtr.Find(313);
             var data = image.FileMemory(section.Start, checked((int)section.Length));
-            var atlas = new Metadata(data, handleBits, rtr.Major < 10);
-            atlas.ReadDefinitions();
 
             long start = Stopwatch.GetTimestamp();
-            var members = new MetadataMembers(atlas);
+            var atlas = Metadata.FromImage(image, rtr);
+            var members = atlas.Members;
             var enumerations = new Enumerations(atlas);
-            double memberMs = Stopwatch.GetElapsedTime(start).TotalMilliseconds;
+            double metadataMs = Stopwatch.GetElapsedTime(start).TotalMilliseconds;
+            var scopesByOffset = atlas.ScopeDefinitions.ToArray().ToDictionary(scope => scope.Offset);
 
             uint Raw(Handle handle) => (uint)handle.Offset << handleBits | (uint)handle.HandleType;
-            uint[] AtlasHandles(IndexRange range) => atlas.Handles.GetRange(range.Start, range.Count).ToArray();
-            uint[] MemberHandles(IndexRange range) => members.Handles.GetRange(range.Start, range.Count).ToArray();
+            uint[] AtlasHandles(IndexRange range) => atlas.DefinitionHandles.Slice(range.Start, range.Count).ToArray();
+            uint[] MemberHandles(IndexRange range) => members.MemberHandles.Slice(range.Start, range.Count).ToArray();
 
             fixed (byte* bytes = data.Span) {
                 var reader = new MetadataReader((nint)bytes, data.Length);
@@ -66,14 +66,17 @@ internal static class RuntimeChecks {
 
                 foreach (var handle in reader.ScopeDefinitions) {
                     var scope = reader.GetScopeDefinition(handle);
-                    Assert(atlas.Scopes.Any(entry => entry.Offset == handle.Offset
-                        && entry.Name == reader.GetConstantStringValue(scope.Name).Value));
+                    Assert(scopesByOffset.TryGetValue((uint)handle.Offset, out var actual)
+                        && actual.Name == reader.GetConstantStringValue(scope.Name).Value);
 
                     namespaces.Enqueue(scope.RootNamespaceDefinition);
+                    if (scope.GlobalModuleType.Offset != 0) {
+                        types.Enqueue(scope.GlobalModuleType);
+                    }
                     ++scopes;
                 }
 
-                Assert(scopes == atlas.Scopes.Count);
+                Assert(scopes == atlas.ScopeDefinitions.Length);
 
                 while (namespaces.Count != 0) {
                     var value = reader.GetNamespaceDefinition(namespaces.Dequeue());
@@ -216,7 +219,7 @@ internal static class RuntimeChecks {
                     Assert(MemberHandles(actual.Parameters).SequenceEqual(((Handle[])[.. signature.Parameters]).Select(Raw)));
                     Assert(MemberHandles(actual.Attributes).SequenceEqual(
                         ((CustomAttributeHandle[])[.. reference.CustomAttributes]).Select(handle => (uint)handle.Offset)));
-                    Assert(members.Accessors.GetRange(actual.Accessors.Start, actual.Accessors.Count).Select(entry => entry.Offset)
+                    Assert(members.AccessorEntries.Slice(actual.Accessors.Start, actual.Accessors.Count).ToArray().Select(entry => entry.Offset)
                         .SequenceEqual(((MethodSemanticsHandle[])[.. reference.MethodSemantics]).Select(handle => (uint)handle.Offset)));
                 }
 
@@ -229,7 +232,7 @@ internal static class RuntimeChecks {
                     Assert(actual.Type == atlas.TypeSignature(Raw(reference.Type)));
                     Assert(MemberHandles(actual.Attributes).SequenceEqual(
                         ((CustomAttributeHandle[])[.. reference.CustomAttributes]).Select(handle => (uint)handle.Offset)));
-                    Assert(members.Accessors.GetRange(actual.Accessors.Start, actual.Accessors.Count).Select(entry => entry.Offset)
+                    Assert(members.AccessorEntries.Slice(actual.Accessors.Start, actual.Accessors.Count).ToArray().Select(entry => entry.Offset)
                         .SequenceEqual(((MethodSemanticsHandle[])[.. reference.MethodSemantics]).Select(handle => (uint)handle.Offset)));
                 }
 
@@ -258,7 +261,7 @@ internal static class RuntimeChecks {
                 Console.WriteLine($"RTR {rtr.Major}.{rtr.Minor} {Path.GetRelativePath(Environment.CurrentDirectory, binary)}: "
                     + $"Microsoft runtime source matches {visited.Count} types, {expectedMethods.Count} methods, {expectedFields.Count} fields, "
                     + $"{expectedProperties.Count} properties, {expectedEvents.Count} events, {expectedParameters.Count} parameters, "
-                    + $"{expectedGenerics.Count} generic parameters, {enumMembers} enum constants; member decode {memberMs:F3} ms; "
+                    + $"{expectedGenerics.Count} generic parameters, {enumMembers} enum constants; metadata decode {metadataMs:F3} ms; "
                     + $"sha256={Convert.ToHexStringLower(SHA256.HashData(image.FileData))}");
             }
 

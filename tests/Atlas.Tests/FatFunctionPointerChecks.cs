@@ -14,12 +14,12 @@ internal static class FatFunctionPointerChecks {
         var map = new MethodGcMap(image, header, unwind, analysis.RequireManaged());
 
         var section = header.Find(RtrSectionId.EmbeddedMetadata);
-        var metadata = new Metadata(image.FileMemory(section.Start, (int)section.Length),
-            header.MetadataHandleBits, header.Format.LegacyMetadataConstants);
+        var metadata = MetadataBuilder.FromImage(image, header);
         metadata.ReadDefinitions();
         var traces = new TraceMaps(image, header, metadata,
             RuntimeTables.Fixups(image, header.Find(RtrSectionId.CommonFixupsTable)));
-        var consumers = ManagedFunctionPointerConsumers.Read(metadata, traces, metadata.SignatureBuilder.Publish());
+        var snapshot = metadata.Publish();
+        var consumers = ManagedFunctionPointerConsumers.Read(snapshot, traces, snapshot.PublishedSignatures);
         var result = new FatFunctionPointers(image, header, memory, unwind, map, consumers);
 
         var symbols = File.ReadLines(mapPath).Select(line => Regex.Match(line,
@@ -63,7 +63,7 @@ internal static class FatFunctionPointerChecks {
         Assert(expectedPointers is null || result.Values.Count == expectedPointers, "Anchored producer coverage changed.");
         Assert(expectedDictionaries is null || added == expectedDictionaries, "Additional dictionary coverage changed.");
 
-        int cases = ScopeCases(metadata, traces);
+        int cases = ScopeCases(snapshot, traces, image, header);
         FatFunctionPointerReference calli = result.References.Concat(result.UnprovenUses.Select(use => use.Reference))
             .FirstOrDefault(reference => reference.Source == FatPointerSource.IndirectCall);
 
@@ -218,35 +218,35 @@ internal static class FatFunctionPointerChecks {
         Console.WriteLine($"Fat function pointers: {result.Values.Count}/{oracle.Count} producer descriptors, {result.References.Count} anchored references, {added} additional method dictionaries, zero oracle false positives; {cases} adverse cases passed.");
     }
 
-    private static int ScopeCases(Metadata metadata, TraceMaps traces) {
+    private static int ScopeCases(Metadata metadata, TraceMaps traces, PeImage image, ReadyToRun header) {
         var trace = traces.Methods.FirstOrDefault(trace => trace.Name == "InitializeOpenStaticThunk");
-        int scopeIndex = metadata.Scopes.FindIndex(scope => scope.Name != "System.Private.CoreLib");
-
+        int scopeIndex = Array.FindIndex(metadata.ScopeDefinitions.ToArray(), scope => scope.Name != "System.Private.CoreLib");
         if (trace.Signature == 0 || scopeIndex < 0)
             return 0;
 
-        var signature = metadata.SignatureBuilder.Methods[trace.Signature];
-        int parameter = metadata.SignatureBuilder.Edges[signature.Parameters.Start + 1];
-        var original = metadata.SignatureBuilder.Nodes[parameter];
-        var foreign = metadata.Scopes[scopeIndex];
-
-        Assert(ManagedFunctionPointerConsumers.Read(metadata, traces, metadata.SignatureBuilder.Publish())
+        Assert(ManagedFunctionPointerConsumers.Read(metadata, traces, metadata.PublishedSignatures)
             .Any(consumer => consumer.Target == trace.Entrypoint), "Healthy delegate consumer rejected.");
-
-        metadata.SignatureBuilder.SetNode(parameter,
-            original with { MetadataScope = (foreign.Offset << metadata.HandleBits) | 0x38 });
-        Assert(ManagedFunctionPointerConsumers.Read(metadata, traces, metadata.SignatureBuilder.Publish())
-            .All(consumer => consumer.Target != trace.Entrypoint), "Foreign same-name IntPtr accepted.");
-
-        metadata.Scopes[scopeIndex] = foreign with { Name = "System.Private.CoreLib", Major = 99 };
-        Assert(ManagedFunctionPointerConsumers.Read(metadata, traces, metadata.SignatureBuilder.Publish())
-            .All(consumer => consumer.Target != trace.Entrypoint), "Different same-name CoreLib identity accepted.");
-
-        metadata.SignatureBuilder.SetNode(parameter, original);
-        metadata.Scopes[scopeIndex] = foreign;
-        Assert(ManagedFunctionPointerConsumers.Read(metadata, traces, metadata.SignatureBuilder.Publish())
-            .Any(consumer => consumer.Target == trace.Entrypoint), "Consumer state was not restored.");
-
+        foreach (bool sameName in new[] { false, true }) {
+            var builder = MetadataBuilder.FromImage(image, header);
+            builder.ReadDefinitions();
+            var changedTraces = new TraceMaps(image, header, builder,
+                RuntimeTables.Fixups(image, header.Find(RtrSectionId.CommonFixupsTable)));
+            var changedTrace = changedTraces.Methods.Single(method => method.Name == trace.Name);
+            var foreign = builder.Scopes[scopeIndex];
+            var signature = builder.SignatureBuilder.Methods[changedTrace.Signature];
+            int parameter = builder.SignatureBuilder.Edges[signature.Parameters.Start + 1];
+            var original = builder.SignatureBuilder.Nodes[parameter];
+            builder.SignatureBuilder.SetNode(parameter,
+                original with { MetadataScope = (foreign.Offset << builder.HandleBits) | 0x38 });
+            if (sameName)
+                builder.Scopes[scopeIndex] = foreign with { Name = "System.Private.CoreLib", Major = 99 };
+            var changed = builder.Publish();
+            Assert(ManagedFunctionPointerConsumers.Read(changed, changedTraces, changed.PublishedSignatures)
+                .All(consumer => consumer.Target != trace.Entrypoint),
+                sameName ? "Different same-name CoreLib identity accepted." : "Foreign same-name IntPtr accepted.");
+        }
+        Assert(ManagedFunctionPointerConsumers.Read(metadata, traces, metadata.PublishedSignatures)
+            .Any(consumer => consumer.Target == trace.Entrypoint), "Independent construction changed the prior snapshot.");
         return 2;
     }
 

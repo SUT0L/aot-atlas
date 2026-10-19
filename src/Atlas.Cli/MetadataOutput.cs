@@ -1,10 +1,9 @@
-using System.Runtime.InteropServices;
+using System.Collections.ObjectModel;
 using System.Text.Json;
 using Atlas;
 
 internal static class MetadataOutput {
-    internal static void Write(Utf8JsonWriter json, string inputSha256, Metadata metadata,
-        MetadataMembers members, PeImage image, ReadyToRun rtr, double seconds,
+    internal static void Write(Utf8JsonWriter json, string inputSha256, Metadata metadata, double seconds,
         bool includeSignatureGraph = true, CancellationToken cancellationToken = default) {
         cancellationToken.ThrowIfCancellationRequested();
         json.WriteStartObject();
@@ -14,12 +13,13 @@ internal static class MetadataOutput {
 
         json.WriteStartArray("scopes");
 
-        foreach (ref readonly var scope in CollectionsMarshal.AsSpan(metadata.Scopes)) {
+        foreach (ref readonly var scope in metadata.ScopeDefinitions) {
             cancellationToken.ThrowIfCancellationRequested();
 
             json.WriteStartArray();
             json.WriteNumberValue(scope.Offset);
-            JsonOutput.WriteStringValue(json, scope.Name);
+            var name = metadata.Facts.Scope(new(MetadataRecordKind.ScopeDefinition, scope.Offset)).Name;
+            NameText(json, metadata.Facts, name, scope.Name);
             json.WriteEndArray();
         }
 
@@ -27,24 +27,12 @@ internal static class MetadataOutput {
 
         json.WriteStartObject("scope_attributes");
 
-        foreach (ref readonly var scope in CollectionsMarshal.AsSpan(metadata.Scopes)) {
+        foreach (ref readonly var scope in metadata.ScopeDefinitions) {
             cancellationToken.ThrowIfCancellationRequested();
 
             json.WriteStartObject(scope.Offset.ToString());
-            json.WriteStartArray("assembly");
-
-            foreach (var attribute in metadata.ScopeAttributePayloads(scope.Offset, cancellationToken: cancellationToken))
-                Attribute(json, attribute, cancellationToken: cancellationToken);
-
-            json.WriteEndArray();
-
-            json.WriteStartArray("module");
-
-            foreach (var attribute in metadata.ScopeAttributePayloads(
-                scope.Offset, module: true, cancellationToken: cancellationToken))
-                Attribute(json, attribute, cancellationToken: cancellationToken);
-
-            json.WriteEndArray();
+            ScopeAttributes(json, "assembly", metadata, scope.Offset, module: false, cancellationToken);
+            ScopeAttributes(json, "module", metadata, scope.Offset, module: true, cancellationToken);
             json.WriteEndObject();
         }
 
@@ -52,15 +40,17 @@ internal static class MetadataOutput {
 
         json.WriteStartObject("types");
 
-        foreach (ref readonly var type in CollectionsMarshal.AsSpan(metadata.Types)) {
+        foreach (ref readonly var type in metadata.TypeDefinitions) {
             cancellationToken.ThrowIfCancellationRequested();
 
             json.WriteStartObject(type.Offset.ToString());
-            JsonOutput.WriteString(json, "name", type.Name);
+            json.WritePropertyName("name");
+            var name = metadata.Facts.Type(new(type.Offset)).Name;
+            NameText(json, metadata.Facts, name, type.Name);
             json.WriteNumber("scope", type.Scope);
             json.WriteNumber("flags", type.Flags);
             json.WriteNumber("base_type", type.BaseType);
-            json.WriteNumber("base_type_signature_id", metadata.TypeSignature(type.BaseType));
+            TypeSignatureId(json, "base_type_signature_id", metadata, type.BaseType);
             json.WriteNumber("enclosing_type", type.EnclosingType);
             json.WriteNumber("size", type.Size);
             json.WriteNumber("packing", type.Packing);
@@ -69,11 +59,11 @@ internal static class MetadataOutput {
 
             for (int i = type.Interfaces.Start; i < type.Interfaces.End; ++i) {
                 cancellationToken.ThrowIfCancellationRequested();
-                uint handle = metadata.Handles[i];
+                uint handle = metadata.DefinitionHandles[i];
 
                 json.WriteStartObject();
                 json.WriteNumber("handle", handle);
-                json.WriteNumber("signature_id", metadata.TypeSignature(handle));
+                TypeSignatureId(json, "signature_id", metadata, handle);
                 json.WriteEndObject();
             }
 
@@ -83,7 +73,7 @@ internal static class MetadataOutput {
 
             for (int i = type.Methods.Start; i < type.Methods.End; ++i) {
                 cancellationToken.ThrowIfCancellationRequested();
-                json.WriteNumberValue(metadata.Handles[i]);
+                json.WriteNumberValue(metadata.DefinitionHandles[i]);
             }
 
             json.WriteEndArray();
@@ -92,14 +82,14 @@ internal static class MetadataOutput {
 
             for (int i = type.Fields.Start; i < type.Fields.End; ++i) {
                 cancellationToken.ThrowIfCancellationRequested();
-                json.WriteNumberValue(metadata.Handles[i]);
+                json.WriteNumberValue(metadata.DefinitionHandles[i]);
             }
 
             json.WriteEndArray();
 
-            Collection(json, "properties", metadata.Handles, type.Properties, cancellationToken);
-            Collection(json, "events", metadata.Handles, type.Events, cancellationToken);
-            Collection(json, "generic_parameters", metadata.Handles, type.GenericParameters, cancellationToken);
+            Collection(json, "properties", metadata.DefinitionHandles, type.Properties, cancellationToken);
+            Collection(json, "events", metadata.DefinitionHandles, type.Events, cancellationToken);
+            Collection(json, "generic_parameters", metadata.DefinitionHandles, type.GenericParameters, cancellationToken);
             json.WriteEndObject();
         }
 
@@ -107,20 +97,27 @@ internal static class MetadataOutput {
 
         json.WriteStartObject("methods");
 
-        foreach (ref readonly var method in CollectionsMarshal.AsSpan(metadata.Methods)) {
+        foreach (ref readonly var method in metadata.MethodDefinitions) {
             cancellationToken.ThrowIfCancellationRequested();
 
             json.WriteStartObject(method.Offset.ToString());
-            JsonOutput.WriteString(json, "name", method.Name);
+            var methodFacts = metadata.Facts.Method(new(method.Offset));
+            json.WritePropertyName("name");
+            NameText(json, metadata.Facts, methodFacts.Name, method.Name);
             json.WriteNumber("flags", method.Flags);
             json.WriteNumber("implementation_flags", method.ImplementationFlags);
             json.WriteNumber("signature_offset", method.SignatureOffset);
             json.WriteNumber("signature_id", method.Signature);
             json.WriteNumber("unique_owner", method.Shared ? 0 : method.UniqueOwner);
-            JsonOutput.WriteString(json, "signature", metadata.SignatureBuilder.RenderMethod(method.Name, method.Signature));
+            if (methodFacts.Signature.IsAvailable
+                && metadata.TryReadMethodSignature(method.SignatureOffset, out var signature)
+                && !signature.IsEmpty)
+                JsonOutput.WriteString(json, "signature", signature.Render(method.Name));
+            else
+                json.WriteNull("signature");
 
-            Collection(json, "parameters", metadata.Handles, method.Parameters, cancellationToken);
-            Collection(json, "generic_parameters", metadata.Handles, method.GenericParameters, cancellationToken);
+            Collection(json, "parameters", metadata.DefinitionHandles, method.Parameters, cancellationToken);
+            Collection(json, "generic_parameters", metadata.DefinitionHandles, method.GenericParameters, cancellationToken);
             json.WriteEndObject();
         }
 
@@ -128,24 +125,23 @@ internal static class MetadataOutput {
 
         json.WriteStartObject("fields");
 
-        foreach (ref readonly var field in CollectionsMarshal.AsSpan(metadata.Fields)) {
+        foreach (ref readonly var field in metadata.FieldDefinitions) {
             cancellationToken.ThrowIfCancellationRequested();
 
             json.WriteStartObject(field.Offset.ToString());
-            JsonOutput.WriteString(json, "name", field.Name);
-            json.WriteNumber("flags", field.Flags);
+            json.WritePropertyName("name");
+            var fieldFacts = metadata.Facts.FieldDefinition(new(MetadataRecordKind.Field, field.Offset));
+            NameText(json, metadata.Facts, fieldFacts.Name, field.Name);
+            StatusNumber(json, "flags", fieldFacts.Flags.Value, field.FlagsStatus);
             json.WriteNumber("signature_offset", field.SignatureOffset);
             json.WriteNumber("type_signature_id", field.Signature);
-            json.WriteNumber("default_value", field.DefaultValue);
-            if (field.DefaultValue != 0) {
-                json.WritePropertyName("constant");
-                Value(json, metadata.Constant(field.DefaultValue, cancellationToken),
-                    includeHandle: false, cancellationToken: cancellationToken);
-            }
-
-            json.WriteNumber("explicit_offset", field.ExplicitOffset);
-            JsonOutput.WriteString(json, "signature", metadata.SignatureBuilder.RenderType(field.Signature));
-            AttributePayloads(json, metadata, metadata.Handles, field.Attributes, cancellationToken);
+            DefaultValue(json, metadata, field.DefaultValue, field.DefaultValueStatus, cancellationToken);
+            StatusNumber(json, "explicit_offset", fieldFacts.ExplicitOffset.Value, field.ExplicitOffsetStatus);
+            if (field.Signature != 0)
+                JsonOutput.WriteString(json, "signature", metadata.PublishedSignatures.RenderType(field.Signature));
+            else
+                json.WriteNull("signature");
+            AttributePayloads(json, metadata, metadata.DefinitionHandles, field.Attributes, cancellationToken);
             json.WriteEndObject();
         }
 
@@ -153,7 +149,7 @@ internal static class MetadataOutput {
 
         json.WriteStartArray("forwarders");
 
-        foreach (ref readonly var forwarder in CollectionsMarshal.AsSpan(metadata.Forwarders)) {
+        foreach (ref readonly var forwarder in metadata.TypeForwarders) {
             cancellationToken.ThrowIfCancellationRequested();
 
             json.WriteStartArray();
@@ -168,7 +164,7 @@ internal static class MetadataOutput {
 
         json.WriteStartArray("attributes");
 
-        foreach (ref readonly var attribute in CollectionsMarshal.AsSpan(metadata.Attributes)) {
+        foreach (ref readonly var attribute in metadata.AttributeDefinitions) {
             cancellationToken.ThrowIfCancellationRequested();
 
             json.WriteStartArray();
@@ -176,19 +172,38 @@ internal static class MetadataOutput {
             json.WriteNumberValue(attribute.OwnerMethod);
             json.WriteNumberValue(attribute.Offset);
             json.WriteNumberValue(attribute.Constructor);
-            JsonOutput.WriteStringValue(json, metadata.SignatureBuilder.RenderType(attribute.Type));
-            Attribute(json, metadata.AttributePayload(attribute.Offset, cancellationToken),
-                includeIdentity: false, cancellationToken: cancellationToken);
+            JsonOutput.WriteStringValue(json, metadata.PublishedSignatures.RenderType(attribute.Type));
+            if (metadata.TryAttributePayload(attribute.Offset, out var payload))
+                Attribute(json, payload, includeIdentity: false, cancellationToken: cancellationToken);
+            else
+                json.WriteNullValue();
             json.WriteEndArray();
         }
 
         json.WriteEndArray();
 
-        Members(json, metadata, members, cancellationToken);
+        Members(json, metadata, metadata.Members, cancellationToken);
 
-        // Payload decoding and member signatures can append roots during serialization.
-        json.WriteNumber("signature_nodes", metadata.SignatureBuilder.Nodes.Length - 1);
-        json.WriteNumber("signature_edges", metadata.SignatureBuilder.Edges.Length);
+        if (metadata.ProjectionDiagnostics.Count != 0) {
+            json.WriteStartArray("diagnostics");
+
+            foreach (var diagnostic in metadata.ProjectionDiagnostics) {
+                cancellationToken.ThrowIfCancellationRequested();
+                json.WriteStartObject();
+                json.WriteNumber("handle", diagnostic.Handle);
+                json.WriteString("projection", diagnostic.Projection);
+                JsonOutput.WriteString(json, "error", diagnostic.Error);
+                json.WriteEndObject();
+            }
+
+            json.WriteEndArray();
+        }
+
+        if (!metadata.IsComplete)
+            PartialRecords(json, metadata, cancellationToken);
+
+        json.WriteNumber("signature_nodes", metadata.PublishedSignatures.Nodes.Length - 1);
+        json.WriteNumber("signature_edges", metadata.PublishedSignatures.Edges.Length);
 
         if (includeSignatureGraph)
             MetadataIdentityOutput.Write(json, metadata, cancellationToken);
@@ -197,11 +212,160 @@ internal static class MetadataOutput {
         json.WriteEndObject();
     }
 
-    private static void Collection(Utf8JsonWriter json, string name, List<uint> handles, IndexRange range,
+    private static void PartialRecords(Utf8JsonWriter json, Metadata metadata,
+        CancellationToken cancellationToken) {
+        var facts = metadata.Facts;
+        var affected = new HashSet<MetadataRecordId>();
+        foreach (var diagnostic in metadata.ProjectionDiagnostics)
+            affected.Add(facts.Encoding.DecodeHandle(diagnostic.Handle));
+
+        json.WriteStartArray("partial_records");
+        foreach (var id in facts.Records) {
+            cancellationToken.ThrowIfCancellationRequested();
+            var record = facts.Record(id);
+            bool include = record.Status != MetadataFactStatus.Valid || affected.Contains(id);
+
+            if (id.Kind == MetadataRecordKind.Method) {
+                var method = facts.Method(new(id.Offset));
+                include |= !metadata.MethodIndex.ContainsKey(id.Offset)
+                    || !method.Name.IsAvailable
+                    || !facts.Name(method.Name.Value).Text.IsAvailable
+                    || ReferenceAffected(facts, method.Signature, affected)
+                    || !facts.GenericArity(method.Id).IsAvailable;
+            } else if (id.Kind == MetadataRecordKind.TypeDefinition) {
+                var type = facts.Type(new(id.Offset));
+                include |= !metadata.TypeIndex.ContainsKey(id.Offset)
+                    || !type.Name.IsAvailable
+                    || !facts.Name(type.Name.Value).Text.IsAvailable
+                    || ReferenceAffected(facts, type.BaseType, affected)
+                    || ReferenceAffected(facts, type.Owner, affected);
+            }
+
+            if (!include)
+                continue;
+
+            json.WriteStartObject();
+            json.WriteNumber("handle", facts.RawHandle(id));
+            json.WriteString("kind", id.Kind.ToString());
+            FactState(json, record.Status, record.Source);
+            var source = record.Source;
+            if (source.IsAvailable)
+                JsonOutput.WriteHexString(json, "bytes", facts.Bytes.Slice(source.Offset, source.Length));
+            else
+                json.WriteNull("bytes");
+
+            if (id.Kind == MetadataRecordKind.Method) {
+                var method = facts.Method(new(id.Offset));
+                NameFact(json, facts, method.Name);
+                UnsignedFact(json, "flags", method.Flags);
+                UnsignedFact(json, "implementation_flags", method.ImplementationFlags);
+                ReferenceFact(json, "signature", facts, method.Signature);
+                var arity = facts.GenericArity(method.Id);
+                json.WriteStartObject("generic_arity");
+                json.WriteNumber("value", arity.Value);
+                FactState(json, arity.Status, arity.Source);
+                json.WriteEndObject();
+            } else if (id.Kind == MetadataRecordKind.TypeDefinition) {
+                var type = facts.Type(new(id.Offset));
+                NameFact(json, facts, type.Name);
+                UnsignedFact(json, "flags", type.Flags);
+                UnsignedFact(json, "size", type.Size);
+                UnsignedFact(json, "packing", type.PackingSize);
+                ReferenceFact(json, "base_type", facts, type.BaseType);
+                ReferenceFact(json, "owner", facts, type.Owner);
+            }
+
+            RawFields(json, facts, id, cancellationToken);
+            json.WriteEndObject();
+        }
+        json.WriteEndArray();
+    }
+
+    private static void RawFields(Utf8JsonWriter json, MetadataFacts facts, MetadataRecordId id,
+        CancellationToken cancellationToken) {
+        json.WriteStartObject("fields");
+        foreach (var field in facts.Fields(id)) {
+            cancellationToken.ThrowIfCancellationRequested();
+            json.WriteStartObject(field.Name.ToString());
+            RawField(json, facts, field);
+            if (field.Items.Count != 0) {
+                json.WriteStartArray("items");
+                foreach (var item in field.Items) {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    json.WriteStartObject();
+                    RawField(json, facts, item);
+                    json.WriteEndObject();
+                }
+                json.WriteEndArray();
+            }
+            json.WriteEndObject();
+        }
+        json.WriteEndObject();
+    }
+
+    private static void RawField(Utf8JsonWriter json, MetadataFacts facts, MetadataFieldValue field) {
+        json.WriteNumber("bits", field.Bits);
+        FactState(json, field.Status, field.Source);
+        var reference = field.Reference;
+        if (reference.Value.Value != 0)
+            json.WriteNumber("reference_handle", facts.RawHandle(reference.Value));
+        if (field.PayloadSource.IsAvailable && field.PayloadSource.Length != 0)
+            JsonOutput.WriteHexString(json, "payload", field.Payload);
+    }
+
+    private static bool ReferenceAffected(MetadataFacts facts, MetadataFact<MetadataRecordId> reference,
+        HashSet<MetadataRecordId> affected) => !reference.IsAvailable
+            || (!reference.Value.IsNil && (affected.Contains(reference.Value)
+                || facts.Record(reference.Value).Status != MetadataFactStatus.Valid));
+
+    private static void NameText(Utf8JsonWriter json, MetadataFacts facts,
+        MetadataFact<MetadataNameId> reference, string display) {
+        if (reference.IsAvailable && facts.Name(reference.Value).Text.IsAvailable)
+            JsonOutput.WriteStringValue(json, display);
+        else
+            json.WriteNullValue();
+    }
+
+    private static void NameFact(Utf8JsonWriter json, MetadataFacts facts, MetadataFact<MetadataNameId> reference) {
+        var name = facts.Name(reference.Value);
+        json.WriteStartObject("name");
+        json.WriteNumber("offset", reference.Value.Offset);
+        json.WriteString("reference_status", reference.Status.ToString());
+        if (reference.IsAvailable && name.Text.IsAvailable)
+            JsonOutput.WriteString(json, "value", name.Text.Value);
+        else
+            json.WriteNull("value");
+        FactState(json, name.Text.Status, name.Source);
+        JsonOutput.WriteHexString(json, "bytes", name.Bytes);
+        json.WriteEndObject();
+    }
+
+    private static void UnsignedFact(Utf8JsonWriter json, string name, MetadataFact<uint> fact) {
+        json.WriteStartObject(name);
+        json.WriteNumber("value", fact.Value);
+        FactState(json, fact.Status, fact.Source);
+        json.WriteEndObject();
+    }
+
+    private static void ReferenceFact(Utf8JsonWriter json, string name, MetadataFacts facts,
+        MetadataFact<MetadataRecordId> fact) {
+        json.WriteStartObject(name);
+        json.WriteNumber("handle", facts.RawHandle(fact.Value));
+        FactState(json, fact.Status, fact.Source);
+        json.WriteEndObject();
+    }
+
+    private static void FactState(Utf8JsonWriter json, MetadataFactStatus status, MetadataSourceRange source) {
+        json.WriteString("status", status.ToString());
+        json.WriteNumber("source_offset", source.Offset);
+        json.WriteNumber("source_length", source.Length);
+    }
+
+    private static void Collection(Utf8JsonWriter json, string name, ReadOnlySpan<uint> handles, IndexRange range,
         CancellationToken cancellationToken) {
         json.WriteStartArray(name);
 
-        foreach (uint handle in CollectionsMarshal.AsSpan(handles).Slice(range.Start, range.Count)) {
+        foreach (uint handle in handles.Slice(range.Start, range.Count)) {
             cancellationToken.ThrowIfCancellationRequested();
             json.WriteNumberValue(handle);
         }
@@ -213,7 +377,7 @@ internal static class MetadataOutput {
         CancellationToken cancellationToken) {
         json.WriteStartArray("accessors");
 
-        foreach (ref readonly var accessor in CollectionsMarshal.AsSpan(members.Accessors)
+        foreach (ref readonly var accessor in members.AccessorEntries
             .Slice(range.Start, range.Count)) {
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -240,28 +404,25 @@ internal static class MetadataOutput {
             json.WriteNumber("signature_offset", property.SignatureOffset);
             json.WriteNumber("type_signature_id", property.Type);
             json.WriteNumber("calling_convention", property.CallingConvention);
-            JsonOutput.WriteString(json, "type", metadata.SignatureBuilder.RenderType(property.Type));
-            json.WriteNumber("default_value", property.DefaultValue);
-
-            if (property.DefaultValue != 0) {
-                json.WritePropertyName("constant");
-                Value(json, metadata.Constant(property.DefaultValue, cancellationToken),
-                    includeHandle: false, cancellationToken: cancellationToken);
-            }
+            if (property.Type != 0)
+                JsonOutput.WriteString(json, "type", metadata.PublishedSignatures.RenderType(property.Type));
+            else
+                json.WriteNull("type");
+            DefaultValue(json, metadata, property.DefaultValue, property.DefaultValueStatus, cancellationToken);
 
             json.WriteStartArray("parameters");
 
-            foreach (uint handle in CollectionsMarshal.AsSpan(members.Handles)
+            foreach (uint handle in members.MemberHandles
                 .Slice(property.Parameters.Start, property.Parameters.Count)) {
                 cancellationToken.ThrowIfCancellationRequested();
-                JsonOutput.WriteStringValue(json, metadata.SignatureBuilder.RenderType(metadata.TypeSignature(handle)));
+                TypeSignatureText(json, metadata, handle);
             }
 
             json.WriteEndArray();
 
             Accessors(json, members, property.Accessors, cancellationToken);
-            Collection(json, "attributes", members.Handles, property.Attributes, cancellationToken);
-            AttributePayloads(json, metadata, members.Handles, property.Attributes, cancellationToken);
+            Collection(json, "attributes", members.MemberHandles, property.Attributes, cancellationToken);
+            AttributePayloads(json, metadata, members.MemberHandles, property.Attributes, cancellationToken);
             json.WriteEndObject();
         }
 
@@ -275,12 +436,15 @@ internal static class MetadataOutput {
             json.WriteStartObject(entry.Offset.ToString());
             JsonOutput.WriteString(json, "name", entry.Name);
             json.WriteNumber("flags", entry.Flags);
-            JsonOutput.WriteString(json, "type", metadata.SignatureBuilder.RenderType(entry.Type));
+            if (entry.Type != 0)
+                JsonOutput.WriteString(json, "type", metadata.PublishedSignatures.RenderType(entry.Type));
+            else
+                json.WriteNull("type");
             json.WriteNumber("type_signature_id", entry.Type);
 
             Accessors(json, members, entry.Accessors, cancellationToken);
-            Collection(json, "attributes", members.Handles, entry.Attributes, cancellationToken);
-            AttributePayloads(json, metadata, members.Handles, entry.Attributes, cancellationToken);
+            Collection(json, "attributes", members.MemberHandles, entry.Attributes, cancellationToken);
+            AttributePayloads(json, metadata, members.MemberHandles, entry.Attributes, cancellationToken);
             json.WriteEndObject();
         }
 
@@ -295,16 +459,10 @@ internal static class MetadataOutput {
             json.WriteNumber("flags", parameter.Flags);
             json.WriteNumber("sequence", parameter.Sequence);
             JsonOutput.WriteString(json, "name", parameter.Name);
-            json.WriteNumber("default_value", parameter.DefaultValue);
+            DefaultValue(json, metadata, parameter.DefaultValue, parameter.DefaultValueStatus, cancellationToken);
 
-            if (parameter.DefaultValue != 0) {
-                json.WritePropertyName("constant");
-                Value(json, metadata.Constant(parameter.DefaultValue, cancellationToken),
-                    includeHandle: false, cancellationToken: cancellationToken);
-            }
-
-            Collection(json, "attributes", members.Handles, parameter.Attributes, cancellationToken);
-            AttributePayloads(json, metadata, members.Handles, parameter.Attributes, cancellationToken);
+            Collection(json, "attributes", members.MemberHandles, parameter.Attributes, cancellationToken);
+            AttributePayloads(json, metadata, members.MemberHandles, parameter.Attributes, cancellationToken);
             json.WriteEndObject();
         }
 
@@ -323,20 +481,93 @@ internal static class MetadataOutput {
 
             json.WriteStartArray("constraints");
 
-            foreach (uint handle in CollectionsMarshal.AsSpan(members.Handles)
+            foreach (uint handle in members.MemberHandles
                 .Slice(parameter.Constraints.Start, parameter.Constraints.Count)) {
                 cancellationToken.ThrowIfCancellationRequested();
-                JsonOutput.WriteStringValue(json, metadata.SignatureBuilder.RenderType(metadata.TypeSignature(handle)));
+                TypeSignatureText(json, metadata, handle);
             }
 
             json.WriteEndArray();
 
-            Collection(json, "attributes", members.Handles, parameter.Attributes, cancellationToken);
-            AttributePayloads(json, metadata, members.Handles, parameter.Attributes, cancellationToken);
+            Collection(json, "attributes", members.MemberHandles, parameter.Attributes, cancellationToken);
+            AttributePayloads(json, metadata, members.MemberHandles, parameter.Attributes, cancellationToken);
             json.WriteEndObject();
         }
 
         json.WriteEndObject();
+    }
+
+    private static void TypeSignatureId(Utf8JsonWriter json, string name, Metadata metadata, uint handle) {
+        if (metadata.TryReadTypeSignature(handle, out var signature))
+            json.WriteNumber(name, signature.Index);
+        else
+            json.WriteNull(name);
+    }
+
+    private static void TypeSignatureText(Utf8JsonWriter json, Metadata metadata, uint handle) {
+        if (metadata.TryReadTypeSignature(handle, out var signature))
+            JsonOutput.WriteStringValue(json, signature.Render());
+        else
+            json.WriteNullValue();
+    }
+
+    private const MetadataFactStatus UnknownEncoding = MetadataFactStatus.Truncated
+        | MetadataFactStatus.InvalidEncoding | MetadataFactStatus.LimitExceeded
+        | MetadataFactStatus.Absent | MetadataFactStatus.InvalidHeader;
+
+    private static bool HasEncodedValue(MetadataFactStatus status) =>
+        (status & UnknownEncoding) == 0 && status != MetadataFactStatus.Unresolved;
+
+    private static void StatusNumber(Utf8JsonWriter json, string name, uint value, MetadataFactStatus status) {
+        if (HasEncodedValue(status))
+            json.WriteNumber(name, value);
+        else
+            json.WriteNull(name);
+        if (status != MetadataFactStatus.Valid)
+            json.WriteString(name + "_status", status.ToString());
+    }
+
+    private static void DefaultValue(Utf8JsonWriter json, Metadata metadata, uint value,
+        MetadataFactStatus status, CancellationToken cancellationToken) {
+        StatusNumber(json, "default_value", value, status);
+        if (value == 0 && status == MetadataFactStatus.Valid)
+            return;
+        json.WritePropertyName("constant");
+        if (HasEncodedValue(status) && value != 0)
+            Constant(json, metadata, value, cancellationToken);
+        else
+            json.WriteNullValue();
+    }
+
+    private static void Constant(Utf8JsonWriter json, Metadata metadata, uint handle,
+        CancellationToken cancellationToken) {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (metadata.TryConstant(handle, out var value))
+            Value(json, value, includeHandle: false, cancellationToken: cancellationToken);
+        else
+            json.WriteNullValue();
+    }
+
+    private static void ScopeAttributes(Utf8JsonWriter json, string name, Metadata metadata,
+        uint offset, bool module, CancellationToken cancellationToken) {
+        cancellationToken.ThrowIfCancellationRequested();
+        var scope = metadata.Facts.Scope(new(MetadataRecordKind.ScopeDefinition, offset));
+        var attributes = module ? scope.ModuleCustomAttributes : scope.CustomAttributes;
+        json.WritePropertyName(name);
+        if (attributes.Count == 0 && attributes.Status != MetadataFactStatus.Valid) {
+            json.WriteNullValue();
+            return;
+        }
+
+        json.WriteStartArray();
+        foreach (var reference in attributes) {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (reference.IsAvailable && metadata.TryAttributePayload(reference.Value.Offset, out var attribute))
+                Attribute(json, attribute, cancellationToken: cancellationToken);
+            else
+                json.WriteNullValue();
+        }
+        json.WriteEndArray();
     }
 
     private static void Attribute(Utf8JsonWriter json, MetadataAttributePayload payload,
@@ -427,16 +658,10 @@ internal static class MetadataOutput {
                 json.WriteNumberValue(number);
                 break;
             case float number:
-                if (float.IsFinite(number))
-                    json.WriteNumberValue(number);
-                else
-                    json.WriteStringValue(number.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                FloatingPoint(json, number);
                 break;
             case double number:
-                if (double.IsFinite(number))
-                    json.WriteNumberValue(number);
-                else
-                    json.WriteStringValue(number.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                FloatingPoint(json, number);
                 break;
             case MetadataValue nested:
                 Value(json, nested, cancellationToken: cancellationToken);
@@ -449,26 +674,79 @@ internal static class MetadataOutput {
 
                 json.WriteEndArray();
                 break;
-            case System.Collections.ObjectModel.ReadOnlyCollection<object> array:
-                json.WriteStartArray();
-
-                foreach (var item in array)
-                    RawValue(json, item, cancellationToken);
-
-                json.WriteEndArray();
+            case ReadOnlyCollection<bool> array:
+                PrimitiveArray(json, array, static (writer, item) => writer.WriteBooleanValue(item), cancellationToken);
+                break;
+            case ReadOnlyCollection<byte> array:
+                PrimitiveArray(json, array, static (writer, item) => writer.WriteNumberValue(item), cancellationToken);
+                break;
+            case ReadOnlyCollection<sbyte> array:
+                PrimitiveArray(json, array, static (writer, item) => writer.WriteNumberValue(item), cancellationToken);
+                break;
+            case ReadOnlyCollection<short> array:
+                PrimitiveArray(json, array, static (writer, item) => writer.WriteNumberValue(item), cancellationToken);
+                break;
+            case ReadOnlyCollection<ushort> array:
+                PrimitiveArray(json, array, static (writer, item) => writer.WriteNumberValue(item), cancellationToken);
+                break;
+            case ReadOnlyCollection<int> array:
+                PrimitiveArray(json, array, static (writer, item) => writer.WriteNumberValue(item), cancellationToken);
+                break;
+            case ReadOnlyCollection<uint> array:
+                PrimitiveArray(json, array, static (writer, item) => writer.WriteNumberValue(item), cancellationToken);
+                break;
+            case ReadOnlyCollection<long> array:
+                PrimitiveArray(json, array, static (writer, item) => writer.WriteNumberValue(item), cancellationToken);
+                break;
+            case ReadOnlyCollection<ulong> array:
+                PrimitiveArray(json, array, static (writer, item) => writer.WriteNumberValue(item), cancellationToken);
+                break;
+            case ReadOnlyCollection<float> array:
+                PrimitiveArray(json, array, static (writer, item) => FloatingPoint(writer, item), cancellationToken);
+                break;
+            case ReadOnlyCollection<double> array:
+                PrimitiveArray(json, array, static (writer, item) => FloatingPoint(writer, item), cancellationToken);
                 break;
             default:
                 throw new InvalidOperationException("Unexpected metadata value representation.");
         }
     }
 
-    private static void AttributePayloads(Utf8JsonWriter json, Metadata metadata, List<uint> handles, IndexRange range,
+    private static void PrimitiveArray<T>(Utf8JsonWriter json, ReadOnlyCollection<T> values,
+        Action<Utf8JsonWriter, T> write, CancellationToken cancellationToken) where T : struct {
+        json.WriteStartArray();
+        for (int i = 0; i < values.Count; ++i) {
+            if ((i & 1023) == 0)
+                cancellationToken.ThrowIfCancellationRequested();
+            write(json, values[i]);
+        }
+        json.WriteEndArray();
+    }
+
+    private static void FloatingPoint(Utf8JsonWriter json, float value) {
+        if (float.IsFinite(value))
+            json.WriteNumberValue(value);
+        else
+            json.WriteStringValue(float.IsNaN(value) ? "NaN" : value > 0 ? "Infinity" : "-Infinity");
+    }
+
+    private static void FloatingPoint(Utf8JsonWriter json, double value) {
+        if (double.IsFinite(value))
+            json.WriteNumberValue(value);
+        else
+            json.WriteStringValue(double.IsNaN(value) ? "NaN" : value > 0 ? "Infinity" : "-Infinity");
+    }
+
+    private static void AttributePayloads(Utf8JsonWriter json, Metadata metadata, ReadOnlySpan<uint> handles, IndexRange range,
         CancellationToken cancellationToken) {
         json.WriteStartArray("attribute_payloads");
 
-        foreach (uint offset in CollectionsMarshal.AsSpan(handles).Slice(range.Start, range.Count)) {
+        foreach (uint offset in handles.Slice(range.Start, range.Count)) {
             cancellationToken.ThrowIfCancellationRequested();
-            Attribute(json, metadata.AttributePayload(offset, cancellationToken), cancellationToken: cancellationToken);
+            if (metadata.TryAttributePayload(offset, out var payload))
+                Attribute(json, payload, cancellationToken: cancellationToken);
+            else
+                json.WriteNullValue();
         }
 
         json.WriteEndArray();

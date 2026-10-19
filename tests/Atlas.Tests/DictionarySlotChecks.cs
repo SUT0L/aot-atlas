@@ -12,9 +12,7 @@ internal static class DictionarySlotChecks {
             var header = ReadyToRun.Read(image);
 
             var section = header.Find(313);
-            var metadata = new Metadata(
-                image.FileMemory(section.Start, checked((int)section.Length)),
-                header.MetadataHandleBits, header.Major < 10);
+            var metadata = MetadataBuilder.FromImage(image, header);
             metadata.ReadDefinitions();
 
             var fixups = RuntimeTables.Fixups(image, header.Find(308));
@@ -251,9 +249,7 @@ internal static class DictionarySlotChecks {
             var header = ReadyToRun.Read(image);
 
             var section = header.Find(313);
-            var metadata = new Metadata(
-                image.FileMemory(section.Start, checked((int)section.Length)),
-                header.MetadataHandleBits, header.Major < 10);
+            var metadata = MetadataBuilder.FromImage(image, header);
             metadata.ReadDefinitions();
 
             var fixups = RuntimeTables.Fixups(image, header.Find(308));
@@ -403,7 +399,9 @@ internal static class DictionarySlotChecks {
                 encoded.Array[encoded.Offset] = 0xfc;
 
                 var incomplete = new GenericDictionaries();
-                incomplete.Read(image, header, metadata, extraction.Layout, templates, maps.Format);
+                var construction = MetadataBuilder.FromImage(image, header);
+                var native = GrammarLayout(construction);
+                incomplete.Read(image, header, construction, native, templates, maps.Format);
                 Assert(incomplete.Layouts.Count == 1 && incomplete.Layouts[0].Recipes.Count == 1
                     && incomplete.Layouts[0].UnsupportedKind == 0x7e,
                     "An unknown dictionary grammar must preserve its prefix and stop before subsequent slots.");
@@ -412,7 +410,8 @@ internal static class DictionarySlotChecks {
                 bool rejected = false;
 
                 try {
-                    new GenericDictionaries().Read(image, header, metadata, extraction.Layout, templates, maps.Format);
+                    construction = MetadataBuilder.FromImage(image, header);
+                    new GenericDictionaries().Read(image, header, construction, GrammarLayout(construction), templates, maps.Format);
                 } catch (InvalidDataException) {
                     rejected = true;
                 }
@@ -420,6 +419,13 @@ internal static class DictionarySlotChecks {
                 Assert(rejected, "The runtime-reserved null fixup kind must be rejected.");
             } finally {
                 encoded.Array[encoded.Offset] = originalKind;
+            }
+
+            NativeLayout GrammarLayout(MetadataBuilder owner) {
+                var nativeSection = header.Find(RtrSectionId.NativeLayoutInfo);
+                return new NativeLayout(image.FileMemory(nativeSection.Start, checked((int)nativeSection.Length)),
+                    extraction.NativeReferences, owner.SignatureBuilder, takeOwnership: true,
+                    methodFlags: header.Format.ReturnDroppingAsyncThunks ? 31U : 15U);
             }
 
             Console.WriteLine($"{Convert.ToHexStringLower(SHA256.HashData(image.FileData))}: "

@@ -251,7 +251,8 @@ def check_property_workflow(plugin, binary, extraction, temporary_directory):
     image_base = preferred_image_base(binary)
     database = temporary_directory / "property-check.bndb"
 
-    with bn.load(str(binary), update_analysis=False) as view:
+    with bn.load(str(binary), update_analysis=False,
+                 options={"analysis.debugInfo.internal": False}) as view:
         view.set_analysis_hold(True)
 
         try:
@@ -352,7 +353,7 @@ def check_property_workflow(plugin, binary, extraction, temporary_directory):
     rebased_start = 0x150000000
 
     with bn.load(str(binary), update_analysis=False,
-                 options={"loader.imageBase": rebased_start}) as rebased:
+                 options={"loader.imageBase": rebased_start, "analysis.debugInfo.internal": False}) as rebased:
         rebased.set_analysis_hold(True)
 
         try:
@@ -408,7 +409,8 @@ def check_dictionary_workflow(plugin, binary, extraction):
     required_kinds = {"TypeHandle", "MethodDictionary", "StaticData", "InterfaceCall"}
     require(required_kinds <= samples.keys(), "dictionary fixture is missing a recovery kind")
 
-    with bn.load(str(binary), update_analysis=False) as view:
+    with bn.load(str(binary), update_analysis=False,
+                 options={"analysis.debugInfo.internal": False}) as view:
         view.set_analysis_hold(True)
 
         try:
@@ -582,7 +584,8 @@ def check_trace_workflow(plugin, binary, extraction, temporary_directory):
 
     require(len(accepted) == len(accepted_names), "trace fixture did not retain all six callable identities")
 
-    with bn.load(str(binary), update_analysis=False) as view:
+    with bn.load(str(binary), update_analysis=False,
+                 options={"analysis.debugInfo.internal": False}) as view:
         view.set_analysis_hold(True)
 
         try:

@@ -158,7 +158,7 @@ public sealed class Marshalling {
 
     internal void Bind(
         MethodTables tables,
-        Metadata metadata,
+        MetadataBuilder metadata,
         ReflectionMaps maps,
         bool legacyGc,
         CancellationToken cancellationToken = default) {

@@ -6,7 +6,7 @@ internal static class PropertyOutput {
         PropertyProjections properties) {
         json.WriteStartObject();
         json.WriteString("input_sha256", inputSha256);
-        ExtractionStatusOutput.Write(json, extraction.Stages, extraction.DictionarySignatureGaps);
+        ExtractionStatusOutput.Write(json, extraction);
         json.WriteNumber("property_definitions", properties.Members.Properties.Count);
         json.WriteNumber("legacy_identities", properties.LegacyIdentities);
         json.WriteNumber("legacy_matches", properties.LegacyMatches);

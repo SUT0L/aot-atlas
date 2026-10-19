@@ -53,42 +53,39 @@ internal static class MetadataIdentityChecks {
             Put(data, 656, H(288, 0x3d));
             Put(data, 720, 0, 0, 0, 64, 0, 0, 0); // ownerless definition: scope remains unknown
 
-            var m = new Metadata(data, bits);
-            int left = m.TypeSignature(H(256, 0x3d));
-            var retainedDeclarations = m.SignatureDeclarations;
-            var retainedScopes = m.ReferencedScopes;
-            using var declarationIterator = retainedDeclarations.GetEnumerator();
-            using var scopeIterator = retainedScopes.GetEnumerator();
-            Assert(declarationIterator.MoveNext() && scopeIterator.MoveNext());
-            var savedPublication = m.PublishedSignatures;
-            int right = m.TypeSignature(H(288, 0x3d));
-            Assert(!declarationIterator.MoveNext() && !scopeIterator.MoveNext()
-                && retainedDeclarations.Count() == 1 && retainedScopes.Count() == 1);
-            Assert(ReferenceEquals(retainedDeclarations.Single().Value.Publication, savedPublication)
-                && retainedDeclarations.Single().Value.Render() == "Collision.Packet"
-                && m.SignatureDeclarations.Count() == 2 && m.ReferencedScopes.Count() == 2);
+            MetadataRecordId[] roots = [
+                new(MetadataRecordKind.TypeReference, 256), new(MetadataRecordKind.TypeReference, 288),
+                new(MetadataRecordKind.TypeReference, 560), new(MetadataRecordKind.TypeReference, 592),
+                new(MetadataRecordKind.TypeSpecification, 624), new(MetadataRecordKind.TypeDefinition, 720)
+            ];
+            var m = Metadata.Read(data, new(bits), roots);
+            var graph = m.PublishedSignatures;
+            int left = m.ReadTypeSignature(H(256, 0x3D)).Index;
+            int right = m.ReadTypeSignature(H(288, 0x3D)).Index;
+            var declarations = m.SignatureDeclarations.ToArray();
+            var retainedScopes = m.ReferencedScopes.ToArray();
 
             // Display equality does not prove assembly/type identity.
-            Assert(m.SignatureBuilder.RenderType(left) == "Collision.Packet");
-            Assert(m.SignatureBuilder.RenderType(left) == m.SignatureBuilder.RenderType(right));
+            Assert(graph.RenderType(left) == "Collision.Packet");
+            Assert(graph.RenderType(left) == graph.RenderType(right));
             Assert(left != right);
             Assert(m.TypeSignatureHandles.Single(s => s.Key == H(256, 0x3d)).Value == left);
-            Assert(m.SignatureBuilder.Nodes[left].MetadataScope == H(400, 0x39));
-            Assert(m.SignatureBuilder.Nodes[right].MetadataScope == H(480, 0x39));
+            Assert(graph.Nodes[left].MetadataScope == H(400, 0x39));
+            Assert(graph.Nodes[right].MetadataScope == H(480, 0x39));
 
-            int nested = m.TypeSignature(H(560, 0x3d));
-            Assert(m.SignatureBuilder.Nodes[nested].MetadataScope == H(400, 0x39));
-            Assert(m.SignatureBuilder.RenderType(nested) == "Collision.Packet+Inner");
+            int nested = m.ReadTypeSignature(H(560, 0x3d)).Index;
+            Assert(graph.Nodes[nested].MetadataScope == H(400, 0x39));
+            Assert(graph.RenderType(nested) == "Collision.Packet+Inner");
 
-            int formal = m.TypeSignature(H(592, 0x3d));
-            Assert(m.SignatureBuilder.Nodes[formal].Kind == SignatureKind.ParameterName);
-            Assert(m.SignatureBuilder.Nodes[formal].MetadataScope == 0);
+            int formal = m.ReadTypeSignature(H(592, 0x3d)).Index;
+            Assert(graph.Nodes[formal].Kind == SignatureKind.ParameterName);
+            Assert(graph.Nodes[formal].MetadataScope == 0);
 
-            int ownerless = m.TypeSignature(H(720, 0x3a));
-            Assert(m.SignatureBuilder.Nodes[ownerless].MetadataScope == 0);
+            int ownerless = m.ReadTypeSignature(H(720, 0x3a)).Index;
+            Assert(graph.Nodes[ownerless].MetadataScope == 0);
 
-            int array = m.TypeSignature(H(624, 0x3e));
-            Assert(m.SignatureBuilder.Nodes[m.SignatureBuilder.Nodes[array].Element].MetadataScope == H(480, 0x39));
+            int array = m.ReadTypeSignature(H(624, 0x3e)).Index;
+            Assert(graph.Nodes[graph.Nodes[array].Element].MetadataScope == H(480, 0x39));
             Assert(m.TypeSignatureHandles.Single(s => s.Key == H(624, 0x3e)).Value == array);
             Assert(m.TypeSignatureHandles.Single(s => s.Key == H(656, 0x37)).Value == array);
 
@@ -98,18 +95,17 @@ internal static class MetadataIdentityChecks {
             Assert(scopes[0].Major == 1 && scopes[0].Revision == 4);
             Assert(scopes[0].PublicKeyOrToken.Span.SequenceEqual(new byte[] { 0xAA, 0xBB }));
             Assert(scopes[1].Name == "Right" && scopes[1].PublicKeyOrToken.IsEmpty);
-            Assert(m.TypeSignature(H(256, 0x3d)) == left && m.ReferencedScopes.Count() == 2);
+            Assert(m.ReadTypeSignature(H(256, 0x3d)).Index == left && m.ReferencedScopes.Count() == 2);
 
             var invalid = (byte[])data.Clone();
             Put(invalid, 480, 0, 128, 70000);
 
-            try {
-                new Metadata(invalid, bits).TypeSignature(H(288, 0x3d));
-            } catch (OverflowException) {
-                continue;
-            }
-
-            throw new Exception("Invalid scope reference version accepted.");
+            var partial = Metadata.Read(invalid, new(bits), roots);
+            Assert(partial.ProjectionDiagnostics.Count != 0
+                && !partial.Facts.Field(new(MetadataRecordKind.ScopeReference, 480), MetadataFieldName.MajorVersion).UInt32.IsAvailable);
+            Assert(ReferenceEquals(graph, m.PublishedSignatures)
+                && declarations.SequenceEqual(m.SignatureDeclarations)
+                && retainedScopes.SequenceEqual(m.ReferencedScopes));
         }
     }
 }

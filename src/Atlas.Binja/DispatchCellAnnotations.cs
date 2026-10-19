@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using System.Text.Unicode;
 
 namespace Atlas.Binja;
 
@@ -12,6 +13,11 @@ internal static unsafe class DispatchCellAnnotations {
         DispatchCells cells,
         ref ApplyStats stats,
         nint task) {
+        if (extraction.DispatchCellMetadata.Layout == DispatchCellLayout.CachedMethodTableAndCode) {
+            ApplyIndexed(symbols, variables, view, extraction, cells, ref stats, task);
+            return;
+        }
+
         if (cells.Cells.Count == 0)
             return;
 
@@ -128,4 +134,80 @@ internal static unsafe class DispatchCellAnnotations {
             Core.BNFreeType(pointer);
         }
     }
+
+    private static void ApplyIndexed(
+        Symbols symbols, DataVariables variables, nint view, Extraction extraction,
+        DispatchCells cells, ref ApplyStats stats, nint task) {
+        if (cells.CellEntries.IsEmpty && cells.GvmCellEntries.IsEmpty)
+            return;
+
+        int maximumName = 0;
+        foreach (var info in extraction.DispatchCellMetadata.Entries) {
+            string owner = extraction.Names.Values[extraction.Types.Index[info.Type]];
+            if (owner.Contains('\0') || (info.IsGvm && info.Method.Name.Contains('\0')))
+                throw new InvalidDataException("A dispatch cell name contains a NUL and cannot be represented by native annotations.");
+            maximumName = Math.Max(maximumName, owner.Length + (info.IsGvm ? info.Method.Name.Length : 16));
+        }
+        byte[] text = new byte[Encoding.UTF8.GetMaxByteCount(maximumName) + 64];
+
+        nint empty = Core.BNCreateVoidType();
+        var target = new TypeConfidence(empty);
+        BoolConfidence qualifier = new() { Confidence = 255 };
+        nint pointer = Core.BNCreatePointerTypeOfWidth(8, &target, &qualifier, &qualifier, 0);
+        Core.BNFreeType(empty);
+
+        nint builder = Core.BNCreateStructureBuilder();
+        var member = new TypeConfidence(pointer);
+        fixed (byte* receiver = "cached_method_table\0"u8)
+        fixed (byte* code = "cached_code\0"u8) {
+            Core.BNAddStructureBuilderMemberAtOffset(builder, &member, receiver, 0, 0, 0, 0, 0, 0);
+            Core.BNAddStructureBuilderMemberAtOffset(builder, &member, code, 8, 0, 0, 0, 0, 0);
+        }
+        nint structure = Core.BNFinalizeStructureBuilder(builder);
+        nint cellType = Core.BNCreateStructureType(structure);
+        Core.BNFreeStructure(structure);
+        Core.BNFreeStructureBuilder(builder);
+
+        try {
+            int processed = 0;
+            foreach (var cell in cells.CellEntries) {
+                if (task != 0 && (processed++ & 1023) == 0 && Core.BNIsBackgroundTaskCancelled(task) != 0)
+                    throw new OperationCanceledException();
+                string owner = extraction.Names.Values[cell.InterfaceType];
+                Utf8.TryWrite(text, $"dispatch_cell::{owner}::slot_{cell.Slot}::{cell.Address - extraction.Image.ImageBase:X8}\0", out _);
+                DefineIndexed(symbols, variables, view, extraction, cell.Address, cell.CachedMethodTable,
+                    cell.CachedCode, cellType, text, ref stats);
+            }
+            foreach (var cell in cells.GvmCellEntries) {
+                if (task != 0 && (processed++ & 1023) == 0 && Core.BNIsBackgroundTaskCancelled(task) != 0)
+                    throw new OperationCanceledException();
+                var info = extraction.DispatchCellMetadata.Entries[cell.Metadata - 1];
+                string owner = extraction.Names.Values[extraction.Types.Index[info.Type]];
+                Utf8.TryWrite(text, $"gvm_dispatch_cell::{owner}::{info.Method.Name}::{cell.Address - extraction.Image.ImageBase:X8}\0", out _);
+                DefineIndexed(symbols, variables, view, extraction, cell.Address, cell.CachedMethodTable,
+                    cell.CachedCode, cellType, text, ref stats);
+            }
+        } finally {
+            Core.BNFreeType(cellType);
+            Core.BNFreeType(pointer);
+        }
+    }
+
+    private static void DefineIndexed(
+        Symbols symbols, DataVariables variables, nint view, Extraction extraction,
+        ulong originalAddress, ulong receiver, ulong code, nint cellType, byte[] text, ref ApplyStats stats) {
+        ulong address = stats.ImageBase + originalAddress - extraction.Image.ImageBase;
+        fixed (byte* name = text)
+            symbols.DefineData(variables, address, cellType, name, ref stats);
+
+        if (receiver != 0 && extraction.Image.FindSection(receiver) >= 0) {
+            Core.BNAddUserDataReference(view, address, stats.ImageBase + receiver - extraction.Image.ImageBase);
+            ++stats.DataReferences;
+        }
+        if (code != 0 && extraction.Image.FindSection(code) >= 0) {
+            Core.BNAddUserDataReference(view, address + 8, stats.ImageBase + code - extraction.Image.ImageBase);
+            ++stats.DataReferences;
+        }
+    }
+
 }

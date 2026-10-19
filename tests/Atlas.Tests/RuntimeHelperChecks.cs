@@ -84,9 +84,7 @@ internal static class RuntimeHelperChecks {
         var header = ReadyToRun.Read(image);
 
         var section = header.Find(313);
-        var metadata = new Metadata(
-            image.FileMemory(section.Start, checked((int)section.Length)),
-            header.MetadataHandleBits, header.Major < 10);
+        var metadata = MetadataBuilder.FromImage(image, header);
         metadata.ReadDefinitions();
 
         var fixups = RuntimeTables.Fixups(image, header.Find(308));

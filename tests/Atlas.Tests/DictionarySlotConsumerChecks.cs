@@ -12,12 +12,11 @@ internal static class DictionarySlotConsumerChecks {
         var gc = new MethodGcMap(image, header, unwind, analysis.RequireManaged());
 
         var section = header.Find(RtrSectionId.EmbeddedMetadata);
-        var metadata = new Metadata(image.FileMemory(section.Start, (int)section.Length),
-            header.MetadataHandleBits, header.Format.LegacyMetadataConstants);
+        var metadata = MetadataBuilder.FromImage(image, header);
         metadata.ReadDefinitions();
         var traces = new TraceMaps(image, header, metadata,
             RuntimeTables.Fixups(image, header.Find(RtrSectionId.CommonFixupsTable)));
-        var consumers = ManagedFunctionPointerConsumers.Read(metadata, traces, metadata.SignatureBuilder.Publish());
+        var consumers = ManagedFunctionPointerConsumers.Read(metadata.Publish(), traces, metadata.SignatureBuilder.Publish());
         var result = new FatFunctionPointers(image, header, memory, unwind, gc, consumers);
 
         Assert(result.Values.Count == expectedPointers, "Fat-pointer coverage changed.");
