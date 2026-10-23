@@ -115,26 +115,24 @@ public sealed class NativeStrings {
         }
     }
 
-    public System.Collections.ObjectModel.ReadOnlyCollection<CodeEdge> FindReferences(
+    public void AppendReferences(
         ulong imageBase,
         ReadOnlySpan<CodeEdge> addresses,
+        List<CodeEdge> destination,
         CancellationToken cancellationToken = default) {
         cancellationToken.ThrowIfCancellationRequested();
+        ArgumentNullException.ThrowIfNull(destination);
 
         var targets = new HashSet<ulong>(Items.Count);
 
         foreach (ref readonly var item in CollectionsMarshal.AsSpan(Items))
             targets.Add(imageBase + item.Rva);
 
-        var references = new List<CodeEdge>();
-
         foreach (ref readonly var edge in addresses) {
             cancellationToken.ThrowIfCancellationRequested();
 
             if (targets.Contains(edge.Target))
-                references.Add(edge);
+                destination.Add(edge);
         }
-
-        return references.AsReadOnly();
     }
 }

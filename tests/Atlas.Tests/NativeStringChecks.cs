@@ -8,6 +8,13 @@ internal static class NativeStringChecks {
         var strings = Scan("Alpha\0"u8.ToArray());
         Assert(strings.Items.SequenceEqual([new NativeString(0x1000, new IndexRange(512, 5), false)]));
 
+        var references = new List<CodeEdge> { new(0, 0) };
+        strings.AppendReferences(Base - 0x1000,
+            [new(Base + 0x20, Base), new(Base + 0x24, Base + 1), new(Base + 0x28, Base)],
+            references);
+        Assert(references.SequenceEqual([
+            new CodeEdge(0, 0), new CodeEdge(Base + 0x20, Base), new CodeEdge(Base + 0x28, Base)]));
+
         strings = Scan(Encoding.Unicode.GetBytes("Wide\0"));
         Assert(strings.Items.SequenceEqual([new NativeString(0x1000, new IndexRange(512, 8), true)]));
 

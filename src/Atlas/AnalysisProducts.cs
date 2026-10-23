@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 
 namespace Atlas;
 
@@ -40,8 +41,9 @@ public sealed class AnalysisProducts {
     public DictionarySlotConsumers? DictionaryConsumers { get; }
     public FatFunctionPointers? FunctionPointers { get; }
     public NativeStrings? Strings { get; }
-    private readonly CodeEdge[] stringReferences = [];
-    public ReadOnlySpan<CodeEdge> StringReferences => stringReferences;
+    private readonly List<CodeEdge>? stringReferences;
+    public ReadOnlySpan<CodeEdge> StringReferences => stringReferences is null
+        ? [] : CollectionsMarshal.AsSpan(stringReferences);
 
     public AnalysisMeasurement ExtractionMeasurement { get; }
     public AnalysisMeasurement TotalMeasurement { get; }
@@ -194,7 +196,8 @@ public sealed class AnalysisProducts {
             cancellationToken.ThrowIfCancellationRequested();
             allocated = GC.GetAllocatedBytesForCurrentThread();
             start = Stopwatch.GetTimestamp();
-            stringReferences = Strings!.FindReferences(image.ImageBase, Code.AddressEdges, cancellationToken).ToArray();
+            stringReferences = new List<CodeEdge>();
+            Strings!.AppendReferences(image.ImageBase, Code.AddressEdges, stringReferences, cancellationToken);
             StringReferenceMeasurement = AnalysisMeasurement.Since(start, allocated);
         }
 

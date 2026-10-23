@@ -8,7 +8,8 @@ internal static class AnalysisMeasurementChecks {
             "full" => AnalysisProduct.All & ~AnalysisProduct.StringReferences,
             "code" => AnalysisProduct.Code,
             "types" => AnalysisProduct.None,
-            _ => throw new ArgumentException("Expected full, code or types.", nameof(operation))
+            "stringrefs" => AnalysisProduct.StringReferences,
+            _ => throw new ArgumentException("Expected full, code, types or stringrefs.", nameof(operation))
         };
         ExtractionStage stages = operation == "full" ? ExtractionStage.All
             : operation == "types" ? ExtractionStage.RuntimeTypes
@@ -57,13 +58,21 @@ internal static class AnalysisMeasurementChecks {
             + result.StringReferenceMeasurement.Seconds;
         Check(productSeconds <= result.TotalMeasurement.Seconds);
 
-        if (operation != "full")
+        if (operation is "code" or "types")
             Check(result.Members is null && result.Properties is null && result.FunctionPointers is null
                 && result.Strings is null && result.StringReferences.IsEmpty);
 
+        if (operation == "stringrefs") {
+            var targets = result.Strings!.Items.Select(item => extraction.Image.ImageBase + item.Rva).ToHashSet();
+            var expected = result.Code!.AddressEdges.ToArray().Where(edge => targets.Contains(edge.Target)).ToArray();
+            Check(result.StringReferences.SequenceEqual(expected));
+        }
+
         Console.WriteLine($"Core {operation}: {seconds * 1000:F3} ms, allocated {allocated:N0} B, "
             + $"retained managed delta {retained:N0} B, process peak working set {peakWorkingSet:N0} B; "
-            + $"{extraction.Types.Types.Count} types, {result.Code?.InstructionCount ?? 0} instructions.");
+            + $"{extraction.Types.Types.Count} types, {result.Code?.InstructionCount ?? 0} instructions, "
+            + $"{result.StringReferences.Length} string references, "
+            + $"reference phase {result.StringReferenceMeasurement.AllocatedBytes:N0} B.");
     }
 
     private static AnalysisProducts Prepare(string path, AnalysisProduct requested, ExtractionStage stages) {
