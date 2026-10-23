@@ -154,7 +154,7 @@ jobs:
 
   release:
     name: Release assets
-    needs: build
+    needs: [verify, build]
     if: github.event_name == 'release' || github.ref == 'refs/heads/master'
     runs-on: ubuntu-22.04
     timeout-minutes: 5
