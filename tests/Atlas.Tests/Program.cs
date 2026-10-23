@@ -2,6 +2,12 @@ using System.Buffers.Binary;
 using System.Diagnostics;
 using Atlas;
 
+if (args.Length == 1 && args[0] == "--registered-cli-commands") {
+    foreach (string command in CommandPlan.Commands.Order(StringComparer.Ordinal))
+        Console.WriteLine(command);
+    return;
+}
+
 if (args.Length == 1 && args[0] == "--typemaps") {
     TypeMapsChecks.Run();
     return;

@@ -54,6 +54,9 @@ def main():
     run("dotnet", "publish", "src/Atlas.Cli/Atlas.Cli.csproj",
         "-c", "Release", "-r", rid, "--self-contained", "--output", output / "cli")
 
+    run(sys.executable, "tests/command_contract_checks.py", cli,
+        root / "tests" / "Atlas.Tests" / "bin" / "Release" / "net10.0" / "Atlas.Tests.dll",
+        dictionary)
     run(sys.executable, "tests/analysis_status_checks.py", cli, property_probe, dictionary)
     run(sys.executable, "tests/metadata_name_checks.py", cli, dictionary)
     if windows:
