@@ -16,6 +16,12 @@ internal static class AnalysisOutput {
         int unprovenDispatchUses = products.Code is { } code ? code.UnprovenDispatchCellUseEntries.Length : 0;
         bool gcFailed = gcInfo is not null && gcInfo.Methods.Any(method => method.Error is not null);
         bool regionUnknown = analysis.Managed?.RegionSource == ManagedRegionSource.Unknown;
+        string delegateStatus = extraction.Traces.Methods.Count == 0 ? "unavailable" : "complete";
+        bool pointerComplete = products.FunctionPointers is { } pointers
+            && pointers.ConstructorMapStatus != "partial"
+            && FatFunctionPointersOutput.DescriptorUsesStatus(analysis, gcInfo, pointers, delegateStatus) == "complete"
+            && FatFunctionPointersOutput.DictionaryConsumersStatus(pointers) == "complete";
+        bool helpersComplete = products.Helpers?.Status == RuntimeHelperStatus.Complete;
         bool sourcesComplete = extraction.Metadata.IsComplete
             && extraction.DictionarySignatureGaps.IsEmpty
             && extraction.DispatchCellMetadata.Failures.IsEmpty
@@ -24,6 +30,7 @@ internal static class AnalysisOutput {
 
         json.WriteStartObject("analysis_status");
         json.WriteString("status", sourcesComplete && analysis.Failures.Length == 0 && !gcFailed && !regionUnknown
+            && pointerComplete && helpersComplete
             ? "complete" : "partial");
         json.WriteString("metadata", extraction.Metadata.Bytes.IsEmpty ? "absent"
             : extraction.Metadata.IsComplete ? "complete" : "partial");

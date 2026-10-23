@@ -2,6 +2,25 @@ using System.Text.Json;
 using Atlas;
 
 internal static class FatFunctionPointersOutput {
+    internal static string DescriptorUsesStatus(
+        UnwindAnalysis analysis, MethodGcMap? gc, FatFunctionPointers pointers, string delegateStatus) {
+        bool gcUnavailable = gc is null || analysis.Unwind is null
+            || analysis.Managed?.RegionSource == ManagedRegionSource.Unknown;
+        if (gcUnavailable)
+            return "unavailable";
+
+        bool gcPartial = gc!.Methods.Any(method => method.Info is null);
+        bool partialUses = gcPartial || pointers.UnprovenUses.Count != 0
+            || pointers.UnresolvedControlFlowOwners.Count != 0 || pointers.Failures.Count != 0
+            || DictionaryConsumersStatus(pointers) != "complete"
+            || delegateStatus != "complete";
+        return partialUses ? "partial" : "complete";
+    }
+
+    internal static string DictionaryConsumersStatus(FatFunctionPointers pointers) =>
+        pointers.DictionaryConsumers is not { } dictionaries ? "unavailable"
+        : dictionaries.Failures.Count != 0 || dictionaries.UnresolvedOwners.Count != 0 ? "partial" : "complete";
+
     internal static void Write(
         Utf8JsonWriter json,
         string hash,
@@ -14,17 +33,11 @@ internal static class FatFunctionPointersOutput {
         bool gcUnavailable = gc is null || analysis.Unwind is null
             || analysis.Managed?.RegionSource == ManagedRegionSource.Unknown;
         bool gcPartial = !gcUnavailable && gc!.Methods.Any(method => method.Info is null);
-        bool partialUses = gcPartial || pointers.UnprovenUses.Count != 0
-            || pointers.UnresolvedControlFlowOwners.Count != 0 || pointers.Failures.Count != 0
-            || pointers.DictionaryConsumers is { UnresolvedOwners.Count: > 0 }
-            || pointers.DictionaryConsumers is { Failures.Count: > 0 }
-            || delegateStatus != "complete";
-
         json.WriteStartObject();
         json.WriteString("input_sha256", hash);
         json.WriteNumber("image_base", image.ImageBase);
         json.WriteString("constructor_map_status", pointers.ConstructorMapStatus);
-        json.WriteString("descriptor_uses_status", gcUnavailable ? "unavailable" : partialUses ? "partial" : "complete");
+        json.WriteString("descriptor_uses_status", DescriptorUsesStatus(analysis, gc, pointers, delegateStatus));
         json.WriteString("gc_headers_status", gcUnavailable ? "unavailable" : gcPartial ? "partial" : "complete");
         json.WriteString("delegate_consumers_status", delegateStatus);
         if (delegateError is not null)
@@ -94,8 +107,7 @@ internal static class FatFunctionPointersOutput {
         }
         json.WriteEndArray();
 
-        json.WriteString("dictionary_consumers_status", dictionaries is null ? "unavailable"
-            : dictionaries.Failures.Count != 0 || dictionaries.UnresolvedOwners.Count != 0 ? "partial" : "complete");
+        json.WriteString("dictionary_consumers_status", DictionaryConsumersStatus(pointers));
 
         DictionaryContextOutput.Write(json, dictionaries);
 
