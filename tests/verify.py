@@ -58,6 +58,7 @@ def main():
         root / "tests" / "Atlas.Tests" / "bin" / "Release" / "net10.0" / "Atlas.Tests.dll",
         dictionary)
     run(sys.executable, "tests/analysis_status_checks.py", cli, property_probe, dictionary)
+    run(sys.executable, "tests/property_rejection_checks.py", cli, property_probe)
     run(sys.executable, "tests/metadata_name_checks.py", cli, dictionary)
     if windows:
         run(sys.executable, "tests/cli_checks.py", "publication", cli, dictionary,
