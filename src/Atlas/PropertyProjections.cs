@@ -45,6 +45,16 @@ public struct PropertyProjection {
     public bool ByReference;
 }
 
+public readonly record struct PropertyRejectionWitness(
+    PropertyRejection Reason,
+    int Owner,
+    int Contract,
+    uint Property,
+    uint Accessor,
+    ulong Target,
+    PropertyOrigin Origin,
+    PropertyAccess Access);
+
 public sealed class PropertyProjections {
     public Signatures Signatures { get; }
     private readonly TypeBindings bindings;
@@ -53,9 +63,12 @@ public sealed class PropertyProjections {
     public readonly MetadataMembers Members;
     internal readonly List<PropertyProjection> Projections = new();
     internal readonly int[] Rejected = new int[(int)PropertyRejection.Count];
+    internal readonly List<PropertyRejectionWitness> RejectionWitnesses = new();
     internal readonly PropertyFunction[] Functions;
     public ReadOnlySpan<PropertyProjection> ProjectionEntries => CollectionsMarshal.AsSpan(Projections);
     public ReadOnlySpan<int> RejectionCounts => Rejected;
+    public ReadOnlySpan<PropertyRejectionWitness> RejectionEntries => CollectionsMarshal.AsSpan(RejectionWitnesses);
+    public int RejectionWitnessesOmitted { get; private set; }
     public ReadOnlySpan<PropertyFunction> FunctionEntries => Functions;
 
     public int LegacyIdentities { get; internal set; }
@@ -81,6 +94,21 @@ public sealed class PropertyProjections {
     private readonly Dictionary<uint, IndexRange> ownerAccessors = new();
     private readonly List<Accessor> accessors = new();
     private readonly PropertyAccessCode scanner;
+    private const int MaximumRejectionWitnesses = 256;
+
+    private void Reject(PropertyRejection reason, int owner, uint property, uint accessor,
+        ulong target = 0, int contract = -1, PropertyOrigin origin = PropertyOrigin.Direct,
+        PropertyAccess access = default) {
+        ++Rejected[(int)reason];
+
+        if (RejectionWitnesses.Count == MaximumRejectionWitnesses) {
+            ++RejectionWitnessesOmitted;
+            return;
+        }
+
+        RejectionWitnesses.Add(new(reason, owner, contract < 0 ? owner : contract,
+            property, accessor, target, origin, access));
+    }
 
     private struct Accessor {
         internal uint Property;
@@ -192,7 +220,8 @@ public sealed class PropertyProjections {
                     && abi.Parameters[methodAbi.Parameters.Start].Role == AbiRole.This
                     && abi.Parameters[methodAbi.Parameters.Start].Slot == 0;
                 if (!eligible) {
-                    ++Rejected[(int)PropertyRejection.UnsupportedAbi];
+                    Reject(PropertyRejection.UnsupportedAbi, owner, accessor.Property,
+                        accessor.Method, method.Entrypoint);
                     continue;
                 }
 
@@ -203,7 +232,8 @@ public sealed class PropertyProjections {
                     || (setter && (abi.Parameters[methodAbi.Parameters.Start + 1].Slot != 1
                         || methodAbi.Return.Kind != AbiKind.Void))
                     || (!setter && methodAbi.Return.Indirect && methodAbi.ReturnSlot != 1)) {
-                    ++Rejected[(int)PropertyRejection.UnsupportedAbi];
+                    Reject(PropertyRejection.UnsupportedAbi, owner, accessor.Property,
+                        accessor.Method, method.Entrypoint);
                     continue;
                 }
 
@@ -288,7 +318,13 @@ public sealed class PropertyProjections {
             if (target.RequiresInstantiatingThunk
                 || target.GenericContext != 0
                 || entry.Kind is DispatchKind.Static or DispatchKind.StaticDefault) {
-                Rejected[(int)PropertyRejection.UnsupportedAbi] += range.Count;
+                for (int i = range.Start; i < range.End; ++i) {
+                    var slot = slots[i];
+                    var accessor = accessors[slot.Accessor];
+                    Reject(PropertyRejection.UnsupportedAbi, target.OwnerType,
+                        accessor.Property, accessor.Method, target.Target,
+                        slot.Contract, PropertyOrigin.Interface);
+                }
                 continue;
             }
 
@@ -372,7 +408,8 @@ public sealed class PropertyProjections {
             }
 
             if (match != 0 && match != candidate.Offset) {
-                ++Rejected[(int)PropertyRejection.AmbiguousIdentity];
+                Reject(PropertyRejection.AmbiguousIdentity, owner,
+                    accessors[i].Property, candidate.Offset);
                 return 0;
             }
 
@@ -463,7 +500,8 @@ public sealed class PropertyProjections {
         var property = Members.Properties[accessor.Property];
         var method = metadata.Methods[metadata.ReadMethod(accessor.Method)];
         if (method.Signature == 0) {
-            ++Rejected[(int)PropertyRejection.UnsupportedAbi];
+            Reject(PropertyRejection.UnsupportedAbi, owner, accessor.Property,
+                accessor.Method, target, contract, origin);
             return;
         }
 
@@ -489,7 +527,8 @@ public sealed class PropertyProjections {
             && SameType(contract, property.Type, valueSignature, default);
 
         if (!valid || extraction.Types.Types[owner].IsValueType) {
-            ++Rejected[(int)PropertyRejection.UnsupportedAbi];
+            Reject(PropertyRejection.UnsupportedAbi, owner, accessor.Property,
+                accessor.Method, target, contract, origin);
             return;
         }
 
@@ -518,16 +557,18 @@ public sealed class PropertyProjections {
         var storage = ManagedAbi.Resolve(extraction, bindings, signature, contract + 1, arguments);
         var access = scanner.Read(target, accessor.Semantics == 1, storage, byReference);
         if (access.Status != PropertyAccessStatus.Exact) {
-            ++Rejected[(int)(access.Status == PropertyAccessStatus.HelperRequired
+            Reject(access.Status == PropertyAccessStatus.HelperRequired
                 ? PropertyRejection.ReferenceHelper
-                : PropertyRejection.UnsupportedCode)];
+                : PropertyRejection.UnsupportedCode,
+                owner, accessor.Property, accessor.Method, target, contract, origin, access);
             return;
         }
 
         int offset = access.Offset + access.ReceiverAdjustment - (extraction.Types.Types[owner].IsValueType ? 8 : 0);
         var rejection = CheckStorage(owner, offset, access.Size, storage);
         if (rejection != PropertyRejection.Count) {
-            ++Rejected[(int)rejection];
+            Reject(rejection, owner, accessor.Property, accessor.Method,
+                target, contract, origin, access);
             return;
         }
 
@@ -662,7 +703,10 @@ public sealed class PropertyProjections {
         for (int i = 0; i < sourceCount; ++i) {
             var source = Projections[i];
             if (conflicts.Contains((groups[source.Owner], source.Property))) {
-                ++Rejected[(int)PropertyRejection.CanonicalConflict];
+                Reject(PropertyRejection.CanonicalConflict, source.Owner, source.Property,
+                    source.GetterMethod != 0 ? source.GetterMethod : source.SetterMethod,
+                    source.Getter != 0 ? source.Getter : source.Setter,
+                    source.Contract, PropertyOrigin.Canonical);
                 continue;
             }
 
@@ -677,13 +721,19 @@ public sealed class PropertyProjections {
                     || source.Storage.Binding == 0
                     || storage.Kind != source.Storage.Kind
                     || storage.Size != source.Size) {
-                    ++Rejected[(int)PropertyRejection.UnknownStorage];
+                    Reject(PropertyRejection.UnknownStorage, owner, source.Property,
+                        source.GetterMethod != 0 ? source.GetterMethod : source.SetterMethod,
+                        source.Getter != 0 ? source.Getter : source.Setter,
+                        owner, PropertyOrigin.Canonical);
                     continue;
                 }
 
                 var rejection = CheckStorage(owner, source.Offset, (int)source.Size, storage);
                 if (rejection != PropertyRejection.Count) {
-                    ++Rejected[(int)rejection];
+                    Reject(rejection, owner, source.Property,
+                        source.GetterMethod != 0 ? source.GetterMethod : source.SetterMethod,
+                        source.Getter != 0 ? source.Getter : source.Setter,
+                        owner, PropertyOrigin.Canonical);
                     continue;
                 }
 
@@ -744,7 +794,9 @@ public sealed class PropertyProjections {
             }
 
             if (conflict) {
-                ++Rejected[(int)PropertyRejection.ConflictingAccessors];
+                Reject(PropertyRejection.ConflictingAccessors, first.Owner, first.Property,
+                    first.GetterMethod != 0 ? first.GetterMethod : first.SetterMethod,
+                    first.Getter != 0 ? first.Getter : first.Setter, first.Contract, first.Origin);
             } else {
                 Projections[output++] = first;
             }

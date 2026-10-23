@@ -17,6 +17,8 @@ public struct PropertyAccess {
     public int Offset;
     public int Size;
     public int ReceiverAdjustment;
+    public ulong FirstInstruction;
+    public Code FirstOpcode;
 }
 
 public sealed class PropertyAccessCode {
@@ -125,6 +127,8 @@ public sealed class PropertyAccessCode {
 
         ref readonly var first = ref code[start];
         int instructions = count - start;
+        result.FirstInstruction = first.IP;
+        result.FirstOpcode = first.Code;
 
         if (!setter
             && byReference

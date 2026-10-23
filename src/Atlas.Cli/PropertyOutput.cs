@@ -22,6 +22,40 @@ internal static class PropertyOutput {
 
         json.WriteEndObject();
 
+        json.WriteStartArray("rejection_witnesses");
+
+        foreach (ref readonly var witness in properties.RejectionEntries) {
+            json.WriteStartObject();
+            json.WriteString("reason", witness.Reason.ToString());
+            json.WriteString("origin", witness.Origin.ToString());
+            json.WriteNumber("owner", extraction.Types.Types[witness.Owner].Address);
+            JsonOutput.WriteString(json, "owner_name", extraction.Names.Values[witness.Owner]);
+            json.WriteNumber("contract", extraction.Types.Types[witness.Contract].Address);
+            json.WriteNumber("property", witness.Property);
+            JsonOutput.WriteString(json, "property_name",
+                properties.Members.Properties.TryGetValue(witness.Property, out var property)
+                    ? property.Name : string.Empty);
+            json.WriteNumber("accessor_metadata", witness.Accessor);
+            json.WriteNumber("target", witness.Target);
+
+            if (witness.Access.Body != 0) {
+                json.WriteString("code_status", witness.Access.Status.ToString());
+                json.WriteNumber("body", witness.Access.Body);
+                json.WriteNumber("helper", witness.Access.Helper);
+                json.WriteNumber("observed_offset", witness.Access.Offset);
+                json.WriteNumber("observed_size", witness.Access.Size);
+                if (witness.Access.FirstInstruction != 0) {
+                    json.WriteNumber("first_instruction", witness.Access.FirstInstruction);
+                    json.WriteString("first_opcode", witness.Access.FirstOpcode.ToString());
+                }
+            }
+
+            json.WriteEndObject();
+        }
+
+        json.WriteEndArray();
+        json.WriteNumber("rejection_witnesses_omitted", properties.RejectionWitnessesOmitted);
+
         json.WriteStartArray("projections");
 
         foreach (var projection in properties.Projections) {
