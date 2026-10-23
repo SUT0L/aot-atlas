@@ -20,8 +20,48 @@ env:
   DOTNET_SKIP_FIRST_TIME_EXPERIENCE: '1'
 
 jobs:
+  verify:
+    name: Verify native CLI evidence
+    runs-on: windows-2022
+    timeout-minutes: 30
+    env:
+      NUGET_PACKAGES: ${{ github.workspace }}/.nuget/packages
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: global.json
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.NUGET_PACKAGES }}
+          key: nuget-${{ runner.os }}-${{ hashFiles('global.json', 'Directory.Build.props', 'src/**/*.csproj', 'tests/**/*.csproj') }}
+          restore-keys: nuget-${{ runner.os }}-
+
+      - name: Run parser checks
+        run: dotnet run --project tests/Atlas.Tests/Atlas.Tests.csproj -c Release
+
+      - name: Publish checked fixtures and CLI
+        run: |
+          dotnet publish tests/PropertyDispatchProbe/PropertyDispatchProbe.csproj -c Release -r win-x64 --self-contained --output artifacts/verify-property
+          dotnet publish tests/DictionaryProbe/DictionaryProbe.csproj -c Release -r win-x64 --self-contained --output artifacts/verify-dictionary
+          dotnet publish src/Atlas.Cli/Atlas.Cli.csproj -c Release -r win-x64 --self-contained --output artifacts/verify-cli
+
+      - name: Check published CLI evidence
+        run: |
+          python tests/analysis_status_checks.py artifacts/verify-cli/aot-atlas.exe artifacts/verify-property/PropertyDispatchProbe.exe artifacts/verify-dictionary/DictionaryProbe.exe
+          python tests/metadata_name_checks.py artifacts/verify-cli/aot-atlas.exe artifacts/verify-dictionary/DictionaryProbe.exe
+          python tests/cli_checks.py publication artifacts/verify-cli/aot-atlas.exe artifacts/verify-dictionary/DictionaryProbe.exe --query Dictionary
+
   build:
     name: ${{ matrix.name }} (${{ matrix.rid }})
+    needs: verify
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     strategy:
