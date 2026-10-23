@@ -19,6 +19,10 @@ internal static unsafe class StringAnnotations {
         if (strings.Items.Count == 0)
             return;
 
+        var referencedTargets = new HashSet<ulong>();
+        foreach (ref readonly var reference in references)
+            referencedTargets.Add(reference.Target);
+
         // Snapshot user-defined storage before adding any string candidates.
         nuint count = 0;
         DataVariable* existing = Core.BNGetDataVariables(view, &count);
@@ -91,6 +95,7 @@ internal static unsafe class StringAnnotations {
                     int width = item.Wide ? 2 : 1;
                     ulong address = stats.ImageBase + item.Rva;
                     ulong end = address + (uint)item.Data.Count + (uint)width;
+                    bool referenced = referencedTargets.Contains(image.ImageBase + item.Rva);
 
                     while (cursor < occupiedCount && occupied[cursor].End <= address)
                         ++cursor;
@@ -99,7 +104,7 @@ internal static unsafe class StringAnnotations {
                         || (cursor < occupiedCount && occupied[cursor].Start < end);
                     // Preserve user layouts
                     // Auto definitions can disappear during analysis, so they cant establish persistent string coverage
-                    if (!overlap) {
+                    if (referenced && !overlap) {
                         var key = (item.Wide, item.Data.Count / width + 1);
 
                         if (!arrays.TryGetValue(key, out nint type)) {
@@ -112,14 +117,15 @@ internal static unsafe class StringAnnotations {
                         definedEnd = end;
                     }
 
-                    if (!overlap)
+                    if (referenced && !overlap)
                         ++stats.DataVariables;
 
-                    // Symbols and tags do not require a new storage definition.
                     string encoding = item.Wide ? "utf16le" : "ascii";
-                    Utf8.TryWrite(symbol, $"candidate::cstring::{encoding}::{item.Rva:X8}\0", out _);
-                    symbols.Define(address, 3, name);
-                    ++stats.Symbols;
+                    if (referenced) {
+                        Utf8.TryWrite(symbol, $"candidate::cstring::{encoding}::{item.Rva:X8}\0", out _);
+                        symbols.Define(address, 3, name);
+                        ++stats.Symbols;
+                    }
 
                     // Quote the original code units without replacing lone surrogates.
                     Utf8.TryWrite(text, $"bytes::{encoding}::nul_terminated::", out int length);

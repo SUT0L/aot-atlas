@@ -23,9 +23,10 @@ def require(condition, message):
 
 
 def check_live_strings(view, plugin_path, wait_for_analysis):
-    candidates = ((0xF13D8, 11), (0xF13E3, 11), (0xF13EE, 23))
+    candidates = ((0xF39E8, 7), (0xF3BD8, 7), (0xF3BE0, 5))
     addresses = [view.start + rva for rva, _ in candidates]
-    for address, _ in zip(addresses, candidates):
+    unreferenced = [view.start + rva for rva in (0xF13D8, 0x11DDF7, 0x121E37)]
+    for address in addresses:
         variable = view.get_data_var_at(address)
         require(variable is not None and variable.auto_discovered,
                 f"Expected fresh automatic string storage at 0x{address:X}")
@@ -48,17 +49,32 @@ def check_live_strings(view, plugin_path, wait_for_analysis):
             require(variable.type.width == width and str(variable.type).startswith("char["),
                     f"Atlas string has the wrong type at 0x{address:X}: {variable.type}")
 
+    def check_unreferenced():
+        for address in unreferenced:
+            variable = view.get_data_var_at(address)
+            require(variable is None or variable.auto_discovered,
+                    f"Unreferenced candidate acquired a user data type at 0x{address:X}")
+            symbol = view.get_symbol_at(address)
+            require(symbol is None or not symbol.name.startswith("candidate::cstring::"),
+                    f"Unreferenced candidate acquired an Atlas symbol at 0x{address:X}")
+            require(any(tag.data.startswith("bytes::ascii::nul_terminated::")
+                        for tag in view.get_tags_at(address)),
+                    f"Unreferenced candidate lost its low impact tag at 0x{address:X}")
+
     first = apply()
     check_arrays()
+    check_unreferenced()
     wait_for_analysis()
     second = apply()
     check_arrays()
+    check_unreferenced()
     require(second.data_variables == first.data_variables,
             "Repeat application changed the number of defined variables")
 
     edited_address = addresses[0]
     view.define_user_data_var(edited_address, "uint32_t")
     third = apply()
+    check_unreferenced()
     edited = view.get_data_var_at(edited_address)
     require(edited is not None and not edited.auto_discovered and str(edited.type) == "uint32_t",
             "Repeat application replaced an analyst's string type")
