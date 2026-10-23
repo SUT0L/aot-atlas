@@ -1,13 +1,15 @@
 Contributing
 ============
 
-Build and test the current tree before making changes:
+Build and verify the current tree on Windows before making changes:
 
 ```
 dotnet restore AotAtlas.slnx
 dotnet build AotAtlas.slnx -c Release
-dotnet run --project tests/Atlas.Tests/Atlas.Tests.csproj -c Release
+py -3 tests/verify.py
 ```
+
+The verification command runs the parser suite, publishes two NativeAOT PE fixtures and the native CLI, then checks complete and partial evidence, damaged metadata names, and output publication. On Linux, pass the two Windows PE fixtures explicitly with `python3 tests/verify.py --dictionary <DictionaryProbe.exe> --property <PropertyDispatchProbe.exe>`.
 
 Code style
 ----------
@@ -23,7 +25,7 @@ Parser changes should generally cover malformed or truncated input.
 
 Deterministic checks belong in `tests/Atlas.Tests`.  Tests that need a compiled NativeAOT program should use a project under `tests/` like the others do.  Binja changes should extend `tests/plugin_checks.py`.
 
-Run the solution build and the `Atlas.Tests` runner before submitting a change.  If you are a LLM / Agent, please tag your PR with '🤖🤖🤖' in the PR title.  This does not automatically close a PR, but it gives us a good heads up of what's going on.
+Run the solution build and `tests/verify.py` before submitting a change.  If you are a LLM / Agent, please tag your PR with '🤖🤖🤖' in the PR title.  This does not automatically close a PR, but it gives us a good heads up of what's going on.
 
 CLI output
 -------------------
