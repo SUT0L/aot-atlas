@@ -11,23 +11,22 @@ internal static class GenericContextOutput {
         Utf8JsonWriter json,
         string inputSha256,
         PeImage image,
-        ManagedUnwind managed,
-        MethodGcMap map,
-        GenericContextReferences references,
-        DictionarySlotConsumers consumers,
-        string delegateStatus,
-        string? delegateError = null) {
+        GenericContextResult result) {
+        var managed = result.Managed;
+        var map = result.Gc;
+        var references = result.References;
+        var consumers = result.Consumers;
         json.WriteStartObject();
         json.WriteString("input_sha256", inputSha256);
         json.WriteNumber("image_base", image.ImageBase);
         json.WriteNumber("gcinfo_version", map.Version);
         json.WriteString("region_source", managed.RegionSource.ToString());
-        json.WriteString("gc_headers_status", managed.RegionSource == ManagedRegionSource.Unknown ? "unavailable"
-            : map.Methods.Any(method => method.Info is null) ? "partial" : "complete");
-        json.WriteString("delegate_consumers_status", delegateStatus);
+        json.WriteString("status", result.Status);
+        json.WriteString("gc_headers_status", result.GcHeadersStatus);
+        json.WriteString("delegate_consumers_status", result.DelegateConsumersStatus);
 
-        if (delegateError is not null)
-            json.WriteString("delegate_consumers_error", delegateError);
+        if (result.DelegateConsumersError is not null)
+            json.WriteString("delegate_consumers_error", result.DelegateConsumersError);
 
         json.WriteNumber("declared_method_contexts", references.DeclaredMethodContexts);
         json.WriteNumber("proven_context_parameters", references.Parameters.Length);
@@ -48,17 +47,9 @@ internal static class GenericContextOutput {
 
         json.WriteEndArray();
 
-        var resolved = references.Parameters.Select(parameter => parameter.Target).ToHashSet();
-
         json.WriteStartArray("unresolved_context_parameters");
 
-        foreach (var method in map.Methods) {
-            if (method.Info is not { } info
-                || (info.Flags & 0x30) != 0x20
-                || resolved.Contains(image.ImageBase + method.Begin)) {
-                continue;
-            }
-
+        foreach (var method in result.UnresolvedParameters) {
             json.WriteStartObject();
             json.WriteNumber("target", image.ImageBase + method.Begin);
             json.WriteNumber("gcinfo_rva", method.Address);
@@ -69,10 +60,7 @@ internal static class GenericContextOutput {
 
         json.WriteStartArray("unavailable_gc_headers");
 
-        foreach (var method in map.Methods) {
-            if (method.Info is not null)
-                continue;
-
+        foreach (var method in result.UnavailableHeaders) {
             json.WriteStartObject();
             json.WriteNumber("target", image.ImageBase + method.Begin);
             json.WriteNumber("gcinfo_rva", method.Address);
@@ -87,6 +75,22 @@ internal static class GenericContextOutput {
         foreach (ulong owner in references.UnresolvedControlFlowOwners)
             json.WriteNumberValue(owner);
 
+        json.WriteEndArray();
+
+        json.WriteStartArray("unresolved_dictionary_owners");
+        foreach (ulong owner in consumers.UnresolvedOwners)
+            json.WriteNumberValue(owner);
+        json.WriteEndArray();
+
+        json.WriteStartArray("dictionary_consumer_failures");
+        foreach (var failure in consumers.Failures) {
+            json.WriteStartObject();
+            json.WriteNumber("owner", failure.Owner);
+            json.WriteNumber("dictionary", failure.Dictionary);
+            json.WriteNumber("instruction", failure.Instruction);
+            json.WriteString("error", failure.Error);
+            json.WriteEndObject();
+        }
         json.WriteEndArray();
 
         json.WriteStartArray("references");

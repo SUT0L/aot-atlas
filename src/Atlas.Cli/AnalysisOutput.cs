@@ -8,7 +8,8 @@ internal static class AnalysisOutput {
         _ => "managed_unwind"
     };
 
-    internal static void Write(Utf8JsonWriter json, AnalysisProducts products) {
+    internal static void Write(Utf8JsonWriter json, AnalysisProducts products,
+        GenericContextResult? contextResult) {
         var extraction = products.Extraction;
         var gcInfo = products.GcInfo;
         var analysis = extraction.UnwindAnalysis;
@@ -30,7 +31,7 @@ internal static class AnalysisOutput {
 
         json.WriteStartObject("analysis_status");
         json.WriteString("status", sourcesComplete && analysis.Failures.Length == 0 && !gcFailed && !regionUnknown
-            && pointerComplete && helpersComplete
+            && pointerComplete && helpersComplete && contextResult?.Status == "complete"
             ? "complete" : "partial");
         json.WriteString("metadata", extraction.Metadata.Bytes.IsEmpty ? "absent"
             : extraction.Metadata.IsComplete ? "complete" : "partial");

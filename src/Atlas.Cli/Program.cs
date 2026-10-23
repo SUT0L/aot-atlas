@@ -171,11 +171,12 @@ try {
         var delegates = ReadDelegateConsumers(image, rtr);
         DictionarySlotConsumers consumers = new(image, memory, unwind, gc, delegates.Consumers, cancellationToken);
         GenericContextReferences references = consumers.ContextReferences;
+        var contextResult = new GenericContextResult(image, managed, gc, references, consumers,
+            delegates.Status, delegates.Error);
 
         using (var stream = new OutputFileStream(temporaryOutput))
         using (var json = JsonOutput.CreateWriter(stream, cancellationToken))
-            GenericContextOutput.Write(json, inputSha256, image, managed, gc, references, consumers,
-                delegates.Status, delegates.Error);
+            GenericContextOutput.Write(json, inputSha256, image, contextResult);
 
         PublishOutput();
         Console.WriteLine($"{references.Values.Count} method dictionary references, {references.Parameters.Length}/{references.DeclaredMethodContexts} context parameters.");

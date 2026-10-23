@@ -51,7 +51,7 @@ internal static class SearchOutput {
         });
         JsonOutput.WriteString(json, "query", query);
         json.WriteString("comparison", "ordinal_ignore_case");
-        AnalysisOutput.Write(json, products);
+        AnalysisOutput.Write(json, products, null);
 
         json.WriteStartArray("matches");
 

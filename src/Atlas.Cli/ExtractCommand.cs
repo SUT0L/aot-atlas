@@ -35,6 +35,9 @@ internal static class ExtractCommand {
         var analysis = extraction.UnwindAnalysis;
         var gcInfo = products.GcInfo;
         var fatPointers = products.FunctionPointers!;
+        var contextResult = analysis.Managed is null ? null : new GenericContextResult(
+            image, analysis.Managed, gcInfo!, products.GenericContexts!, products.DictionaryConsumers!,
+            extraction.Traces.Methods.Count == 0 ? "unavailable" : "complete");
 
         json.WritePropertyName("metadata");
         MetadataOutput.Write(
@@ -45,7 +48,7 @@ internal static class ExtractCommand {
         MapsOutput.Write(json, inputSha256, maps, image, metadata, mapsSeconds, cancellationToken);
 
         ExtractionStatusOutput.Write(json, extraction);
-        AnalysisOutput.Write(json, products);
+        AnalysisOutput.Write(json, products, contextResult);
 
         json.WritePropertyName("dictionaries");
         DictionariesOutput.Write(json, inputSha256, extraction);
@@ -104,9 +107,7 @@ internal static class ExtractCommand {
             GcInfoOutput.Write(json, inputSha256, image, analysis.Managed, gcInfo!, cancellationToken);
 
             json.WritePropertyName("generic_context");
-            GenericContextOutput.Write(json, inputSha256, image, analysis.Managed, gcInfo!,
-                products.GenericContexts!, products.DictionaryConsumers!,
-                extraction.Traces.Methods.Count == 0 ? "unavailable" : "complete");
+            GenericContextOutput.Write(json, inputSha256, image, contextResult!);
 
             var abi = products.Abi!;
             var code = products.Code!;

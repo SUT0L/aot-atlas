@@ -30,6 +30,7 @@ def product_statuses(report):
         "dictionary_consumers": pointers["dictionary_consumers_status"],
         "context_gc_headers": context["gc_headers_status"],
         "context_delegates": context["delegate_consumers_status"],
+        "generic_context": context["status"],
     }
 
 
@@ -41,6 +42,8 @@ def check_complete(report):
     require(report["fat_function_pointers"]["failures"] == [], "Healthy pointers have failures")
     require(report["generic_context"]["unresolved_context_parameters"] == [], "Healthy context has unresolved parameters")
     require(report["generic_context"]["unresolved_control_flow_owners"] == [], "Healthy context has unresolved owners")
+    require(report["generic_context"]["dictionary_consumer_failures"] == [], "Healthy context has consumer failures")
+    require(report["generic_context"]["unresolved_dictionary_owners"] == [], "Healthy context has unresolved dictionaries")
 
 
 def check_partial(report):
@@ -49,6 +52,10 @@ def check_partial(report):
             "Partial fixture lacks dictionary consumer failures")
     require(pointers["descriptor_uses_status"] == "partial", "Descriptor uses concealed consumer failures")
     require(pointers["dictionary_consumers_status"] == "partial", "Dictionary consumers concealed failures")
+    context = report["generic_context"]
+    require(context["status"] == "partial", "Context concealed dictionary consumer failures")
+    require(len(context["dictionary_consumer_failures"]) == 25,
+            "Context failure witnesses do not match the compiled fixture")
     require(report["analysis_status"]["failures"] == [], "Partial fixture acquired an unrelated top level failure")
     require(report["analysis_status"]["unavailable_outputs"] == [], "Partial fixture lost an output")
     require(report["analysis_status"]["status"] == "partial", "Aggregate concealed pointer failures")
