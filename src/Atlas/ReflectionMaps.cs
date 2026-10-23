@@ -22,6 +22,7 @@ public struct TypeMapEntry {
     public int Vertex;
     internal int Signature;
     public string Name;
+    public MetadataFactStatus NameStatus;
     public bool IsGlobalModule;
 }
 
@@ -367,12 +368,16 @@ public sealed class ReflectionMaps {
                 uint metadataHandle = (offset << metadata.HandleBits) | kind;
                 int signature = 0;
                 string name = "";
+                MetadataFactStatus nameStatus;
+                var typeId = new MetadataRecordId((MetadataRecordKind)kind, offset);
                 try {
                     signature = metadata.TypeSignature(metadataHandle);
                     name = metadata.SignatureBuilder.Nodes[signature].Name;
+                    nameStatus = metadata.TypeNameStatus(typeId);
                 } catch (Exception error) when (error is InvalidDataException or OverflowException or NotSupportedException) {
                     metadata.RecordFailure(metadataHandle, "reflection type", error);
-                    name = metadata.Name(new((MetadataRecordKind)kind, offset));
+                    name = metadata.Name(typeId, kind == 0x3D ? MetadataFieldName.TypeName : MetadataFieldName.Name);
+                    nameStatus = MetadataFactStatus.Incomplete;
                 }
 
                 Types.Add(new TypeMapEntry {
@@ -381,7 +386,8 @@ public sealed class ReflectionMaps {
                     Vertex = table.Vertex,
                     Signature = signature,
                     IsGlobalModule = kind == (uint)MetadataRecordKind.TypeDefinition && globalModules.Contains(offset),
-                    Name = kind == 0x3D ? "typeref::" + name : name
+                    Name = kind == 0x3D ? "typeref::" + name : name,
+                    NameStatus = nameStatus
                 });
             }
         }

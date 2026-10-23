@@ -15,6 +15,15 @@ internal static class RuntimeNameChecks {
         Assert(names.Values[second] == "G<G<Seed,Seed>,G<Seed,Seed>>", "Ordinary names changed.");
         Assert(names.Complete[second], "Known ordinary name became incomplete.");
 
+        var damagedName = maps.Types[1];
+        damagedName.NameStatus = MetadataFactStatus.InvalidName;
+        maps.Types[1] = damagedName;
+        var damagedNames = new RuntimeNames(tables, maps);
+        Assert(!damagedNames.Complete[1] && !damagedNames.Complete[first] && !damagedNames.Complete[second],
+            "A damaged source name made derived runtime names complete.");
+        damagedName.NameStatus = MetadataFactStatus.Valid;
+        maps.Types[1] = damagedName;
+
         // This closure represents G<G<...>,G<...>>. Its graph has linear size,
         // while spelling the complete type doubles each level.
         for (int i = 0; i < 256; ++i)

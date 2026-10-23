@@ -8,6 +8,68 @@ internal sealed partial class MetadataBuilder {
     private readonly Dictionary<uint, string> failedMethodSignatures = new();
     private bool readingSignatures;
 
+    internal MetadataFactStatus TypeNameStatus(MetadataRecordId id) => id.Kind switch {
+        MetadataRecordKind.TypeDefinition => DefinitionNameStatus(id.Offset, 0),
+        MetadataRecordKind.TypeReference => ReferenceNameStatus(id, 0),
+        _ => MetadataFactStatus.Unresolved
+    };
+
+    private MetadataFactStatus DefinitionNameStatus(uint offset, int depth) {
+        if (depth > 256)
+            return MetadataFactStatus.Incomplete;
+
+        var id = Id(MetadataRecordKind.TypeDefinition, offset);
+        var owner = TypeOwnership(id);
+        var status = NamePartStatus(id, MetadataFieldName.Name, allowEmpty: false);
+        if (owner.Enclosing != 0)
+            status |= DefinitionNameStatus(owner.Enclosing, depth + 1);
+        else if (owner.Namespace != 0)
+            status |= NamespaceNameStatus(owner.Namespace, depth + 1);
+        return status;
+    }
+
+    private MetadataFactStatus NamespaceNameStatus(uint offset, int depth) {
+        if (depth > 256)
+            return MetadataFactStatus.Incomplete;
+
+        var id = Id(MetadataRecordKind.NamespaceDefinition, offset);
+        var parent = Reference(id, MetadataFieldName.ParentScopeOrNamespace);
+        var status = NamePartStatus(id, MetadataFieldName.Name, allowEmpty: true);
+        if (parent.Kind == MetadataRecordKind.NamespaceDefinition)
+            status |= NamespaceNameStatus(parent.Offset, depth + 1);
+        return status;
+    }
+
+    private MetadataFactStatus ReferenceNameStatus(MetadataRecordId id, int depth) {
+        if (depth > 256)
+            return MetadataFactStatus.Incomplete;
+
+        var parent = id.Kind == MetadataRecordKind.NamespaceReference
+            ? Reference(id, MetadataFieldName.ParentScopeOrNamespace)
+            : ReferenceOwner(id);
+        var status = NamePartStatus(id, id.Kind == MetadataRecordKind.TypeReference
+            ? MetadataFieldName.TypeName : MetadataFieldName.Name,
+            allowEmpty: id.Kind == MetadataRecordKind.NamespaceReference);
+        if (parent.Kind is MetadataRecordKind.TypeReference or MetadataRecordKind.NamespaceReference)
+            status |= ReferenceNameStatus(parent, depth + 1);
+        return status;
+    }
+
+    private MetadataFactStatus NamePartStatus(MetadataRecordId id, MetadataFieldName field, bool allowEmpty) {
+        var reference = RecordField(id, field);
+        var offset = reference.UInt32;
+        if (!offset.IsAvailable || offset.Value > 0x01FFFFFF)
+            return offset.Status | reference.NameStatus | MetadataFactStatus.Unresolved;
+        if (offset.Value == 0)
+            return offset.Status | reference.NameStatus
+                | (allowEmpty ? MetadataFactStatus.Valid : MetadataFactStatus.InvalidName);
+
+        var name = RecordName(new(offset.Value));
+        var nameField = RecordField(new(MetadataRecordKind.ConstantStringValue, offset.Value), MetadataFieldName.Value);
+        return offset.Status | reference.NameStatus | name.Status | nameField.NameStatus
+            | (!allowEmpty && name.Value.Length == 0 ? MetadataFactStatus.InvalidName : MetadataFactStatus.Valid);
+    }
+
     internal string DefinitionName(uint offset, int depth = 0) {
         if (DefinitionNames.TryGetValue(offset, out string? cached))
             return cached;

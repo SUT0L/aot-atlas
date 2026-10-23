@@ -662,6 +662,7 @@ internal readonly struct MetadataDecodedField {
 
     internal MetadataFactStatus Status => _atom.Status |
         (_atom.Handle != 0 ? _atom.NameStatus : MetadataFactStatus.Valid);
+    internal MetadataFactStatus NameStatus => _atom.NameStatus;
     internal bool IsAvailable => UInt64.IsAvailable;
     internal MetadataSourceRange Source => new(_atom.SourceOffset, _atom.ByteLength);
     internal ulong Bits => _atom.Value;

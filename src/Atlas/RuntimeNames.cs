@@ -25,7 +25,7 @@ public sealed class RuntimeNames {
                 throw new InvalidDataException($"Conflicting TypeMap names at 0x{entry.MethodTable:X}.");
 
             Values[index] = entry.Name;
-            Complete[index] = true;
+            Complete[index] = entry.NameStatus == MetadataFactStatus.Valid && !string.IsNullOrEmpty(entry.Name);
         }
 
         var builder = new NameBuilder();
