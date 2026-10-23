@@ -15,7 +15,7 @@ def facts(value):
     if isinstance(value, dict):
         return {
             key: facts(item) for key, item in value.items()
-            if key not in {"allocated_bytes", "extraction_stages", "signature_context"}
+            if key != "allocated_bytes"
             and "seconds" not in key
         }
 

@@ -27,6 +27,7 @@ def main():
         subprocess.run([str(part) for part in command], cwd=root, check=True)
 
     run("dotnet", "test", "tests/Atlas.Tests/Atlas.Tests.csproj", "-c", "Release")
+    run(sys.executable, "tests/compatibility_filter_checks.py")
 
     dictionary = arguments.dictionary.resolve() if arguments.dictionary is not None else None
     property_probe = arguments.property.resolve() if arguments.property is not None else None
