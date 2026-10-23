@@ -103,7 +103,7 @@ internal static class SearchOutput {
             if (i < runtimeCount) {
                 var method = new MethodRecord(extraction, i);
 
-                text = renderer.Render(method);
+                text = renderer.Render(method, includeSignature: false);
                 hasSignature = method.Signature != 0;
                 section = method.Section;
                 offset = method.Vertex;
@@ -115,7 +115,7 @@ internal static class SearchOutput {
                 ref readonly var method = ref
                     CollectionsMarshal.AsSpan(extraction.Traces.Methods)[i - runtimeCount];
 
-                text = renderer.Render(method);
+                text = renderer.Render(method, includeSignature: false);
                 section = (int)RtrSectionId.StackTraceMethodMapping;
                 offset = method.Offset;
                 entrypoint = method.Entrypoint;
@@ -124,17 +124,24 @@ internal static class SearchOutput {
                 ref readonly var method = ref
                     CollectionsMarshal.AsSpan(extraction.Templates.Methods)[i - traceEnd];
 
-                text = renderer.Render(method);
+                text = renderer.Render(method, includeSignature: false);
                 hasSignature = method.Method.Identity.Signature != 0;
                 section = (int)RtrSectionId.GenericMethodsTemplateMap;
                 offset = method.Vertex;
                 entrypoint = method.Method.Entrypoint;
             }
 
-            var name = text[..renderer.NameLength];
-
-            if (!name.Contains(query, StringComparison.OrdinalIgnoreCase))
+            if (!text[..renderer.NameLength].Contains(query, StringComparison.OrdinalIgnoreCase))
                 continue;
+
+            if (i < runtimeCount)
+                text = renderer.Render(new MethodRecord(extraction, i));
+            else if (i < traceEnd)
+                text = renderer.Render(CollectionsMarshal.AsSpan(extraction.Traces.Methods)[i - runtimeCount]);
+            else
+                text = renderer.Render(CollectionsMarshal.AsSpan(extraction.Templates.Methods)[i - traceEnd]);
+
+            var name = text[..renderer.NameLength];
 
             json.WriteStartObject();
             json.WriteString("kind", "method");
