@@ -223,6 +223,9 @@ internal static unsafe partial class Core {
     internal static partial nint BNCreateTypeBuilderFromType(nint type);
 
     [LibraryImport(Library)]
+    internal static partial void BNTypeBuilderSetConst(nint type, BoolConfidence* constant);
+
+    [LibraryImport(Library)]
     internal static partial void BNTypeBuilderSetSigned(nint type, BoolConfidence* signed);
 
     [LibraryImport(Library)]

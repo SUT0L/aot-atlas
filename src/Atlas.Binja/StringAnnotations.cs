@@ -68,6 +68,25 @@ internal static unsafe class StringAnnotations {
 
         nint wideCharacter = Core.BNCreateWideCharType(2, &empty);
 
+        BoolConfidence constant = new() {
+            Value = 1,
+            Confidence = 255
+        };
+
+        nint characterBuilder = Core.BNCreateTypeBuilderFromType(character);
+        Core.BNTypeBuilderSetConst(characterBuilder, &constant);
+        nint qualifiedCharacter = Core.BNFinalizeTypeBuilder(characterBuilder);
+        Core.BNFreeTypeBuilder(characterBuilder);
+        Core.BNFreeType(character);
+        character = qualifiedCharacter;
+
+        nint wideCharacterBuilder = Core.BNCreateTypeBuilderFromType(wideCharacter);
+        Core.BNTypeBuilderSetConst(wideCharacterBuilder, &constant);
+        nint qualifiedWideCharacter = Core.BNFinalizeTypeBuilder(wideCharacterBuilder);
+        Core.BNFreeTypeBuilder(wideCharacterBuilder);
+        Core.BNFreeType(wideCharacter);
+        wideCharacter = qualifiedWideCharacter;
+
         nint tagType;
 
         fixed (byte* name = "AOT Atlas strings\0"u8)

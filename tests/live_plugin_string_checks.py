@@ -46,7 +46,7 @@ def check_live_strings(view, plugin_path, wait_for_analysis):
             variable = view.get_data_var_at(address)
             require(variable is not None and not variable.auto_discovered,
                     f"Atlas string type disappeared at 0x{address:X}")
-            require(variable.type.width == width and str(variable.type).startswith("char["),
+            require(variable.type.width == width and str(variable.type).startswith("char const["),
                     f"Atlas string has the wrong type at 0x{address:X}: {variable.type}")
 
     def check_unreferenced():
