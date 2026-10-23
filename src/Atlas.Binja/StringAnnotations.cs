@@ -9,6 +9,7 @@ internal static unsafe class StringAnnotations {
     internal static void Apply(
         Symbols symbols,
         TagOwnership ownership,
+        DataVariables variables,
         nint view,
         PeImage image,
         NativeStrings strings,
@@ -20,21 +21,21 @@ internal static unsafe class StringAnnotations {
 
         // Snapshot user-defined storage before adding any string candidates.
         nuint count = 0;
-        DataVariable* variables = Core.BNGetDataVariables(view, &count);
+        DataVariable* existing = Core.BNGetDataVariables(view, &count);
         var occupied = new Extent[checked((int)count)];
         int occupiedCount = 0;
 
         try {
             for (int i = 0; i < occupied.Length; ++i) {
-                if (variables[i].AutoDiscovered != 0)
+                if (existing[i].AutoDiscovered != 0 || !variables.Preserves(existing[i].Address))
                     continue;
 
-                ulong width = Core.BNGetTypeWidth(variables[i].Type);
+                ulong width = Core.BNGetTypeWidth(existing[i].Type);
                 if (width != 0)
-                    occupied[occupiedCount++] = new Extent(variables[i].Address, checked(variables[i].Address + width));
+                    occupied[occupiedCount++] = new Extent(existing[i].Address, checked(existing[i].Address + width));
             }
         } finally {
-            Core.BNFreeDataVariables(variables, count);
+            Core.BNFreeDataVariables(existing, count);
         }
 
         occupied.AsSpan(0, occupiedCount).Sort(static (left, right) => left.Start.CompareTo(right.Start));
@@ -96,8 +97,6 @@ internal static unsafe class StringAnnotations {
 
                     bool overlap = address < definedEnd
                         || (cursor < occupiedCount && occupied[cursor].Start < end);
-                    bool exact = cursor < occupiedCount && occupied[cursor].Start == address;
-
                     // Preserve user layouts
                     // Auto definitions can disappear during analysis, so they cant establish persistent string coverage
                     if (!overlap) {
@@ -109,12 +108,11 @@ internal static unsafe class StringAnnotations {
                             arrays.Add(key, type);
                         }
 
-                        var confidence = new TypeConfidence(type);
-                        Core.BNDefineUserDataVariable(view, address, &confidence);
+                        variables.Define(address, type);
                         definedEnd = end;
                     }
 
-                    if (!overlap || exact)
+                    if (!overlap)
                         ++stats.DataVariables;
 
                     // Symbols and tags do not require a new storage definition.

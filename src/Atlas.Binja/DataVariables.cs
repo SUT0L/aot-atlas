@@ -24,6 +24,8 @@ internal sealed unsafe class DataVariables {
         }
     }
 
+    internal bool Preserves(ulong address) => preserved.Contains(address);
+
     internal void Define(ulong address, nint type) {
         // Freeze the preexisting user edits before our references can trigger new analysis definitions at addresses we have yet to annotate
         if (preserved.Contains(address)) {
