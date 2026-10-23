@@ -8,7 +8,7 @@ internal static class AnalysisOutput {
         _ => "managed_unwind"
     };
 
-    internal static void Write(Utf8JsonWriter json, AnalysisProducts products,
+    internal static bool Write(Utf8JsonWriter json, AnalysisProducts products,
         GenericContextResult? contextResult) {
         var extraction = products.Extraction;
         var gcInfo = products.GcInfo;
@@ -28,11 +28,11 @@ internal static class AnalysisOutput {
             && extraction.DispatchCellMetadata.Failures.IsEmpty
             && enumFailures == 0
             && unprovenDispatchUses == 0;
+        bool complete = sourcesComplete && analysis.Failures.Length == 0 && !gcFailed && !regionUnknown
+            && pointerComplete && helpersComplete && contextResult?.Status == "complete";
 
         json.WriteStartObject("analysis_status");
-        json.WriteString("status", sourcesComplete && analysis.Failures.Length == 0 && !gcFailed && !regionUnknown
-            && pointerComplete && helpersComplete && contextResult?.Status == "complete"
-            ? "complete" : "partial");
+        json.WriteString("status", complete ? "complete" : "partial");
         json.WriteString("metadata", extraction.Metadata.Bytes.IsEmpty ? "absent"
             : extraction.Metadata.IsComplete ? "complete" : "partial");
         if (extraction.Metadata.Facts.Status != MetadataFactStatus.Valid)
@@ -118,5 +118,6 @@ internal static class AnalysisOutput {
 
         json.WriteEndArray();
         json.WriteEndObject();
+        return complete;
     }
 }

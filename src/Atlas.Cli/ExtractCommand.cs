@@ -3,7 +3,7 @@ using System.Text.Json;
 using Atlas;
 
 internal static class ExtractCommand {
-    internal static void Write(Utf8JsonWriter json, string inputSha256, PeImage image,
+    internal static bool Write(Utf8JsonWriter json, string inputSha256, PeImage image,
         ReadyToRun rtr, MapFormat format, CancellationToken cancellationToken = default) {
         cancellationToken.ThrowIfCancellationRequested();
         json.WriteStartObject();
@@ -48,7 +48,7 @@ internal static class ExtractCommand {
         MapsOutput.Write(json, inputSha256, maps, image, metadata, mapsSeconds, cancellationToken);
 
         ExtractionStatusOutput.Write(json, extraction);
-        AnalysisOutput.Write(json, products, contextResult);
+        bool complete = AnalysisOutput.Write(json, products, contextResult);
 
         json.WritePropertyName("dictionaries");
         DictionariesOutput.Write(json, inputSha256, extraction);
@@ -154,5 +154,6 @@ internal static class ExtractCommand {
         AnalysisTimingOutput.Write(json, products, metadataSeconds, mapsSeconds);
         cancellationToken.ThrowIfCancellationRequested();
         json.WriteEndObject();
+        return complete;
     }
 }

@@ -61,6 +61,34 @@ def check_partial(report):
     require(report["analysis_status"]["status"] == "partial", "Aggregate concealed pointer failures")
 
 
+def check_strict(cli, complete_binary, partial_binary, output):
+    prefix = ["dotnet", str(cli)] if cli.suffix == ".dll" else [str(cli)]
+
+    for source, options, expected_code, expected_status in (
+        (complete_binary, ["--require-complete"], 0, "complete"),
+        (partial_binary, ["--require-complete"], 3, "partial"),
+        (partial_binary, ["--require-complete", "--map-format", "metadata"], 3, "partial"),
+        (partial_binary, ["--map-format", "metadata", "--require-complete"], 3, "partial"),
+    ):
+        output.write_text("prior output", encoding="utf-8")
+        result = subprocess.run(prefix + ["extract", str(source), str(output), *options],
+                                capture_output=True, text=True)
+        require(result.returncode == expected_code,
+                f"Strict extract returned {result.returncode} instead of {expected_code}: {result.stderr}")
+        report = json.loads(output.read_bytes())
+        require(report["analysis_status"]["status"] == expected_status,
+                "Strict exit code disagrees with the published report")
+        if expected_code != 0:
+            require("partial report written" in result.stderr,
+                    "Strict failure did not identify the inspectable partial report")
+            require(report["generic_context"]["dictionary_consumer_failures"],
+                    "Strict failure discarded its partial evidence")
+
+    result = subprocess.run(prefix + ["sections", str(partial_binary), str(output),
+                                      "--require-complete"], capture_output=True, text=True)
+    require(result.returncode == 2, "Strict mode was accepted for a command without aggregate status")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("cli", type=Path)
@@ -72,8 +100,10 @@ def main():
         output = Path(directory) / "extract.json"
         check_complete(extract(arguments.cli.resolve(), arguments.complete_binary.resolve(), output))
         check_partial(extract(arguments.cli.resolve(), arguments.partial_binary.resolve(), output))
+        check_strict(arguments.cli.resolve(), arguments.complete_binary.resolve(),
+                     arguments.partial_binary.resolve(), output)
 
-    print("Aggregate analysis status agrees with complete and failed product evidence.")
+    print("Aggregate and strict CLI status agree with complete and failed product evidence.")
 
 
 if __name__ == "__main__":

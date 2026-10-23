@@ -6,6 +6,7 @@ long invocationStart = Stopwatch.GetTimestamp();
 long invocationAllocated = GC.GetAllocatedBytesForCurrentThread();
 long invocationProcessAllocated = GC.GetTotalAllocatedBytes(precise: true);
 MapFormat requestedFormat = MapFormat.Auto;
+bool requireComplete = false;
 
 string command = args.Length == 0 ? "" : args[0];
 var plan = CommandPlan.For(command);
@@ -14,18 +15,26 @@ if (plan is null)
 
 bool search = command == "search";
 int positionalCount = plan.PositionalCount;
-bool validArguments = args.Length == positionalCount;
+bool validArguments = args.Length >= positionalCount;
+bool mapFormatSpecified = false;
 
-if (args.Length == positionalCount + 2
-    && plan.AcceptsMapFormat
-    && args[positionalCount] == "--map-format") {
-    requestedFormat = args[positionalCount + 1] switch {
-        "legacy" => MapFormat.Legacy,
-        "metadata" => MapFormat.Metadata,
-        _ => MapFormat.Auto
-    };
-
-    validArguments = requestedFormat != MapFormat.Auto;
+for (int index = positionalCount; validArguments && index < args.Length;) {
+    if (args[index] == "--require-complete" && command == "extract" && !requireComplete) {
+        requireComplete = true;
+        ++index;
+    } else if (args[index] == "--map-format" && plan.AcceptsMapFormat
+        && !mapFormatSpecified && index + 1 < args.Length) {
+        requestedFormat = args[index + 1] switch {
+            "legacy" => MapFormat.Legacy,
+            "metadata" => MapFormat.Metadata,
+            _ => MapFormat.Auto
+        };
+        mapFormatSpecified = true;
+        validArguments = requestedFormat != MapFormat.Auto;
+        index += 2;
+    } else {
+        validArguments = false;
+    }
 }
 
 if (!validArguments || (search && args[3].Length == 0))
@@ -100,12 +109,18 @@ try {
     }
 
     if (args[0] == "extract") {
+        bool complete;
         using (var stream = new OutputFileStream(temporaryOutput))
         using (var json = JsonOutput.CreateWriter(stream, cancellationToken))
-            ExtractCommand.Write(json, inputSha256, image, rtr, requestedFormat, cancellationToken);
+            complete = ExtractCommand.Write(json, inputSha256, image, rtr, requestedFormat, cancellationToken);
 
         PublishOutput();
         Console.WriteLine($"Extracted RTR {rtr.Major}.{rtr.Minor}.");
+
+        if (requireComplete && !complete) {
+            Console.Error.WriteLine($"Analysis incomplete; partial report written to {args[2]}.");
+            return 3;
+        }
 
         return 0;
     }
@@ -484,7 +499,8 @@ try {
 }
 
 int Usage() {
-    Console.Error.WriteLine("Usage: aot-atlas <extract|inspect|sections|metadata|maps|types|methods|dispatch|dictionaries|runtime-helpers|properties|templates|statics|fields|frozen|enums|gvm|marshalling|typemaps|pinvoke|code|strings|resources|linkage|unwind|exceptions|gcinfo|generic-context|fat-function-pointers> <binary> <output.json> [--map-format legacy|metadata]");
+    Console.Error.WriteLine("Usage: aot-atlas extract <binary> <output.json> [--map-format legacy|metadata] [--require-complete]");
+    Console.Error.WriteLine("       aot-atlas <inspect|sections|metadata|maps|types|methods|dispatch|dictionaries|runtime-helpers|properties|templates|statics|fields|frozen|enums|gvm|marshalling|typemaps|pinvoke|code|strings|resources|linkage|unwind|exceptions|gcinfo|generic-context|fat-function-pointers> <binary> <output.json> [--map-format legacy|metadata]");
     Console.Error.WriteLine("       aot-atlas search <binary> <output.json> <query> [--map-format legacy|metadata]");
     Console.Error.WriteLine("       aot-atlas header <binary> <output.h> [--map-format legacy|metadata]");
     Console.Error.WriteLine("       aot-atlas dispatch-cells <binary> <output.json> [--map-format legacy|metadata]");
