@@ -12,6 +12,18 @@ internal static class CodeFlowChecks {
         Assert(code.Jumps.SequenceEqual([new CodeEdge(Start + 10, Start + 17)]));
         Assert(code.Addresses.SequenceEqual([new CodeEdge(Start, 0xE8)]));
 
+        var entryImage = PeFixture.Create(Convert.FromHexString("8B4108C3E8F7FFFFFFC3"), ".text", 0x60000020);
+        var entryReceivers = new Dictionary<ulong, ulong> { [Start] = Owner };
+        var distinctEntries = new CodeFlow(entryImage, [Start, Start + 4], entryReceivers);
+        var repeatedEntries = new CodeFlow(entryImage,
+            [Start + 4, Start, Start + 4, Start, Start], entryReceivers);
+        Assert(repeatedEntries.FunctionEntrypoints.SequenceEqual([Start, Start + 4]));
+        Assert(repeatedEntries.InstructionCount == distinctEntries.InstructionCount);
+        Assert(repeatedEntries.CallEdges.SequenceEqual(distinctEntries.CallEdges));
+        Assert(repeatedEntries.JumpEdges.SequenceEqual(distinctEntries.JumpEdges));
+        Assert(repeatedEntries.AddressEdges.SequenceEqual(distinctEntries.AddressEdges));
+        Assert(repeatedEntries.ReceiverAccessEntries.SequenceEqual(distinctEntries.ReceiverAccessEntries));
+
         code = Decode(Convert.FromHexString("65488B050000000065488D05000000000F1F0500000000C3"));
         Assert(code.InstructionCount == 4);
         Assert(code.Addresses.SequenceEqual([new CodeEdge(Start + 8, Start + 16)]));

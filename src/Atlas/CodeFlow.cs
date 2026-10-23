@@ -180,8 +180,7 @@ public sealed class CodeFlow {
                 Receivers[trace.Entrypoint] = 0;
         }
 
-        Entrypoints = entries.ToArray();
-        Array.Sort(Entrypoints);
+        Entrypoints = SortedUniqueEntrypoints(CollectionsMarshal.AsSpan(entries));
 
         Read(extraction.Image, extraction.DispatchCellMetadata.Layout == DispatchCellLayout.CachedMethodTableAndCode
             ? extraction.DispatchCellMetadata : null);
@@ -247,12 +246,27 @@ public sealed class CodeFlow {
         Runtime = new RuntimeCode();
         Context = new CodeContext();
 
-        Entrypoints = entrypoints.ToArray();
-        Array.Sort(Entrypoints);
+        Entrypoints = SortedUniqueEntrypoints(entrypoints);
 
         Receivers = new(receivers);
 
         Read(image);
+    }
+
+    private static ulong[] SortedUniqueEntrypoints(ReadOnlySpan<ulong> entries) {
+        var sorted = entries.ToArray();
+        Array.Sort(sorted);
+
+        int unique = 0;
+        foreach (ulong entry in sorted) {
+            if (unique == 0 || entry != sorted[unique - 1])
+                sorted[unique++] = entry;
+        }
+
+        if (unique != sorted.Length)
+            Array.Resize(ref sorted, unique);
+
+        return sorted;
     }
 
     private void BindFields(Extraction extraction) {
