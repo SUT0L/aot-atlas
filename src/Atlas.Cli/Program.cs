@@ -412,6 +412,9 @@ try {
                         case "statics":
                             StaticsOutput.Write(json, inputSha256, extraction);
                             break;
+
+                        default:
+                            throw new InvalidDataException($"No output writer is registered for {command}.");
                     }
                 }
 
