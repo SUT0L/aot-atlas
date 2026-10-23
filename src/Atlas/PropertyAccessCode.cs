@@ -37,8 +37,7 @@ public sealed class PropertyAccessCode {
         ulong entrypoint,
         bool setter,
         in AbiValue storage,
-        bool byReference = false,
-        ulong assignReference = 0) {
+        bool byReference = false) {
         PropertyAccess result = new() {
             Body = entrypoint
         };
@@ -235,9 +234,7 @@ public sealed class PropertyAccessCode {
             result.Offset = (int)first.MemoryDisplacement64;
             result.Size = 8;
             result.Helper = code[start + 1].NearBranchTarget;
-            result.Status = assignReference != 0 && result.Helper == assignReference
-                ? PropertyAccessStatus.Exact
-                : PropertyAccessStatus.HelperRequired;
+            result.Status = PropertyAccessStatus.HelperRequired;
         }
 
         return result;

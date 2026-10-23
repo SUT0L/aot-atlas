@@ -9,6 +9,7 @@ def main():
     parser = argparse.ArgumentParser(description="Run parser and published CLI checks")
     parser.add_argument("--dictionary", type=Path)
     parser.add_argument("--property", type=Path)
+    parser.add_argument("--canonical", type=Path)
     arguments = parser.parse_args()
 
     root = Path(__file__).resolve().parents[1]
@@ -31,6 +32,7 @@ def main():
 
     dictionary = arguments.dictionary.resolve() if arguments.dictionary is not None else None
     property_probe = arguments.property.resolve() if arguments.property is not None else None
+    canonical_probe = arguments.canonical.resolve() if arguments.canonical is not None else None
 
     if windows:
         if dictionary is None:
@@ -43,11 +45,18 @@ def main():
                 "-c", "Release", "-r", rid, "--self-contained",
                 "--output", output / "property")
             property_probe = output / "property" / "PropertyDispatchProbe.exe"
+        if canonical_probe is None:
+            run("dotnet", "publish", "tests/PropertyCanonicalProbe/PropertyCanonicalProbe.csproj",
+                "-c", "Release", "-r", rid, "--self-contained",
+                "--output", output / "canonical")
+            canonical_probe = output / "canonical" / "PropertyCanonicalProbe.exe"
     else:
         dictionary = dictionary or root / "artifacts" / "DictionaryProbe.exe"
         property_probe = property_probe or root / "artifacts" / "PropertyDispatchProbe.exe"
+        canonical_probe = canonical_probe or root / "artifacts" / "PropertyCanonicalProbe.exe"
 
-    for label, binary in (("dictionary", dictionary), ("property", property_probe)):
+    for label, binary in (("dictionary", dictionary), ("property", property_probe),
+                          ("canonical", canonical_probe)):
         if not binary.is_file():
             parser.error(f"{label} PE fixture is missing: {binary}")
 
@@ -59,6 +68,7 @@ def main():
         dictionary)
     run(sys.executable, "tests/analysis_status_checks.py", cli, property_probe, dictionary)
     run(sys.executable, "tests/property_rejection_checks.py", cli, property_probe)
+    run(sys.executable, "tests/reference_setter_checks.py", cli, canonical_probe)
     run(sys.executable, "tests/metadata_name_checks.py", cli, dictionary)
     if windows:
         run(sys.executable, "tests/cli_checks.py", "publication", cli, dictionary,
