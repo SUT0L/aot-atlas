@@ -1,9 +1,13 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
+    <GenerateProgramFile>false</GenerateProgramFile>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../../src/Atlas/Atlas.csproj" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
     <Compile Include="../../src/Atlas.Cli/MetadataIdentityOutput.cs" Link="MetadataIdentityOutput.cs" />
     <Compile Include="../../src/Atlas.Cli/MetadataOutput.cs" Link="MetadataOutput.cs" />
     <Compile Include="../../src/Atlas.Cli/JsonOutput.cs" Link="JsonOutput.cs" />

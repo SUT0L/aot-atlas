@@ -45,7 +45,7 @@ jobs:
           restore-keys: nuget-${{ runner.os }}-
 
       - name: Run parser checks
-        run: dotnet run --project tests/Atlas.Tests/Atlas.Tests.csproj -c Release
+        run: dotnet test tests/Atlas.Tests/Atlas.Tests.csproj -c Release
 
       - name: Publish checked fixtures and CLI
         run: |
