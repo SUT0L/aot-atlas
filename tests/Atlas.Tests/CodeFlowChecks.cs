@@ -135,10 +135,16 @@ internal static class CodeFlowChecks {
 
         code = Decode(bytes);
         Assert(code.InstructionCount == reachable.Count * 2 && code.Addresses.Count == 0);
-        Assert(code.Calls.ToHashSet().SetEquals(reachable.Select(i =>
-            new CodeEdge(Start + (uint)i * 16, Start + (uint)calls[i] * 16))));
-        Assert(code.Jumps.ToHashSet().SetEquals(reachable.Select(i =>
-            new CodeEdge(Start + (uint)i * 16 + 5, Start + (uint)jumps[i] * 16))));
+        var expectedCalls = reachable.Select(i =>
+            new CodeEdge(Start + (uint)i * 16, Start + (uint)calls[i] * 16))
+            .OrderBy(edge => edge.Instruction).ToArray();
+        var expectedJumps = reachable.Select(i =>
+            new CodeEdge(Start + (uint)i * 16 + 5, Start + (uint)jumps[i] * 16))
+            .OrderBy(edge => edge.Instruction).ToArray();
+        Assert(code.Calls.Count == expectedCalls.Length
+            && code.Calls.OrderBy(edge => edge.Instruction).SequenceEqual(expectedCalls));
+        Assert(code.Jumps.Count == expectedJumps.Length
+            && code.Jumps.OrderBy(edge => edge.Instruction).SequenceEqual(expectedJumps));
 
         Console.WriteLine($"Code flow: 13 instruction fixtures, 512 seeded receiver loops, and seeded graph, {reachable.Count}/{blocks} blocks reached.");
     }
