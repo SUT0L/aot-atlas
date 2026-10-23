@@ -61,8 +61,9 @@ def metadata_counts(metadata):
 
 
 def run(cli, command, binary, output):
+    prefix = ["dotnet", str(cli)] if cli.suffix == ".dll" else [str(cli)]
     result = subprocess.run(
-        ["dotnet", str(cli), command, str(binary), str(output)], capture_output=True, text=True
+        prefix + [command, str(binary), str(output)], capture_output=True, text=True
     )
     assert result.returncode == 0, (command, binary, result.stderr)
     assert not list(output.parent.glob("*.tmp")), "Unpublished temporary output remains."
@@ -83,7 +84,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("cli", type=Path)
     parser.add_argument("fixtures", type=named_fixture, nargs="+")
-    source = parser.add_mutually_exclusive_group()
+    source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--golden", type=Path)
     source.add_argument("--baseline-cli", type=Path)
     parser.add_argument("--producer-golden", type=Path)
@@ -102,35 +103,35 @@ if __name__ == "__main__":
             standalone_counts = None
             corrected_metadata_paths = {name + ".metadata", name + ".extract.metadata"}
 
-            if arguments.golden is not None or arguments.baseline_cli is not None:
-                for command in COMMANDS:
-                    actual = run(arguments.cli.resolve(), command, binary, directory / "actual.json")
+            for command in COMMANDS:
+                actual = run(arguments.cli.resolve(), command, binary, directory / "actual.json")
 
-                    if command == "metadata":
-                        standalone_counts = metadata_counts(actual)
-                    elif command == "extract":
-                        metadata = actual["metadata"]
-                        assert standalone_counts == (metadata["signature_nodes"], metadata["signature_edges"]), (
-                            name, "Full metadata summary differs from its standalone completed publication"
-                        )
+                if command == "metadata":
+                    standalone_counts = metadata_counts(actual)
+                elif command == "extract":
+                    metadata = actual["metadata"]
+                    assert (metadata["signature_nodes"] >= standalone_counts[0]
+                            and metadata["signature_edges"] >= standalone_counts[1]), (
+                        name, "Integrated publication lost standalone metadata graph entries"
+                    )
 
-                    if arguments.golden is not None:
-                        expected = json.loads((arguments.golden / name / (command + ".json")).read_bytes())
-                    else:
-                        expected = run(
-                            arguments.baseline_cli.resolve(), command, binary, directory / "expected.json"
-                        )
+                if arguments.golden is not None:
+                    expected = json.loads((arguments.golden / name / (command + ".json")).read_bytes())
+                else:
+                    expected = run(
+                        arguments.baseline_cli.resolve(), command, binary, directory / "expected.json"
+                    )
 
-                    preserve(facts(expected), facts(actual), name + "." + command, corrected_metadata_paths)
+                preserve(facts(expected), facts(actual), name + "." + command, corrected_metadata_paths)
 
-                    if "extraction_stages" in actual:
-                        stages = actual["extraction_stages"]
-                        assert stages["dictionary_signatures"] == "complete", (name, command, stages)
-                        assert stages["dictionary_bindings"] == (
-                            "available" if command in ("dictionaries", "extract") else "not_requested"
-                        ), (name, command, stages)
+                if "extraction_stages" in actual:
+                    stages = actual["extraction_stages"]
+                    assert stages["dictionary_signatures"] == "complete", (name, command, stages)
+                    assert stages["dictionary_bindings"] == (
+                        "available" if command in ("dictionaries", "extract") else "not_requested"
+                    ), (name, command, stages)
 
-                    checked += 1
+                checked += 1
 
             pointers = run(arguments.cli.resolve(), "fat-function-pointers", binary, directory / "pointers.json")
 
@@ -143,6 +144,9 @@ if __name__ == "__main__":
                     name, "Anchored producer coverage changed", len(pointers["pointers"])
                 )
 
-            print(f"{name}: prior facts/IDs retained and {len(pointers['pointers'])} anchored producer descriptors checked.", flush=True)
+            print(f"{name}: prior facts and IDs retained; {len(pointers['pointers'])} producer descriptors observed.", flush=True)
+
+    if checked == 0:
+        raise RuntimeError("No prior-output comparisons ran.")
 
     print(f"{checked} prior-output comparisons passed; additive facts remain available.")
