@@ -51,7 +51,7 @@ public sealed class PropertyProjections {
     public TypeBindings Bindings => bindings;
 
     public readonly MetadataMembers Members;
-    internal readonly List<PropertyProjection> Projections = new(8192);
+    internal readonly List<PropertyProjection> Projections = new();
     internal readonly int[] Rejected = new int[(int)PropertyRejection.Count];
     internal readonly PropertyFunction[] Functions;
     public ReadOnlySpan<PropertyProjection> ProjectionEntries => CollectionsMarshal.AsSpan(Projections);
@@ -79,7 +79,7 @@ public sealed class PropertyProjections {
     private readonly uint pointerFlag;
     private readonly Dictionary<(uint Owner, uint Method), int> accessorHeads = new();
     private readonly Dictionary<uint, IndexRange> ownerAccessors = new();
-    private readonly List<Accessor> accessors = new(8192);
+    private readonly List<Accessor> accessors = new();
     private readonly PropertyAccessCode scanner;
 
     private struct Accessor {
@@ -106,6 +106,8 @@ public sealed class PropertyProjections {
         Members = metadata.Members;
         Signatures = metadata.PublishedSignatures;
         bindings = extraction.Bindings;
+        Projections.EnsureCapacity(Members.Properties.Count);
+        accessors.EnsureCapacity(Members.Accessors.Length);
 
         scanner = new PropertyAccessCode(extraction.Image);
 
