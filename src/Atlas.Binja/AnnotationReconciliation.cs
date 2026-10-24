@@ -78,6 +78,7 @@ internal sealed unsafe class AnnotationReconciliation : IDisposable {
     private readonly string temporary;
     private HashSet<ulong>? initialUserVariables;
     private readonly bool fieldsOnly;
+    private bool sameInputAbi;
     private bool reuseUnchangedAbi;
     private readonly CancellationToken cancellationToken;
     private bool complete;
@@ -960,13 +961,68 @@ internal sealed unsafe class AnnotationReconciliation : IDisposable {
             && (saved[purity + 1] == 0 || observed[purity] == saved[purity]);
     }
 
+    private static bool CompatibleUpgradeAbiMetadata(ReadOnlySpan<byte> observed, ReadOnlySpan<byte> desired) {
+        if (CompatibleAbiMetadata(observed, desired, automatic: true, restored: true))
+            return true;
+        if (observed.Length != desired.Length)
+            return false;
+
+        // Analysis can replace a custom parameter location source with the
+        // default source while leaving the location itself unchanged.
+        byte[] normalised = desired.ToArray();
+        using var input = new MemoryStream(normalised, writable: false);
+        using var reader = new BinaryReader(input, Encoding.UTF8);
+        try {
+            reader.ReadByte();
+            reader.ReadByte();
+            reader.ReadByte();
+            SkipAbiLocation(reader);
+            ulong count = reader.ReadUInt64();
+            if (count > 1024)
+                return false;
+            for (ulong index = 0; index < count; ++index) {
+                reader.ReadString();
+                reader.ReadByte();
+                int source = checked((int)input.Position);
+                byte locationSource = reader.ReadByte();
+                if (locationSource == 3 && observed[source] == 0)
+                    normalised[source] = 0;
+                SkipAbiLocation(reader);
+            }
+        } catch (IOException) {
+            return false;
+        }
+        return CompatibleAbiMetadata(observed, normalised, automatic: true, restored: true);
+    }
+
+    private static void SkipAbiLocation(BinaryReader reader) {
+        ulong count = reader.ReadUInt64();
+        reader.ReadByte();
+        if (reader.ReadByte() != 0)
+            SkipAbiVariable(reader);
+        if (count > 1024)
+            throw new InvalidDataException("The function ABI location has too many components.");
+        for (ulong index = 0; index < count; ++index) {
+            SkipAbiVariable(reader);
+            reader.ReadInt64();
+            if (reader.ReadByte() != 0)
+                reader.ReadUInt64();
+        }
+    }
+
+    private static void SkipAbiVariable(BinaryReader reader) {
+        reader.ReadByte();
+        reader.ReadUInt32();
+        reader.ReadInt64();
+    }
+
     private bool Equal(Fact? current, Fact expected) {
         if (current == null)
             return false;
 
         // BNDB can reload an Atlas automatic function type as a user type.
         // The same input receipt and exact ABI still establish our ownership.
-        bool restoredAbi = reuseUnchangedAbi && expected.Key.Kind == Kind.Abi
+        bool restoredAbi = sameInputAbi && expected.Key.Kind == Kind.Abi
             && expected.Automatic && !current.Automatic;
 
         return (current.Automatic == expected.Automatic || restoredAbi)
@@ -1194,7 +1250,7 @@ internal sealed unsafe class AnnotationReconciliation : IDisposable {
     internal bool CanApplyFunctionType(nint function) {
         if (Core.BNFunctionHasUserType(function) == 0)
             return true;
-        if (!reuseUnchangedAbi)
+        if (!sameInputAbi)
             return false;
 
         var key = new Key(Kind.Abi, Core.BNGetFunctionStart(function) - imageBase);
@@ -1208,7 +1264,10 @@ internal sealed unsafe class AnnotationReconciliation : IDisposable {
         if (!Accept(key, before, before != null && before.Automatic))
             return;
 
-        if (reuseUnchangedAbi && facts.TryGetValue(key, out var existing) && !existing.Excluded) {
+        if (sameInputAbi && facts.TryGetValue(key, out var existing) && !existing.Excluded) {
+            if (!reuseUnchangedAbi && (!SameAbiSignature(before!.Type, type)
+                || !CompatibleUpgradeAbiMetadata(before.Bytes, AbiMetadata(type))))
+                throw new InvalidDataException($"Atlas owned function ABI at 0x{imageBase + key.Address:X} changed across plugin builds; open the executable in a fresh Binary Ninja view.");
             existing.Type = before!.Type;
             existing.Bytes = before.Bytes;
             return;
@@ -1450,8 +1509,13 @@ internal sealed unsafe class AnnotationReconciliation : IDisposable {
     }
 
     internal void SetInputIdentity(ReadOnlySpan<byte> stamp) {
-        reuseUnchangedAbi = facts.TryGetValue(new Key(Kind.Metadata, Id: "aot-atlas:apply-input"), out var input)
-            && !input.Excluded && input.Bytes.AsSpan().SequenceEqual(stamp);
+        var key = new Key(Kind.Metadata, Id: "aot-atlas:apply-input");
+        sameInputAbi = facts.TryGetValue(key, out var input)
+            && !input.Excluded && input.Bytes.Length == stamp.Length && stamp.Length == 73
+            && input.Bytes.AsSpan(0, 8).SequenceEqual("ATINPUT1"u8)
+            && input.Bytes.AsSpan(0, 40).SequenceEqual(stamp[..40])
+            && input.Bytes[72] == stamp[72] && Equal(Capture(key), input);
+        reuseUnchangedAbi = sameInputAbi && input!.Bytes.AsSpan(40, 32).SequenceEqual(stamp.Slice(40, 32));
     }
 
     internal void RememberInputFormat(MapFormat format) {
@@ -1568,6 +1632,12 @@ internal sealed unsafe class AnnotationReconciliation : IDisposable {
     internal void StoreMetadata(byte* id, nint metadata, byte flags) {
         var key = new Key(Kind.Metadata, Id: Text(id));
         Fact? before = Capture(key);
+        if (key.Id == "aot-atlas:apply-input" && sameInputAbi && facts.TryGetValue(key, out var input)
+            && !input.Excluded && Equal(before, input)) {
+            Record(before, new Fact { Key = key, Bytes = Raw(metadata) });
+            Core.StoreMetadataRaw(View, id, metadata, flags);
+            return;
+        }
         if (!Accept(key, before, before == null))
             return;
 
@@ -1638,6 +1708,8 @@ internal sealed unsafe class AnnotationReconciliation : IDisposable {
                 }
                 Fact? current = Capture(fact.Key);
                 if (Equal(current, fact)) {
+                    if (kind == Kind.Abi && current != null && !current.Automatic && sameInputAbi)
+                        throw new InvalidDataException($"Atlas owned function ABI at 0x{imageBase + fact.Key.Address:X} is no longer emitted; open the executable in a fresh Binary Ninja view.");
                     changes.Add((fact, new Fact { Key = fact.Key, Excluded = true }));
                     Restore(null, fact, retract: true);
                     facts.Remove(fact.Key);
