@@ -229,7 +229,9 @@ internal sealed class AnalysisEvidence {
                 cancellationToken.ThrowIfCancellationRequested();
 
                 ulong address = imageBase + method.Begin;
-                var text = Begin(AnalysisEvidenceKind.GcInfo, address);
+                int slotCount = method.Info?.Slots.Length ?? 0;
+                int initialCapacity = (int)Math.Min(4096L, 128L + 64L * slotCount);
+                var text = Begin(AnalysisEvidenceKind.GcInfo, address, initialCapacity);
 
                 text.Append($"gcinfo::rva=0x{method.Address:X}::version={map.Version}");
 
@@ -424,11 +426,11 @@ internal sealed class AnalysisEvidence {
             }
         }
 
-        StringBuilder Begin(AnalysisEvidenceKind kind, ulong address) {
+        StringBuilder Begin(AnalysisEvidenceKind kind, ulong address, int initialCapacity) {
             ref object? value = ref CollectionsMarshal.GetValueRefOrAddDefault(tags, (kind, address), out bool exists);
             StringBuilder builder;
             if (!exists)
-                builder = new StringBuilder();
+                builder = new StringBuilder(initialCapacity);
             else if (value is string single)
                 builder = new StringBuilder(checked(single.Length + 1)).Append(single).Append('\n');
             else
