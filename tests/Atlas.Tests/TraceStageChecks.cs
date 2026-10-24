@@ -70,15 +70,18 @@ internal static class TraceStageChecks {
             EqualMetadata(types.Metadata, damagedTypes.Metadata);
             EqualMetadata(fields.Metadata, damagedFields.Metadata);
 
-            AssertRejected(damaged, ExtractionStage.MethodTracing);
-            AssertRejected(damaged, ExtractionStage.All);
+            var damagedTracing = Extract(damaged, ExtractionStage.MethodTracing);
+            var damagedFull = Extract(damaged, ExtractionStage.All);
+            AssertUnavailable(damagedTracing);
+            AssertUnavailable(damagedFull);
+            EqualTypes(full, damagedFull);
 
             var restored = Extract(original, ExtractionStage.All);
             Assert(restored.Traces.Methods.SequenceEqual(full.Traces.Methods));
             EqualTypes(full, restored);
             EqualMetadata(full.Metadata, restored.Metadata);
 
-            Console.WriteLine($"{Path.GetFileName(binary)}: {full.Traces.Methods.Count} trace records; types and fields preserve facts and parser state through late trace corruption; requested tracing rejects it; restored full extraction equals original.");
+            Console.WriteLine($"{Path.GetFileName(binary)}: {full.Traces.Methods.Count} trace records; types and fields preserve facts through late trace corruption; trace status is unavailable and restored full extraction equals original.");
         }
     }
 
@@ -136,16 +139,11 @@ internal static class TraceStageChecks {
         Assert(rejected);
     }
 
-    private static void AssertRejected(byte[] bytes, ExtractionStage stage) {
-        bool rejected = false;
-
-        try {
-            _ = Extract(bytes, stage);
-        } catch (InvalidDataException error) when (error.Message.Contains("Stack-trace entrypoint", StringComparison.Ordinal)) {
-            rejected = true;
-        }
-
-        Assert(rejected);
+    private static void AssertUnavailable(Extraction extraction) {
+        Assert(extraction.TraceError?.Contains("Stack-trace entrypoint", StringComparison.Ordinal) == true);
+        Assert(extraction.Traces.Methods.Count == 0
+            && extraction.Traces.Lines.Count == 0
+            && extraction.Traces.Documents.Count == 0);
     }
 
     private static void Assert(bool condition) {

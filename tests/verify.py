@@ -69,21 +69,27 @@ def main():
         if not binary.is_file():
             parser.error(f"{label} PE fixture is missing: {binary}")
 
-    run("dotnet", root / "tests" / "Atlas.Tests" / "bin" / "Release" / "net10.0" / "Atlas.Tests.dll",
-        "--extraction-availability", dictionary, property_probe)
-    run("dotnet", root / "tests" / "Atlas.Tests" / "bin" / "Release" / "net10.0" / "Atlas.Tests.dll",
-        "--analysis-products", dictionary, property_probe)
+    test_assembly = root / "tests" / "Atlas.Tests" / "bin" / "Release" / "net10.0" / "Atlas.Tests.dll"
+    required_fixture_modes = [
+        ("--extraction-availability", (dictionary, property_probe)),
+        ("--analysis-products", (dictionary, property_probe)),
+        ("--extraction-phases", (dictionary, property_probe)),
+        ("--trace-stages", (dictionary, property_probe)),
+        ("--signature-ownership", (dictionary, property_probe)),
+        ("--prepared-analysis", (dictionary,)),
+    ]
     if windows:
-        run("dotnet", root / "tests" / "Atlas.Tests" / "bin" / "Release" / "net10.0" / "Atlas.Tests.dll",
-            "--properties", output / "property-shared" / "PropertySharedProbe.exe",
-            output / "property-gc" / "PropertyGcProbe.exe")
+        required_fixture_modes.append((
+            "--properties", (output / "property-shared" / "PropertySharedProbe.exe",
+                             output / "property-gc" / "PropertyGcProbe.exe")))
+
+    for mode, fixtures in required_fixture_modes:
+        run("dotnet", test_assembly, mode, *fixtures)
 
     run("dotnet", "publish", "src/Atlas.Cli/Atlas.Cli.csproj",
         "-c", "Release", "-r", rid, "--self-contained", "--output", output / "cli")
 
-    run(sys.executable, "tests/command_contract_checks.py", cli,
-        root / "tests" / "Atlas.Tests" / "bin" / "Release" / "net10.0" / "Atlas.Tests.dll",
-        dictionary)
+    run(sys.executable, "tests/command_contract_checks.py", cli, test_assembly, dictionary)
     run(sys.executable, "tests/search_cost_checks.py", cli, dictionary)
     run(sys.executable, "tests/search_scope_checks.py", cli, dictionary)
     run(sys.executable, "tests/analysis_status_checks.py", cli, property_probe, dictionary)
