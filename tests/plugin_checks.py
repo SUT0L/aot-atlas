@@ -882,7 +882,7 @@ def check_dictionary_workflow(plugin, binary, extraction, view=None,
                     "dictionary fixture did not exercise persisted field references")
             categories = {category for _, category, _ in saved_annotations["tags"]}
             required = {"AOT Atlas unwind", "AOT Atlas exceptions", "AOT Atlas GC",
-                        "AOT Atlas context", "AOT Atlas frozen", "AOT Atlas strings",
+                        "AOT Atlas context", "AOT Atlas frozen", "AOT Atlas printable bytes",
                         "AOT Atlas statics", "AOT Atlas generic context",
                         "AOT Atlas runtime type", "AOT Atlas dictionaries",
                         "AOT Atlas dispatch", "AOT Atlas function pointer",

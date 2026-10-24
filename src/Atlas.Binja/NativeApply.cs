@@ -574,8 +574,8 @@ internal static unsafe class NativeApply {
                 PInvokeAnnotations.Apply(
                     symbols, variables, view, extraction, pointer, interfacePointer, ref stats, task);
                 StringAnnotations.Apply(
-                    symbols, ownership, variables, view, image, prepared.Strings,
-                    prepared.StringReferences, ref stats, task);
+                    ownership, view, image, prepared.Strings,
+                    prepared.StringReferences, stats.ImageBase, task);
 
                 if (prepared.Helpers is { } helpers)
                     RuntimeHelperAnnotations.Apply(symbols, variables, view, extraction, helpers, pointer, ref stats);
