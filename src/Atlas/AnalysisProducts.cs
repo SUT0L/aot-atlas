@@ -43,6 +43,7 @@ public sealed class AnalysisProducts {
     public GenericContextReferences? GenericContexts { get; }
     public DictionarySlotConsumers? DictionaryConsumers { get; }
     public FatFunctionPointers? FunctionPointers { get; }
+    public DelegateConsumerResult? DelegateConsumers { get; }
     public NativeStrings? Strings { get; }
     private readonly List<CodeEdge>? stringReferences;
     public ReadOnlySpan<CodeEdge> StringReferences => stringReferences is null
@@ -194,16 +195,29 @@ public sealed class AnalysisProducts {
                 helperMeasurement.AllocatedBytes + fallbackMeasurement.AllocatedBytes);
         }
 
+        AnalysisMeasurement delegateMeasurement = default;
+        if ((requested & (AnalysisProduct.FunctionPointers | AnalysisProduct.GenericContexts)) != 0) {
+            allocated = GC.GetAllocatedBytesForCurrentThread();
+            start = Stopwatch.GetTimestamp();
+            DelegateConsumers = extraction.TraceError is { } traceError
+                ? DelegateConsumerResult.Unavailable(traceError)
+                : ManagedFunctionPointerConsumers.ReadResult(
+                    extraction.Metadata, extraction.Traces, extraction.Signatures, cancellationToken);
+            delegateMeasurement = AnalysisMeasurement.Since(start, allocated);
+        }
+
         if ((requested & AnalysisProduct.FunctionPointers) != 0) {
             cancellationToken.ThrowIfCancellationRequested();
             allocated = GC.GetAllocatedBytesForCurrentThread();
             start = Stopwatch.GetTimestamp();
-            var consumers = ManagedFunctionPointerConsumers.Read(
-                extraction.Metadata, extraction.Traces, extraction.Signatures, cancellationToken);
             FunctionPointers = new FatFunctionPointers(
-                image, header, extraction.Memory, analysis.Unwind, GcInfo, consumers, cancellationToken);
+                image, header, extraction.Memory, analysis.Unwind, GcInfo,
+                DelegateConsumers!.Value.Consumers, cancellationToken);
             DictionaryConsumers = FunctionPointers.DictionaryConsumers;
-            FunctionPointerMeasurement = AnalysisMeasurement.Since(start, allocated);
+            var pointerMeasurement = AnalysisMeasurement.Since(start, allocated);
+            FunctionPointerMeasurement = new(
+                delegateMeasurement.Seconds + pointerMeasurement.Seconds,
+                delegateMeasurement.AllocatedBytes + pointerMeasurement.AllocatedBytes);
         }
 
         if ((requested & AnalysisProduct.GenericContexts) != 0 && GcInfo is not null) {
@@ -212,11 +226,15 @@ public sealed class AnalysisProducts {
             if (DictionaryConsumers is null) {
                 allocated = GC.GetAllocatedBytesForCurrentThread();
                 start = Stopwatch.GetTimestamp();
-                var consumers = ManagedFunctionPointerConsumers.Read(
-                    extraction.Metadata, extraction.Traces, extraction.Signatures, cancellationToken);
                 DictionaryConsumers = new DictionarySlotConsumers(
-                    image, extraction.Memory, analysis.RequireUnwind(), GcInfo, consumers, cancellationToken);
-                GenericContextMeasurement = AnalysisMeasurement.Since(start, allocated);
+                    image, extraction.Memory, analysis.RequireUnwind(), GcInfo,
+                    DelegateConsumers!.Value.Consumers, cancellationToken);
+                var contextMeasurement = AnalysisMeasurement.Since(start, allocated);
+                GenericContextMeasurement = (requested & AnalysisProduct.FunctionPointers) != 0
+                    ? contextMeasurement
+                    : new(
+                        delegateMeasurement.Seconds + contextMeasurement.Seconds,
+                        delegateMeasurement.AllocatedBytes + contextMeasurement.AllocatedBytes);
             }
 
             GenericContexts = DictionaryConsumers.ContextReferences;

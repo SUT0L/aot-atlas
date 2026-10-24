@@ -2,6 +2,21 @@ using System.Security.Cryptography;
 
 namespace Atlas;
 
+public readonly struct DelegateConsumerResult {
+    private readonly FunctionPointerConsumer[]? consumers;
+    public ReadOnlySpan<FunctionPointerConsumer> Consumers => consumers;
+    public string Status { get; }
+    public string? Error { get; }
+
+    internal DelegateConsumerResult(FunctionPointerConsumer[] consumers, string status, string? error) {
+        this.consumers = consumers;
+        Status = status;
+        Error = error;
+    }
+
+    public static DelegateConsumerResult Unavailable(string? error) => new([], "unavailable", error);
+}
+
 public static class ManagedFunctionPointerConsumers {
     private readonly record struct ScopeIdentity(
         ushort Major,
@@ -17,6 +32,19 @@ public static class ManagedFunctionPointerConsumers {
         Signatures signatures,
         CancellationToken cancellationToken = default) =>
         Read(metadata, traces, signatures, cancellationToken);
+
+    public static DelegateConsumerResult ReadResult(
+        Metadata metadata,
+        TraceMaps traces,
+        Signatures signatures,
+        CancellationToken cancellationToken = default) {
+        try {
+            var consumers = Read(metadata, traces, signatures, cancellationToken);
+            return new(consumers, traces.MethodEntries.IsEmpty ? "unavailable" : "complete", null);
+        } catch (Exception error) when (error is InvalidDataException or NotSupportedException or OverflowException) {
+            return DelegateConsumerResult.Unavailable(error.Message);
+        }
+    }
 
     internal static FunctionPointerConsumer[] Read(
         Metadata metadata,

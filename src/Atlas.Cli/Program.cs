@@ -169,7 +169,8 @@ try {
             ? new MethodGcMap(image, rtr, unwind, managed, cancellationToken) : null;
 
         var delegates = ReadDelegateConsumers(image, rtr);
-        var pointers = new FatFunctionPointers(image, rtr, memory, analysis.Unwind, gc, delegates.Consumers, cancellationToken);
+        var pointers = new FatFunctionPointers(image, rtr, memory, analysis.Unwind, gc,
+            delegates.Consumers, cancellationToken);
 
         using (var stream = new OutputFileStream(temporaryOutput))
         using (var json = JsonOutput.CreateWriter(stream, cancellationToken))
@@ -188,7 +189,8 @@ try {
         var managed = analysis.RequireManaged();
         var gc = new MethodGcMap(image, rtr, unwind, managed, cancellationToken);
         var delegates = ReadDelegateConsumers(image, rtr);
-        DictionarySlotConsumers consumers = new(image, memory, unwind, gc, delegates.Consumers, cancellationToken);
+        DictionarySlotConsumers consumers = new(image, memory, unwind, gc,
+            delegates.Consumers, cancellationToken);
         GenericContextReferences references = consumers.ContextReferences;
         var contextResult = new GenericContextResult(image, managed, gc, references, consumers,
             delegates.Status, delegates.Error);
@@ -524,14 +526,14 @@ void Cancel(object? sender, ConsoleCancelEventArgs eventArgs) {
     cancellation.Cancel();
 }
 
-(FunctionPointerConsumer[] Consumers, string Status, string? Error) ReadDelegateConsumers(PeImage image, ReadyToRun rtr) {
+DelegateConsumerResult ReadDelegateConsumers(PeImage image, ReadyToRun rtr) {
     cancellationToken.ThrowIfCancellationRequested();
 
     // Optional trace identities belong to private parser state.
     try {
         var section = rtr.Find(RtrSectionId.EmbeddedMetadata);
         if (section.Length == 0)
-            return ([], "unavailable", null);
+            return DelegateConsumerResult.Unavailable(null);
 
         var metadataBuilder = MetadataBuilder.FromImage(image, rtr, cancellationToken);
         metadataBuilder.ReadDefinitions(cancellationToken);
@@ -540,12 +542,10 @@ void Cancel(object? sender, ConsoleCancelEventArgs eventArgs) {
             RuntimeTables.Fixups(image, rtr.Find(RtrSectionId.CommonFixupsTable), cancellationToken), cancellationToken);
         var metadata = metadataBuilder.Publish(cancellationToken);
         traces.Publish(metadata.PublishedSignatures, cancellationToken);
-        var consumers = ManagedFunctionPointerConsumers.Read(
+        return ManagedFunctionPointerConsumers.ReadResult(
             metadata, traces, metadata.PublishedSignatures, cancellationToken);
-
-        return (consumers, traces.Methods.Count == 0 ? "unavailable" : "complete", null);
     } catch (Exception error) when (error is InvalidDataException or NotSupportedException or OverflowException) {
-        return ([], "unavailable", error.Message);
+        return DelegateConsumerResult.Unavailable(error.Message);
     }
 }
 

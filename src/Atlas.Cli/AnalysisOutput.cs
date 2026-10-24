@@ -17,7 +17,7 @@ internal static class AnalysisOutput {
         int unprovenDispatchUses = products.Code is { } code ? code.UnprovenDispatchCellUseEntries.Length : 0;
         bool gcFailed = gcInfo is not null && gcInfo.Methods.Any(method => method.Error is not null);
         bool regionUnknown = analysis.Managed?.RegionSource == ManagedRegionSource.Unknown;
-        string delegateStatus = extraction.Traces.Methods.Count == 0 ? "unavailable" : "complete";
+        string delegateStatus = products.DelegateConsumers?.Status ?? "unavailable";
         bool pointerComplete = products.FunctionPointers is { } pointers
             && pointers.ConstructorMapStatus != "partial"
             && FatFunctionPointersOutput.DescriptorUsesStatus(analysis, gcInfo, pointers, delegateStatus) == "complete"
@@ -28,7 +28,8 @@ internal static class AnalysisOutput {
             && extraction.DispatchCellMetadata.Failures.IsEmpty
             && enumFailures == 0
             && unprovenDispatchUses == 0;
-        bool complete = sourcesComplete && analysis.Failures.Length == 0 && !gcFailed && !regionUnknown
+        bool complete = sourcesComplete && extraction.TraceError is null
+            && analysis.Failures.Length == 0 && !gcFailed && !regionUnknown
             && pointerComplete && helpersComplete && contextResult?.Status == "complete";
 
         json.WriteStartObject("analysis_status");
@@ -60,6 +61,13 @@ internal static class AnalysisOutput {
             json.WriteStartObject();
             json.WriteString("phase", PhaseName(failure.Phase));
             json.WriteString("error", failure.Error);
+            json.WriteEndObject();
+        }
+
+        if (extraction.TraceError is { } traceError) {
+            json.WriteStartObject();
+            json.WriteString("phase", "method_tracing");
+            json.WriteString("error", traceError);
             json.WriteEndObject();
         }
 

@@ -64,17 +64,24 @@ public sealed class TraceMaps {
     public SignatureType DeclaringTypeAt(int position) => Signatures.Types[Methods[position].DeclaringType];
     public SignatureMethod MethodSignatureAt(int position) => Signatures.MethodSignatures[Methods[position].Signature];
 
+    private TraceMaps(SignatureHistory origin, CancellationToken cancellationToken) {
+        signatureOrigin = origin;
+        this.cancellationToken = cancellationToken;
+    }
+
+    internal static TraceMaps Unavailable(MetadataBuilder metadata, CancellationToken cancellationToken) =>
+        new(metadata.SignatureBuilder.Origin, cancellationToken);
+
     internal TraceMaps(
         PeImage image,
         ReadyToRun rtr,
         MetadataBuilder metadata,
         ReadOnlySpan<ulong> fixups,
-        CancellationToken cancellationToken = default) {
+        CancellationToken cancellationToken = default)
+        : this(metadata.SignatureBuilder.Origin, cancellationToken) {
         cancellationToken.ThrowIfCancellationRequested();
-        this.cancellationToken = cancellationToken;
 
         rtr = rtr.ValidateSource(image);
-        signatureOrigin = metadata.SignatureBuilder.Origin;
 
         var section = rtr.Find(RtrSectionId.StackTraceMethodMapping);
         if (section.Length != 0) {

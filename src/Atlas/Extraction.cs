@@ -76,6 +76,7 @@ public sealed partial class Extraction {
     public ReadOnlySpan<DictionarySignatureGap> DictionarySignatureGaps =>
         dictionaries is null ? [] : dictionaries.SignatureGaps;
     public TraceMaps Traces => Require(traces, ExtractionStage.MethodTracing);
+    public string? TraceError { get; private set; }
 
     public StaticStorage Statics => Require(statics, ExtractionStage.RuntimeTypes);
     public FrozenObjects Frozen => Require(frozen, ExtractionStage.RuntimeTypes);
@@ -250,7 +251,12 @@ public sealed partial class Extraction {
                     break;
 
                 case ExtractionPhase.TraceSignatures:
-                    traces = new TraceMaps(image, rtr, metadata, commonFixups, cancellationToken);
+                    try {
+                        traces = new TraceMaps(image, rtr, metadata, commonFixups, cancellationToken);
+                    } catch (Exception error) when (error is InvalidDataException or NotSupportedException or OverflowException) {
+                        TraceError = error.Message;
+                        traces = TraceMaps.Unavailable(metadata, cancellationToken);
+                    }
                     break;
 
                 case ExtractionPhase.StaticSources:

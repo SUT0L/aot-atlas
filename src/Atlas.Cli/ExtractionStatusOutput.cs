@@ -18,7 +18,8 @@ internal static class ExtractionStatusOutput {
         Stage("runtime_types", ExtractionStage.RuntimeTypes);
         Stage("member_layouts", ExtractionStage.MemberLayouts);
         Stage("dispatch", ExtractionStage.Dispatch);
-        Stage("method_tracing", ExtractionStage.MethodTracing);
+        json.WriteString("method_tracing", (stages & ExtractionStage.MethodTracing) == 0 ? "not_requested"
+            : extraction.TraceError is null ? "available" : "unavailable");
         Stage("dictionary_bindings", ExtractionStage.DictionaryBindings);
         Stage("resources", ExtractionStage.Resources);
         Stage("linkage", ExtractionStage.Linkage);
@@ -27,13 +28,15 @@ internal static class ExtractionStatusOutput {
             : enumFailures == 0 ? "available" : "partial");
 
         bool metadataComplete = metadata.IsComplete;
-        bool closureComplete = dictionarySignatureGaps.IsEmpty && metadataComplete && dispatchMetadataFailures == 0;
+        bool closureComplete = dictionarySignatureGaps.IsEmpty && metadataComplete
+            && dispatchMetadataFailures == 0 && extraction.TraceError is null;
         json.WriteString("dictionary_signatures", (stages & ExtractionStage.RuntimeTypes) == 0 ? "not_requested"
             : dictionarySignatureGaps.IsEmpty ? "complete" : "partial");
         json.WriteString("signature_graph_closure", (stages & ExtractionStage.RuntimeTypes) == 0 ? "not_requested"
             : closureComplete ? "requested_stages"
             : !metadataComplete ? "partial_metadata"
-            : dispatchMetadataFailures != 0 ? "partial_dispatch_metadata" : "partial_dictionary_signatures");
+            : dispatchMetadataFailures != 0 ? "partial_dispatch_metadata"
+            : extraction.TraceError is not null ? "partial_method_tracing" : "partial_dictionary_signatures");
 
         json.WriteString("metadata", metadata.Bytes.IsEmpty ? "absent" : metadataComplete ? "complete" : "partial");
         json.WriteNumber("metadata_projection_failures", metadata.ProjectionDiagnostics.Count);

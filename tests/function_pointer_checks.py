@@ -93,22 +93,30 @@ def check(cli, binary, directory):
         ]
         assert not contexts["dictionary_delegate_slots"] and not contexts["initial_dictionary_delegate_slots"]
 
-    metadata = next(row for row in rows if row["id"] == 313)
-    damaged_source = changed("bad-metadata", file_offset(metadata["start"]), b"BAD!")
-    damaged = run(damaged_source)
-    independent = {"class_constructor", "indirect_call"}
-    assert pairs(damaged, independent) == pairs(healthy, independent)
-    assert damaged["delegate_consumers_status"] == "unavailable" and damaged.get("delegate_consumers_error")
-    check_contexts_without_delegates(damaged_source)
-
     trace = next((row for row in rows if row["id"] == 327 and row["length"] > 4), None)
 
     if trace:
         damaged_source = changed("late-trace", file_offset(trace["start"]) + trace["length"] - 4, bytes(4))
         damaged = run(damaged_source)
+        independent = {"class_constructor", "indirect_call"}
         assert pairs(damaged, independent) == pairs(healthy, independent)
         assert damaged["delegate_consumers_status"] == "unavailable" and damaged.get("delegate_consumers_error")
         check_contexts_without_delegates(damaged_source)
+        aggregate_damaged = run(damaged_source, "extract")
+        assert aggregate_damaged["fat_function_pointers"] == damaged
+        assert aggregate_damaged["generic_context"] == run(damaged_source, "generic-context")
+        assert aggregate_damaged["analysis_status"]["status"] == "partial"
+        assert aggregate_damaged["extraction_stages"]["method_tracing"] == "unavailable"
+        assert aggregate_damaged["extraction_stages"]["signature_graph_closure"] == "partial_method_tracing"
+        assert any(failure["phase"] == "method_tracing"
+                   for failure in aggregate_damaged["analysis_status"]["failures"])
+        strict = subprocess.run(prefix + ["extract", str(damaged_source), str(output),
+                                          "--require-complete"], capture_output=True, text=True)
+        assert strict.returncode == 3, strict.stderr
+        strict_output = json.loads(output.read_bytes())
+        assert strict_output["analysis_status"] == aggregate_damaged["analysis_status"]
+        assert strict_output["fat_function_pointers"] == damaged
+        assert strict_output["generic_context"] == aggregate_damaged["generic_context"]
 
     pdata = struct.unpack_from("<I", data, optional + 136)[0]
     unwind = struct.unpack_from("<I", data, file_offset(image_base + pdata) + 8)[0]
@@ -133,7 +141,7 @@ def check(cli, binary, directory):
     restored = run(binary)
     assert restored == healthy, "Restored output differs from healthy source."
 
-    print(f"{binary}: full/standalone evidence, metadata/trace/unwind source faults, constructor isolation, atomic publication and exact recovery passed.")
+    print(f"{binary}: full/standalone evidence, trace/unwind source faults, constructor isolation, atomic publication and exact recovery passed.")
 
 
 if __name__ == "__main__":

@@ -35,9 +35,10 @@ internal static class ExtractCommand {
         var analysis = extraction.UnwindAnalysis;
         var gcInfo = products.GcInfo;
         var fatPointers = products.FunctionPointers!;
+        var delegates = products.DelegateConsumers!.Value;
         var contextResult = analysis.Managed is null ? null : new GenericContextResult(
             image, analysis.Managed, gcInfo!, products.GenericContexts!, products.DictionaryConsumers!,
-            extraction.Traces.Methods.Count == 0 ? "unavailable" : "complete");
+            delegates.Status, delegates.Error);
 
         json.WritePropertyName("metadata");
         MetadataOutput.Write(
@@ -141,7 +142,7 @@ internal static class ExtractCommand {
 
         json.WritePropertyName("fat_function_pointers");
         FatFunctionPointersOutput.Write(json, inputSha256, image, analysis, gcInfo, fatPointers,
-            extraction.Traces.Methods.Count == 0 ? "unavailable" : "complete", null);
+            delegates.Status, delegates.Error);
 
         json.WritePropertyName("strings");
         StringsOutput.Write(json, inputSha256, image, products.Strings!,
