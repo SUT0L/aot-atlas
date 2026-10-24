@@ -5,7 +5,7 @@ import json
 import struct
 import subprocess
 import tempfile
-from contextlib import nullcontext
+from contextlib import ExitStack, nullcontext
 from pathlib import Path
 
 import binaryninja as bn
@@ -356,12 +356,15 @@ def verify_property_annotation_bounds(view, extraction, image_base, delta):
             f"extra={sorted(map(str, actual_ids - expected_ids))[:3]!r}")
 
 
-def check_property_workflow(plugin, binary, extraction, temporary_directory):
+def check_property_workflow(plugin, binary, extraction, temporary_directory,
+                            view=None, open_database=None, open_rebased=None):
     image_base = preferred_image_base(binary)
     database = temporary_directory / "property-check.bndb"
 
-    with bn.load(str(binary), update_analysis=False,
-                 options={"analysis.debugInfo.internal": False}) as view:
+    source = (bn.load(str(binary), update_analysis=False,
+                      options={"analysis.debugInfo.internal": False})
+              if view is None else nullcontext(view))
+    with source as view:
         view.set_analysis_hold(True)
 
         try:
@@ -395,11 +398,17 @@ def check_property_workflow(plugin, binary, extraction, temporary_directory):
         accessor = accessors[0]
         address = accessor["address"] + view.start - image_base
         function = view.get_function_at(address)
+        accessor_rva = accessor["address"] - image_base
+        owned_abi = owned_annotation_facts(view)[5]
+        require(accessor_rva in owned_abi,
+                "property accessor has no Atlas owned ABI before the analyst edit")
 
         function.name = "atlas_fixture_user_property"
-        function.user_type = bn.Type.function(
+        function.set_user_type(bn.Type.function(
             bn.Type.int(2, False),
-            [bn.FunctionParameter(bn.Type.int(1, False), "user_value")])
+            [bn.FunctionParameter(bn.Type.int(1, False), "user_value")]))
+        view.update_analysis_and_wait()
+        require(function.has_user_type, "property analyst ABI edit was not recorded by Binary Ninja")
         user_type = str(function.type)
 
         owner_address = next(iter(owners)) + view.start - image_base
@@ -420,6 +429,10 @@ def check_property_workflow(plugin, binary, extraction, temporary_directory):
                 "repeat apply replaced the user function name")
         require(str(view.get_function_at(address).type) == user_type,
                 "repeat apply replaced the user function type")
+        require(view.get_function_at(address).has_user_type,
+                "repeat apply removed the user function type override")
+        require(owned_annotation_facts(view)[5] == owned_abi - {accessor_rva},
+                "property ABI ownership did not exclude only the analyst accessor")
         require(any(tag.id == user_tags[0] for tag in property_tag(view, owner_address)),
                 "repeat apply removed the user property tag")
 
@@ -444,6 +457,8 @@ def check_property_workflow(plugin, binary, extraction, temporary_directory):
                 "changed input provenance replaced the user function")
         require(str(view.get_function_at(address).type) == user_type,
                 "changed input provenance replaced the user function type")
+        require(view.get_function_at(address).has_user_type,
+                "changed input provenance removed the user function type override")
         require(any(tag.id == user_tags[0] for tag in property_tag(view, owner_address)),
                 "changed input provenance removed the user property tag")
 
@@ -452,7 +467,9 @@ def check_property_workflow(plugin, binary, extraction, temporary_directory):
 
         require(view.create_database(str(database)), "failed to save the Binary Ninja database")
 
-    with bn.load(str(database), update_analysis=False) as restored:
+    saved = (bn.load(str(database), update_analysis=False) if open_database is None
+             else nullcontext(open_database(database)))
+    with saved as restored:
         restored.update_analysis_and_wait()
 
         verify_property_projection(restored, extraction, image_base, restored.start - image_base)
@@ -460,13 +477,27 @@ def check_property_workflow(plugin, binary, extraction, temporary_directory):
                 "saved database lost the user function name")
         require(str(restored.get_function_at(address).type) == user_type,
                 "saved database lost the user function type")
+        require(restored.get_function_at(address).has_user_type,
+                "saved database lost the user function type override")
+        require(owned_annotation_facts(restored)[5] == owned_abi - {accessor_rva},
+                "saved database changed property ABI ownership")
         require(any(tag.id == user_tags[0] for tag in property_tag(restored, owner_address)),
                 "saved database lost the user property tag")
 
     rebased_start = 0x150000000
 
-    with bn.load(str(binary), update_analysis=False,
-                 options={"loader.imageBase": rebased_start, "analysis.debugInfo.internal": False}) as rebased:
+    with ExitStack() as stack:
+        if open_rebased is None:
+            original = stack.enter_context(bn.load(
+                str(binary), update_analysis=False,
+                options={"analysis.debugInfo.internal": False}))
+            rebased = original.rebase(rebased_start, force=True)
+            if rebased is not None:
+                stack.enter_context(rebased)
+        else:
+            rebased = open_rebased(binary, rebased_start)
+        require(rebased is not None and rebased.start == rebased_start,
+                "Binary Ninja did not rebase the property fixture")
         rebased.set_analysis_hold(True)
 
         try:
