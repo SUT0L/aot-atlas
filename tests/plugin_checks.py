@@ -5,10 +5,12 @@ import json
 import struct
 import subprocess
 import tempfile
+from collections import Counter
 from contextlib import ExitStack, nullcontext
 from pathlib import Path
 
 import binaryninja as bn
+from field_restore_checks import field_record, verify_host_references
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -130,6 +132,11 @@ class Plugin:
 
         return stats
 
+    def apply_fields(self, view, expected_status=0):
+        status = self.library.AtlasApplyFieldReferences(ctypes.cast(view.handle, ctypes.c_void_p))
+        require(status == expected_status,
+                f"field reference apply returned {status}, expected {expected_status}")
+
 
 def owned_annotation_facts(view):
     receipt = memoryview(view.query_metadata("aot-atlas:owned-annotations"))
@@ -206,6 +213,11 @@ def verify_work_counts(view, stats):
     require(stats.data_variables == len(facts[2]), "plugin data variable count differs from owned host facts")
     require(stats.data_references == len(facts[3]), "plugin reference count differs from owned host facts")
 
+    verify_owned_host_facts(view, facts)
+
+
+def verify_owned_host_facts(view, facts):
+
     user_symbols = {symbol.address for symbol in view.get_symbols() if not symbol.auto}
     require({view.start + rva for rva in facts[1]} <= user_symbols,
             "an owned symbol is absent from the host")
@@ -221,6 +233,110 @@ def verify_work_counts(view, stats):
             references[source] = set(view.get_data_refs_from(view.start + source))
         require(view.start + target in references[source],
                 f"owned data reference 0x{view.start + source:X} -> 0x{view.start + target:X} is absent")
+
+
+def verify_field_references(view):
+    record = bytes(view.query_metadata("aot-atlas:field-references"))
+    if record.startswith(b"ATFLD002"):
+        records, names = field_record(view)
+        verify_host_references(view, records, names)
+        return set(records)
+
+    require(record.startswith(b"ATFLD001") and (len(record) - 8) % 20 == 0,
+            "Atlas field reference record has the wrong format")
+    facts = set()
+    for position in range(8, len(record), 20):
+        type_rva, offset, function_rva, instruction_rva, size = struct.unpack_from(
+            "<IIIII", record, position)
+        fact = (type_rva, offset, function_rva, instruction_rva, size)
+        require(fact not in facts, "Atlas field reference record is duplicated")
+        facts.add(fact)
+
+        name = view.get_type_name_by_id(f"aot-atlas:runtime-type:v1:{type_rva:08X}")
+        function = view.get_function_at(view.start + function_rva)
+        require(name is not None and function is not None,
+                f"field reference at 0x{view.start + instruction_rva:X} lacks its type or function")
+        references = view.get_code_refs_for_type_fields_from(
+            view.start + instruction_rva, func=function, length=size if size else None)
+        require(any(str(reference.name) == str(name) and reference.offset == offset
+                    for reference in references),
+                f"field reference at 0x{view.start + instruction_rva:X} is absent from the host")
+    return facts
+
+
+def persisted_annotation_state(view):
+    facts = owned_annotation_facts(view)
+    verify_owned_host_facts(view, facts)
+
+    type_definitions = {}
+    for name in view.type_names:
+        if not str(name).startswith("atlas::"):
+            continue
+        definition = view.get_type_by_name(name)
+        if definition is not None:
+            type_definitions[str(name)] = (view.get_type_id(name), str(definition), definition.width)
+
+    tags = Counter((address, tag.type.name, tag.data)
+                   for address, tag in view.get_tags(auto=False)
+                   if tag.type.name.startswith("AOT Atlas"))
+    symbols = Counter((symbol.address, symbol.type.name, symbol.raw_name,
+                       symbol.full_name, symbol.short_name)
+                      for symbol in view.get_symbols() if not symbol.auto)
+    variables = {address: (str(variable.type), variable.type.width)
+                 for address, variable in view.data_vars.items()
+                 if not variable.auto_discovered}
+    functions = {function.start: (function.name, str(function.type))
+                 for function in view.functions
+                 if function.has_user_annotations or function.has_user_type}
+
+    metadata = {}
+    for key in ("aot-atlas:apply-input", "aot-atlas:signed-enums",
+                "aot-atlas:field-references"):
+        try:
+            metadata[key] = bytes(view.query_metadata(key))
+        except KeyError:
+            metadata[key] = None
+
+    return {"types": type_definitions, "tags": tags, "symbols": symbols,
+            "variables": variables, "functions": functions, "metadata": metadata,
+            "facts": facts, "fields": verify_field_references(view)}
+
+
+def verify_persisted_annotations(view, before):
+    before_stamp = before["metadata"]["aot-atlas:apply-input"]
+    after_stamp = bytes(view.query_metadata("aot-atlas:apply-input"))
+    require(before_stamp is not None and len(before_stamp) == len(after_stamp) == 73,
+            "saved database lost its input stamp")
+    require(before_stamp[40:72] == after_stamp[40:72],
+            "another plugin build refreshed the saved database")
+
+    after = persisted_annotation_state(view)
+    for kind in ("types", "tags", "symbols", "variables", "fields"):
+        require(after[kind] == before[kind],
+                f"saved database changed {kind}: expected {len(before[kind])}, observed {len(after[kind])}")
+
+    for kind in (1, 2, 3):
+        require(after["facts"][kind] == before["facts"][kind],
+                f"saved database changed owned annotation kind {kind}")
+
+    require(before_stamp[:40] == after_stamp[:40]
+            and before_stamp[72] == after_stamp[72],
+            "saved database changed input identity or mapping format")
+    require(after["metadata"]["aot-atlas:signed-enums"]
+            == before["metadata"]["aot-atlas:signed-enums"],
+            "saved database changed signed enum metadata")
+    require(after["metadata"]["aot-atlas:field-references"]
+            == before["metadata"]["aot-atlas:field-references"],
+            "saved database changed field evidence")
+    require(after["facts"][5] == before["facts"][5],
+            "saved database lost ABI ownership")
+
+    changed_functions = [address for address, value in before["functions"].items()
+                         if after["functions"].get(address) != value]
+    require(not changed_functions,
+            f"saved database changed {len(changed_functions)} annotated functions: "
+            f"{[hex(address) for address in changed_functions[:3]]!r}")
+    return {"abi_count": len(after["facts"][5])}
 
 
 def preferred_image_base(binary):
@@ -464,13 +580,17 @@ def check_property_workflow(plugin, binary, extraction, temporary_directory,
 
         view.store_metadata("aot-atlas:apply-input", stamp)
         plugin.apply(view)
+        plugin.apply_fields(view)
+        view.update_analysis_and_wait()
 
+        saved_annotations = persisted_annotation_state(view)
         require(view.create_database(str(database)), "failed to save the Binary Ninja database")
 
     saved = (bn.load(str(database), update_analysis=False) if open_database is None
              else nullcontext(open_database(database)))
     with saved as restored:
         restored.update_analysis_and_wait()
+        verify_persisted_annotations(restored, saved_annotations)
 
         verify_property_projection(restored, extraction, image_base, restored.start - image_base)
         require(restored.get_function_at(address).name == "atlas_fixture_user_property",
@@ -609,7 +729,8 @@ def verify_dispatch_cells(view, cells, image_base, delta):
             f"dispatch symbols differ: expected {len(expected_symbols)}, observed {len(actual_symbols)}")
 
 
-def check_dictionary_workflow(plugin, binary, extraction, view=None):
+def check_dictionary_workflow(plugin, binary, extraction, view=None,
+                              database=None, open_database=None):
     image_base = preferred_image_base(binary)
     recipes = extraction["dictionaries"]["recipes"]
     samples = {}
@@ -753,6 +874,30 @@ def check_dictionary_workflow(plugin, binary, extraction, view=None):
         require(owned_annotation_facts(view)[5] == owned_abi - {min(owned_abi), changed_rva},
                 "changed automatic ABI was not excluded independently")
 
+        if database is not None:
+            plugin.apply_fields(view)
+            view.update_analysis_and_wait()
+            saved_annotations = persisted_annotation_state(view)
+            require(len(saved_annotations["fields"]) >= 10,
+                    "dictionary fixture did not exercise persisted field references")
+            categories = {category for _, category, _ in saved_annotations["tags"]}
+            required = {"AOT Atlas unwind", "AOT Atlas exceptions", "AOT Atlas GC",
+                        "AOT Atlas context", "AOT Atlas frozen", "AOT Atlas strings",
+                        "AOT Atlas statics", "AOT Atlas generic context",
+                        "AOT Atlas runtime type", "AOT Atlas dictionaries",
+                        "AOT Atlas dispatch", "AOT Atlas function pointer",
+                        "AOT Atlas analysis", "AOT Atlas properties"}
+            require(required <= categories,
+                    f"dictionary database fixture lacks annotation families: {sorted(required - categories)!r}")
+            require(view.create_database(str(database)), "failed to save dictionary database")
+
+    if database is not None:
+        saved = (bn.load(str(database), update_analysis=False) if open_database is None
+                 else nullcontext(open_database(database)))
+        with saved as restored:
+            restored.update_analysis_and_wait()
+            verify_persisted_annotations(restored, saved_annotations)
+
     return {
         "dictionary_kinds": len(required_kinds),
         "dictionary_slots": len(verified_slots),
@@ -761,6 +906,7 @@ def check_dictionary_workflow(plugin, binary, extraction, view=None):
         "repeat_stable": True,
         "user_type_preserved": True,
         "abi_ownership_preserved": True,
+        "database_restored": database is not None,
     }
 
 
@@ -1037,7 +1183,8 @@ def main(argv=None):
             "property": check_property_workflow(
                 plugin, paths["property"], extractions["property"], temporary_directory),
             "dictionary": check_dictionary_workflow(
-                plugin, paths["dictionary"], extractions["dictionary"]),
+                plugin, paths["dictionary"], extractions["dictionary"],
+                database=temporary_directory / "dictionary-check.bndb"),
             "rollback": [
                 check_failed_apply_rollback(plugin, damaged_dictionary, damaged_extraction, "dictionary"),
                 check_failed_apply_rollback(plugin, damaged_trace, damaged_trace_extraction, "trace"),
