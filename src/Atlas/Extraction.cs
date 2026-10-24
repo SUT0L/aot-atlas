@@ -365,7 +365,6 @@ public sealed partial class Extraction {
                 case ExtractionPhase.SignaturePublication:
                     Metadata = metadata.Publish(cancellationToken);
                     signatures = Metadata.PublishedSignatures;
-                    traces?.Publish(signatures);
                     maps.SetSignatureOrigin(signatures);
                     break;
 
@@ -379,7 +378,7 @@ public sealed partial class Extraction {
                     break;
 
                 case ExtractionPhase.MethodTracing:
-                    // Trace source discovery already completed before runtime/member publication.
+                    traces!.Publish(Signatures, cancellationToken);
                     break;
 
                 case ExtractionPhase.DictionaryBindings:

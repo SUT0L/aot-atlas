@@ -67,55 +67,16 @@ public struct FieldMapEntry {
 }
 
 public sealed class ReflectionMaps {
-    private sealed class State {
-        internal MapFormat Format;
-        internal SignatureHistory? Origin;
-        internal Signatures? Publication;
+    private SignatureHistory? signatureOrigin;
+    private Signatures? publication;
 
-        internal readonly List<TypeMapEntry> Types;
-        internal readonly List<DerivedTypeEntry> DerivedTypes;
-        internal readonly List<InvokeMapEntry> Methods;
-        internal readonly List<FieldMapEntry> Fields;
-        internal readonly List<ulong> GenericArguments;
+    public MapFormat Format { get; private set; }
 
-        internal State() {
-            Types = new();
-            DerivedTypes = new();
-            Methods = new();
-            Fields = new();
-            GenericArguments = new();
-        }
-
-        internal State(State source) {
-            Format = source.Format;
-            Origin = source.Origin;
-            Publication = source.Publication;
-
-            Types = new(source.Types);
-            DerivedTypes = new(source.DerivedTypes);
-            Methods = new(source.Methods);
-            Fields = new(source.Fields);
-            GenericArguments = new(source.GenericArguments);
-        }
-    }
-
-    private State state;
-
-    public MapFormat Format {
-        get => state.Format;
-        private set => state.Format = value;
-    }
-
-    private SignatureHistory? signatureOrigin {
-        get => state.Origin;
-        set => state.Origin = value;
-    }
-
-    internal List<TypeMapEntry> Types => state.Types;
-    internal List<DerivedTypeEntry> DerivedTypes => state.DerivedTypes;
-    internal List<InvokeMapEntry> Methods => state.Methods;
-    internal List<FieldMapEntry> Fields => state.Fields;
-    internal List<ulong> GenericArguments => state.GenericArguments;
+    internal readonly List<TypeMapEntry> Types = new();
+    internal readonly List<DerivedTypeEntry> DerivedTypes = new();
+    internal readonly List<InvokeMapEntry> Methods = new();
+    internal readonly List<FieldMapEntry> Fields = new();
+    internal readonly List<ulong> GenericArguments = new();
 
     public ReadOnlySpan<TypeMapEntry> TypeEntries => CollectionsMarshal.AsSpan(Types);
     public ReadOnlySpan<DerivedTypeEntry> DerivedTypeEntries => CollectionsMarshal.AsSpan(DerivedTypes);
@@ -123,7 +84,7 @@ public sealed class ReflectionMaps {
     public ReadOnlySpan<FieldMapEntry> FieldEntries => CollectionsMarshal.AsSpan(Fields);
     public ReadOnlySpan<ulong> MethodArguments => CollectionsMarshal.AsSpan(GenericArguments);
 
-    public Signatures SignaturePublication => state.Publication
+    public Signatures SignaturePublication => publication
         ?? throw new InvalidOperationException("Reflection map signatures have not been published.");
     public SignatureType TypeSignatureAt(int position) => SignaturePublication.Types[Types[position].Signature];
     public SignatureMethod MethodSignatureAt(int position) => Methods[position].Signature == 0
@@ -133,9 +94,7 @@ public sealed class ReflectionMaps {
         ? default
         : SignaturePublication.Types[Fields[position].Signature];
 
-    public ReflectionMaps() {
-        state = new();
-    }
+    public ReflectionMaps() { }
 
     internal void ValidateSignatureOrigin(SignatureHistory origin) {
         if (signatureOrigin is not null && !ReferenceEquals(signatureOrigin, origin))
@@ -148,16 +107,16 @@ public sealed class ReflectionMaps {
 
         ValidateSignatureOrigin(publication.Origin);
 
-        if (state.Publication is not null
-            && !ReferenceEquals(state.Publication, publication)
-            && !publication.Extends(state.Publication))
+        if (this.publication is not null
+            && !ReferenceEquals(this.publication, publication)
+            && !publication.Extends(this.publication))
             throw new ArgumentException("Reflection map signatures are not an unchanged prefix of the binding publication.");
     }
 
     internal void SetSignatureOrigin(Signatures publication) {
         ValidateSignatureOrigin(publication.Origin);
         signatureOrigin = publication.Origin;
-        state.Publication = publication;
+        this.publication = publication;
     }
 
     internal static ReflectionMaps Decode(
