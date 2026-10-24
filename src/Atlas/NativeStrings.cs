@@ -5,9 +5,14 @@ namespace Atlas;
 public readonly record struct NativeString(uint Rva, IndexRange Data, bool Wide);
 
 public sealed class NativeStrings {
+    internal const string CandidateSectionName = ".rdata";
+    internal const int MinimumAsciiBytes = 4;
+    internal const int MinimumUtf16Bytes = 8;
+
     internal readonly List<NativeString> Items = new();
     public ReadOnlySpan<NativeString> Entries => System.Runtime.InteropServices.CollectionsMarshal.AsSpan(Items);
     public int ScannedBytes { get; private set; }
+    public int ScannedSections { get; private set; }
 
     public NativeStrings(PeImage image, ReadOnlySpan<RtrSection> metadata, CancellationToken cancellationToken = default) {
         cancellationToken.ThrowIfCancellationRequested();
@@ -17,8 +22,11 @@ public sealed class NativeStrings {
         foreach (ref readonly var section in image.Sections.AsSpan()) {
             cancellationToken.ThrowIfCancellationRequested();
 
-            if (section.Name != ".rdata" || section.FileSize == 0)
+            if (section.Name != CandidateSectionName || section.FileSize == 0
+                || (section.Characteristics & 0xE0000000) != 0x40000000)
                 continue;
+
+            ++ScannedSections;
 
             ulong start = image.ImageBase + section.Rva;
             ulong end = start + (uint)section.FileSize;
@@ -68,7 +76,7 @@ public sealed class NativeStrings {
             if (length < 0)
                 break;
 
-            if (length >= 4) {
+            if (length >= MinimumAsciiBytes) {
                 var text = data.Slice(position, length);
                 int exceptional = text.IndexOfAnyExceptInRange((byte)0x20, (byte)0x7E);
                 bool valid = true;
@@ -105,7 +113,7 @@ public sealed class NativeStrings {
             if (high == 0 && low is >= 0x20 and <= 0x7E or 9 or 10 or 13)
                 continue;
 
-            if (low == 0 && high == 0 && position - first >= 8)
+            if (low == 0 && high == 0 && position - first >= MinimumUtf16Bytes)
                 Items.Add(new NativeString(
                     rva + (uint)first,
                     new IndexRange(fileOffset + first, position - first),

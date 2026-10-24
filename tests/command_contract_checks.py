@@ -114,6 +114,14 @@ def main():
                     and embedded[key].get("schema_version") == document["schema_version"],
                     f"extract changed the {command} product envelope")
 
+    for command in ("strings", "search"):
+        document = documents[command]
+        require(document.get("candidate_section") == ".rdata"
+                and document.get("scanned_sections", 0) > 0
+                and document.get("minimum_ascii_bytes") == 4
+                and document.get("minimum_utf16le_bytes") == 8,
+                f"{command} omitted its candidate coverage")
+
     require(not list(output.glob("*.tmp")), "Unpublished CLI temporary output remains")
     print(f"Checked all {len(commands)} registered CLI command contracts.")
 

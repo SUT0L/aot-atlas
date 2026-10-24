@@ -11,6 +11,7 @@ internal static class StringsOutput {
         json.WriteNumber("scan_seconds", seconds);
         json.WriteNumber("allocated_bytes", allocated);
         json.WriteNumber("scanned_bytes", strings.ScannedBytes);
+        WriteCoverage(json, strings);
 
         json.WriteStartArray("strings");
 
@@ -35,5 +36,12 @@ internal static class StringsOutput {
         cancellationToken.ThrowIfCancellationRequested();
         json.WriteEndArray();
         json.WriteEndObject();
+    }
+
+    internal static void WriteCoverage(Utf8JsonWriter json, NativeStrings strings) {
+        json.WriteString("candidate_section", NativeStrings.CandidateSectionName);
+        json.WriteNumber("scanned_sections", strings.ScannedSections);
+        json.WriteNumber("minimum_ascii_bytes", NativeStrings.MinimumAsciiBytes);
+        json.WriteNumber("minimum_utf16le_bytes", NativeStrings.MinimumUtf16Bytes);
     }
 }

@@ -7,6 +7,13 @@ internal static class NativeStringChecks {
     internal static void Run() {
         var strings = Scan("Alpha\0"u8.ToArray());
         Assert(strings.Items.SequenceEqual([new NativeString(0x1000, new IndexRange(512, 5), false)]));
+        Assert(strings.ScannedSections == 1);
+        Assert(new NativeStrings(PeFixture.Create("Alpha\0"u8.ToArray(), ".data", 0x40000040), [])
+            .ScannedSections == 0);
+        Assert(new NativeStrings(PeFixture.Create("Alpha\0"u8.ToArray(), ".rdata", 0xC0000040), [])
+            .Entries.IsEmpty);
+        Assert(new NativeStrings(PeFixture.Create("Alpha\0"u8.ToArray(), ".rdata", 0x60000020), [])
+            .Entries.IsEmpty);
 
         var references = new List<CodeEdge> { new(0, 0) };
         strings.AppendReferences(Base - 0x1000,

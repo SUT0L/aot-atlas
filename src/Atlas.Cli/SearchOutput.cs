@@ -61,6 +61,7 @@ internal static class SearchOutput {
 
         JsonOutput.StartDocument(json, "search");
         json.WriteString("input_sha256", inputSha256);
+        StringsOutput.WriteCoverage(json, strings);
         ExtractionStatusOutput.Write(json, extraction);
         json.WriteString("map_format", extraction.Maps.Format switch {
             MapFormat.Legacy => "legacy",
