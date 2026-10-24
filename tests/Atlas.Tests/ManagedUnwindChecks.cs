@@ -159,7 +159,12 @@ internal static class ManagedUnwindChecks {
 
             try {
                 image = new PeImage(invalid);
-                _ = new ManagedUnwind(image, new UnwindTables(image), new PeDebug(image));
+                var damaged = new ManagedUnwind(image, new UnwindTables(image), new PeDebug(image));
+                if (fault == 5) {
+                    Assert(damaged.Frames.Length == result.Frames.Length);
+                    Assert(damaged.Clauses[0].TypeUnavailable);
+                    continue;
+                }
             } catch (InvalidDataException) {
                 failed = true;
             } catch (NotSupportedException) {

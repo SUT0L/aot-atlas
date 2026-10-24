@@ -54,6 +54,7 @@ public struct ExceptionClause {
     public uint TypeCell;
 
     public ExceptionClauseKind Kind;
+    public bool TypeUnavailable;
 }
 
 public sealed class ManagedUnwind {
@@ -269,8 +270,8 @@ public sealed class ManagedUnwind {
                 if (clause.Kind == ExceptionClauseKind.Typed) {
                     clause.TypeCell = checked(blob.Address + (uint)reader.Position);
                     clause.Type = BinaryPrimitives.ReadUInt32LittleEndian(reader.Take(4));
-                    if (clause.Type == 0 || !image.IsMapped(image.ImageBase + clause.Type, 24))
-                        throw new InvalidDataException("Exception catch type is outside mapped storage.");
+                    clause.TypeUnavailable = clause.Type == 0
+                        || !image.IsMapped(image.ImageBase + clause.Type, 24);
                 } else if (clause.Kind == ExceptionClauseKind.Filter) {
                     clause.FilterCell = checked(blob.Address + (uint)reader.Position);
                     clause.FilterOffset = reader.Unsigned();

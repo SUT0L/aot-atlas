@@ -312,7 +312,7 @@ public sealed partial class Extraction {
 
                     if (UnwindAnalysis.Managed is { } managed) {
                         foreach (ref readonly var clause in managed.Clauses.AsSpan()) {
-                            if (clause.Kind == ExceptionClauseKind.Typed)
+                            if (clause.Kind == ExceptionClauseKind.Typed && !clause.TypeUnavailable)
                                 roots.Add(image.ImageBase + clause.Type, TypeEvidence.ExceptionHandling);
                         }
                     }

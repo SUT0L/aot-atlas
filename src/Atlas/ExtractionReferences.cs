@@ -59,7 +59,7 @@ public sealed partial class Extraction {
 
     public RuntimeTypeReference ExceptionTypeAt(int position) {
         var clause = Managed.Clauses[position];
-        return clause.Kind == ExceptionClauseKind.Typed
+        return clause.Kind == ExceptionClauseKind.Typed && !clause.TypeUnavailable
             ? RuntimeType(Image.ImageBase + clause.Type)
             : default;
     }

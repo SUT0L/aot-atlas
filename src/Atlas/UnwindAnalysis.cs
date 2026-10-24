@@ -48,7 +48,7 @@ public sealed class UnwindAnalysis {
                     managed = new ManagedUnwind(image, Unwind, Debug, Startup, cancellationToken);
                 }
 
-                ValidateExceptionTypes(image, header, memory, managed);
+                ValidateExceptionTypes(image, header, memory, managed, failures);
 
                 Managed = managed;
             } catch (Exception error) when (IsInputError(error)) {
@@ -64,24 +64,70 @@ public sealed class UnwindAnalysis {
         PeImage image,
         ReadyToRun header,
         RuntimeMemory memory,
-        ManagedUnwind managed) {
-        int typedCount = 0;
+        ManagedUnwind managed,
+        List<UnwindFailure> failures) {
+        var roots = new HashSet<uint>();
 
-        foreach (ref readonly var clause in managed.Clauses.AsSpan()) {
-            if (clause.Kind == ExceptionClauseKind.Typed)
-                ++typedCount;
+        foreach (ref var clause in managed.Clauses.AsSpan()) {
+            if (clause.Kind != ExceptionClauseKind.Typed)
+                continue;
+
+            if (clause.TypeUnavailable) {
+                failures.Add(new(UnwindPhase.ManagedUnwind,
+                    $"Exception catch type at RVA 0x{clause.Address:X} is outside mapped storage."));
+            } else {
+                roots.Add(clause.Type);
+            }
         }
 
-        if (typedCount == 0)
+        if (roots.Count == 0)
             return;
 
-        // Optional EH roots must establish their complete EEType/GC closure before they can enter the core type set.
-        var candidates = new MethodTables(typedCount);
-
-        foreach (ref readonly var clause in managed.Clauses.AsSpan()) {
-            if (clause.Kind == ExceptionClauseKind.Typed)
-                candidates.Add(image.ImageBase + clause.Type, TypeEvidence.ExceptionHandling);
+        try {
+            ValidateRoots(image, header, memory, roots);
+            return;
+        } catch (Exception error) when (IsInputError(error)) {
+            // A failed batch does not identify the bad clause. Check each independent closure.
         }
+
+        var rejected = new Dictionary<uint, string>();
+
+        foreach (uint root in roots) {
+            try {
+                ValidateRoots(image, header, memory, [root]);
+            } catch (Exception error) when (IsInputError(error)) {
+                rejected.Add(root, error.Message);
+            }
+        }
+
+        var survivors = roots.Where(root => !rejected.ContainsKey(root)).ToArray();
+
+        if (survivors.Length != 0) {
+            try {
+                ValidateRoots(image, header, memory, survivors);
+            } catch (Exception error) when (IsInputError(error)) {
+                foreach (uint root in survivors)
+                    rejected.Add(root, error.Message);
+            }
+        }
+
+        foreach (ref var clause in managed.Clauses.AsSpan()) {
+            if (clause.Kind != ExceptionClauseKind.Typed
+                || !rejected.TryGetValue(clause.Type, out string? error))
+                continue;
+
+            clause.TypeUnavailable = true;
+            failures.Add(new(UnwindPhase.ManagedUnwind,
+                $"Exception catch type at RVA 0x{clause.Address:X}: {error}"));
+        }
+    }
+
+    private static void ValidateRoots(PeImage image, ReadyToRun header, RuntimeMemory memory,
+        IEnumerable<uint> roots) {
+        var candidates = new MethodTables();
+
+        foreach (uint root in roots)
+            candidates.Add(image.ImageBase + root, TypeEvidence.ExceptionHandling);
 
         candidates.Read(image, header, memory);
         new GcLayouts(candidates.Types.Count).Read(candidates, memory, header.Format.LegacyTypeLayout);

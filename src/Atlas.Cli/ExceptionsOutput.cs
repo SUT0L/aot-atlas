@@ -90,6 +90,8 @@ internal static class ExceptionsOutput {
 
                 json.WriteNumber("type_rva", clause.Type);
                 json.WriteNumber("type_cell", clause.TypeCell);
+                if (clause.Kind == ExceptionClauseKind.Typed)
+                    json.WriteString("type_status", clause.TypeUnavailable ? "unavailable" : "complete");
                 json.WriteEndObject();
             }
 

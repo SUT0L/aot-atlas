@@ -78,8 +78,10 @@ internal static class ExtractionAvailabilityChecks {
             int metadataStart = image.FileRange(healthy.Header.Find(RtrSectionId.EmbeddedMetadata).Start).Start;
             "BAD!"u8.CopyTo(invalidMetadata.AsSpan(metadataStart));
 
-            Rejects(() => _ = Read(invalidMetadata));
-            Console.WriteLine($"Extraction availability: {binary}; independent maps, types, frozen objects, statics and dispatch survive unwind faults; unrelated metadata corruption rejects.");
+            var damagedMetadata = Read(invalidMetadata);
+            Assert(!damagedMetadata.Metadata.IsComplete,
+                "Unrelated metadata corruption was not reported as incomplete.");
+            Console.WriteLine($"Extraction availability: {binary}; independent maps, types, frozen objects, statics and dispatch survive unwind faults; unrelated metadata corruption is incomplete.");
         }
     }
 
@@ -143,7 +145,23 @@ internal static class ExtractionAvailabilityChecks {
                 && failure.Error.Contains(fault == 4 ? "Cyclic runtime type identity"
                     : fault == 3 ? "Cyclic base type" : fault == 2 ? "Empty GCDesc" : "Invalid allocation size",
                     StringComparison.Ordinal)), "Catch closure failure was not exposed.");
-            Rejects(() => _ = damaged.Managed);
+            Assert(damaged.Managed.Frames.Length == healthy.Managed.Frames.Length,
+                "One damaged catch type discarded independent managed frames.");
+            Assert(damaged.Managed.Clauses.Length == healthy.Managed.Clauses.Length,
+                "One damaged catch type discarded independent exception clauses.");
+            var rejectedClause = damaged.Managed.Clauses.Single(value => value.TypeCell == clause.TypeCell);
+            Assert(rejectedClause.TypeUnavailable,
+                "Damaged catch type was not marked unavailable.");
+
+            for (int i = 0; i < damaged.Managed.Clauses.Length; ++i) {
+                var retained = damaged.Managed.Clauses[i];
+                if (retained.Kind != ExceptionClauseKind.Typed || retained.TypeCell == clause.TypeCell)
+                    continue;
+
+                Assert(!retained.TypeUnavailable, "An independent catch type was marked unavailable.");
+                Assert(damaged.Types.Index.ContainsKey(damaged.Image.ImageBase + retained.Type),
+                    "An independent catch type was removed from runtime evidence.");
+            }
         }
     }
 

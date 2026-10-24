@@ -176,7 +176,7 @@ internal static unsafe class ExceptionAnnotations {
 
                         DataTags.Set(ownership, view, tagType, stats.ImageBase + clause.Address, text[..length]);
 
-                        if (clause.Kind == ExceptionClauseKind.Typed) {
+                        if (clause.Kind == ExceptionClauseKind.Typed && !clause.TypeUnavailable) {
                             Core.BNAddUserDataReference(
                                 view, stats.ImageBase + clause.TypeCell, stats.ImageBase + clause.Type);
                             ++stats.DataReferences;
