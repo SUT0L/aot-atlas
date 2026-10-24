@@ -54,7 +54,33 @@ def main():
                     healthy["types"]["types"][address]["source"],
                     f"{label}: type evidence unexpectedly changed")
 
-    print("Damaged metadata names retain their text and incomplete provenance.")
+        for label, source_name, mapped_name in (
+            ("enclosing_type", b"Win32ThreadPoolNativeOverlapped",
+             "System.Threading.Win32ThreadPoolNativeOverlapped+ExecutionContextCallbackArgs"),
+            ("namespace", b"Assemblies",
+             "System.Reflection.Runtime.Assemblies.RuntimeAssemblyInfo"),
+        ):
+            require(source.count(source_name) == 1, f"{label}: fixture source name is not unique")
+            mapped = [row for row in healthy["maps"]["types"] if row[-1] == mapped_name]
+            require(len(mapped) == 1, f"{label}: fixture needs one mapped runtime type")
+            address = str(mapped[0][1])
+            require(healthy["types"]["types"][address]["name_complete"],
+                    f"{label}: source name is already incomplete")
+
+            damaged = bytearray(source)
+            damaged[source.index(source_name)] = 0xFF
+            binary = directory / f"{label}.exe"
+            binary.write_bytes(damaged)
+            report = extract(cli, binary, output)
+            actual = report["types"]["types"][address]
+            require(not actual["name_complete"],
+                    f"{label}: damaged source was marked complete")
+            require(actual["name"] != healthy["types"]["types"][address]["name"],
+                    f"{label}: damaged source retained a complete looking name")
+            require(actual["source"] == healthy["types"]["types"][address]["source"],
+                    f"{label}: type evidence unexpectedly changed")
+
+    print("Damaged leaf, enclosing and namespace names retain incomplete provenance.")
 
 
 if __name__ == "__main__":
