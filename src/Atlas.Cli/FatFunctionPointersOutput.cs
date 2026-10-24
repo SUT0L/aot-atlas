@@ -33,7 +33,7 @@ internal static class FatFunctionPointersOutput {
         bool gcUnavailable = gc is null || analysis.Unwind is null
             || analysis.Managed?.RegionSource == ManagedRegionSource.Unknown;
         bool gcPartial = !gcUnavailable && gc!.Methods.Any(method => method.Info is null);
-        json.WriteStartObject();
+        JsonOutput.StartDocument(json, "fat-function-pointers");
         json.WriteString("input_sha256", hash);
         json.WriteNumber("image_base", image.ImageBase);
         json.WriteString("constructor_map_status", pointers.ConstructorMapStatus);

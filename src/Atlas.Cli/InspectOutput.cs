@@ -46,8 +46,7 @@ internal static class InspectOutput {
 
     private static void Begin(Utf8JsonWriter json, string inputSha256, PeImage image,
         ReadyToRun rtr, HydratedRegion hydration, PeDebug debug) {
-        json.WriteStartObject();
-        json.WriteString("operation", "inspect");
+        JsonOutput.StartDocument(json, "inspect");
         json.WriteString("input_sha256", inputSha256);
         json.WriteNumber("input_bytes", image.FileData.Length);
         json.WriteNumber("image_base", image.ImageBase);

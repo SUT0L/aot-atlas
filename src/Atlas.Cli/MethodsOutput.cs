@@ -11,7 +11,7 @@ internal static class MethodsOutput {
         var maps = extraction.Maps;
         var generics = extraction.Generics;
 
-        json.WriteStartObject();
+        JsonOutput.StartDocument(json, "methods");
         json.WriteString("input_sha256", inputSha256);
         ExtractionStatusOutput.Write(json, extraction);
 

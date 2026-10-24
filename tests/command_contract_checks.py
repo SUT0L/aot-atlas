@@ -71,6 +71,7 @@ def main():
 
     digest = hashlib.sha256(arguments.binary.read_bytes()).hexdigest()
     prefix = ["dotnet", str(arguments.cli)] if arguments.cli.suffix == ".dll" else [str(arguments.cli)]
+    documents = {}
 
     for command in commands:
         path = output / f"{command}.{'h' if command == 'header' else 'json'}"
@@ -94,13 +95,24 @@ def main():
             continue
 
         document = json.loads(path.read_bytes())
+        documents[command] = document
         field, kind = SHAPES[command]
         require(isinstance(document, dict) and len(document) > 1,
                 f"{command} published an empty or invalid document")
         require(document.get("input_sha256") == digest,
                 f"{command} published output for the wrong input")
+        require(document.get("operation") == command and document.get("schema_version") == 1,
+                f"{command} published the wrong operation or schema version")
         require(field in document and isinstance(document[field], kind),
                 f"{command} omitted its declared {field} output")
+
+    embedded = documents["extract"]
+    for command, document in documents.items():
+        key = command.replace("-", "_")
+        if key in embedded:
+            require(embedded[key].get("operation") == command
+                    and embedded[key].get("schema_version") == document["schema_version"],
+                    f"extract changed the {command} product envelope")
 
     require(not list(output.glob("*.tmp")), "Unpublished CLI temporary output remains")
     print(f"Checked all {len(commands)} registered CLI command contracts.")

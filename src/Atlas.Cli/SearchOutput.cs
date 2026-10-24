@@ -10,9 +10,7 @@ internal static class SearchOutput {
         var names = extraction.Names;
         var types = CollectionsMarshal.AsSpan(extraction.Types.Types);
 
-        json.WriteStartObject();
-        json.WriteString("operation", "search");
-        json.WriteNumber("schema_version", 1);
+        JsonOutput.StartDocument(json, "search");
         json.WriteString("scope", "types");
         json.WriteString("input_sha256", inputSha256);
         ExtractionStatusOutput.Write(json, extraction);
@@ -61,9 +59,7 @@ internal static class SearchOutput {
         var strings = products.Strings!;
         var frozen = extraction.Frozen;
 
-        json.WriteStartObject();
-        json.WriteString("operation", "search");
-        json.WriteNumber("schema_version", 1);
+        JsonOutput.StartDocument(json, "search");
         json.WriteString("input_sha256", inputSha256);
         ExtractionStatusOutput.Write(json, extraction);
         json.WriteString("map_format", extraction.Maps.Format switch {

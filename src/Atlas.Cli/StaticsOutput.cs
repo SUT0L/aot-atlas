@@ -26,7 +26,7 @@ internal static class StaticsOutput {
     internal static void Write(Utf8JsonWriter json, string inputSha256, Extraction extraction) {
         var statics = extraction.Statics;
 
-        json.WriteStartObject();
+        JsonOutput.StartDocument(json, "statics");
         json.WriteString("input_sha256", inputSha256);
         ExtractionStatusOutput.Write(json, extraction);
 

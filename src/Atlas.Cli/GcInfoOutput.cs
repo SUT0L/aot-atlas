@@ -28,7 +28,7 @@ internal static class GcInfoOutput {
             }
         }
 
-        json.WriteStartObject();
+        JsonOutput.StartDocument(json, "gcinfo");
         json.WriteString("input_sha256", inputSha256);
         json.WriteNumber("image_base", image.ImageBase);
         json.WriteNumber("version", map.Version);

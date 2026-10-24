@@ -9,7 +9,7 @@ internal static class DispatchOutput {
         var names = extraction.Names;
         var dispatch = extraction.Dispatch;
         var virtuals = extraction.Virtuals;
-        json.WriteStartObject();
+        JsonOutput.StartDocument(json, "dispatch");
         json.WriteString("input_sha256", inputSha256);
         ExtractionStatusOutput.Write(json, extraction);
         json.WriteNumber("dispatch_seconds", extraction.DispatchSeconds);

@@ -8,7 +8,7 @@ internal static class FieldsOutput {
         var tables = extraction.Types;
         var names = extraction.Names;
 
-        json.WriteStartObject();
+        JsonOutput.StartDocument(json, "fields");
         json.WriteString("input_sha256", inputSha256);
         ExtractionStatusOutput.Write(json, extraction);
 

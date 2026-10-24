@@ -10,7 +10,7 @@ internal static class GvmOutput {
 
         var builder = new StringBuilder(256);
 
-        json.WriteStartObject();
+        JsonOutput.StartDocument(json, "gvm");
         json.WriteString("input_sha256", inputSha256);
         ExtractionStatusOutput.Write(json, extraction);
         json.WriteNumber("class_table", extraction.Header.Find(RtrSectionId.GenericVirtualMethodTable).Start);

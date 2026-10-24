@@ -10,7 +10,7 @@ internal static class DictionariesOutput {
         var renderer = new MethodText(extraction);
         ulong nativeLayout = extraction.Header.Find(RtrSectionId.NativeLayoutInfo).Start;
 
-        json.WriteStartObject();
+        JsonOutput.StartDocument(json, "dictionaries");
         json.WriteString("input_sha256", inputSha256);
         ExtractionStatusOutput.Write(json, extraction);
         json.WriteString("source", "native_layout_dictionary");

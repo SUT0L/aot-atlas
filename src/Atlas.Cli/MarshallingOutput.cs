@@ -6,7 +6,7 @@ internal static class MarshallingOutput {
     internal static void Write(Utf8JsonWriter json, string inputSha256, Extraction extraction) {
         var marshalling = extraction.Marshalling;
 
-        json.WriteStartObject();
+        JsonOutput.StartDocument(json, "marshalling");
         json.WriteString("input_sha256", inputSha256);
         ExtractionStatusOutput.Write(json, extraction);
         json.WriteNumber("struct_table", extraction.Header.Find(RtrSectionId.StructMarshallingStubMap).Start);

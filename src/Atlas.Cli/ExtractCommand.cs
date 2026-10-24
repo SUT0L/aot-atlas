@@ -6,9 +6,7 @@ internal static class ExtractCommand {
     internal static bool Write(Utf8JsonWriter json, string inputSha256, PeImage image,
         ReadyToRun rtr, MapFormat format, CancellationToken cancellationToken = default) {
         cancellationToken.ThrowIfCancellationRequested();
-        json.WriteStartObject();
-        json.WriteString("operation", "extract");
-        json.WriteNumber("schema_version", 1);
+        JsonOutput.StartDocument(json, "extract");
         json.WriteString("input_sha256", inputSha256);
 
         long start = Stopwatch.GetTimestamp();

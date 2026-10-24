@@ -6,7 +6,7 @@ internal static class MetadataOutput {
     internal static void Write(Utf8JsonWriter json, string inputSha256, Metadata metadata, double seconds,
         bool includeSignatureGraph = true, CancellationToken cancellationToken = default) {
         cancellationToken.ThrowIfCancellationRequested();
-        json.WriteStartObject();
+        JsonOutput.StartDocument(json, "metadata");
         json.WriteString("input_sha256", inputSha256);
         json.WriteNumber("metadata_bytes", metadata.Data.Length);
         json.WriteNumber("metadata_seconds", seconds);

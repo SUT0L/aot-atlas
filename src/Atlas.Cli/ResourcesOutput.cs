@@ -5,7 +5,7 @@ using Atlas;
 internal static class ResourcesOutput {
     internal static void Write(Utf8JsonWriter json, string inputSha256, PeImage image,
         ResourceMap resources, double? seconds) {
-        json.WriteStartObject();
+        JsonOutput.StartDocument(json, "resources");
         json.WriteString("input_sha256", inputSha256);
         json.WriteNumber("index_start", resources.IndexStart);
         json.WriteNumber("index_length", resources.IndexData.Length);

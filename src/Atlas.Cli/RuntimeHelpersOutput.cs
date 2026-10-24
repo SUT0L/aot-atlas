@@ -3,7 +3,7 @@ using Atlas;
 
 internal static class RuntimeHelpersOutput {
     internal static void Write(Utf8JsonWriter json, string inputSha256, RuntimeHelpers helpers) {
-        json.WriteStartObject();
+        JsonOutput.StartDocument(json, "runtime-helpers");
         json.WriteString("input_sha256", inputSha256);
         json.WriteString("status", helpers.Status.ToString());
         json.WriteString("evidence", "bootstrap::module_registration+os_registration+array_helper");

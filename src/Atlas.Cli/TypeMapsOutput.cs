@@ -4,9 +4,7 @@ using Atlas;
 internal static class TypeMapsOutput {
     internal static void Write(Utf8JsonWriter json, string inputSha256, Extraction extraction,
         CancellationToken cancellationToken = default) {
-        json.WriteStartObject();
-        json.WriteString("operation", "typemaps");
-        json.WriteNumber("schema_version", 1);
+        JsonOutput.StartDocument(json, "typemaps");
         json.WriteString("input_sha256", inputSha256);
         ExtractionStatusOutput.Write(json, extraction);
         WriteMap(json, "external", extraction.TypeMaps.External, extraction, cancellationToken);

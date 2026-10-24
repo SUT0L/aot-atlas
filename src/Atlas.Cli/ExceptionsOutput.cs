@@ -4,7 +4,7 @@ using Atlas;
 internal static class ExceptionsOutput {
     internal static void Write(Utf8JsonWriter json, string inputSha256, PeImage image,
         UnwindTables unwind, ManagedUnwind managed) {
-        json.WriteStartObject();
+        JsonOutput.StartDocument(json, "exceptions");
         json.WriteString("input_sha256", inputSha256);
         json.WriteNumber("image_base", image.ImageBase);
 

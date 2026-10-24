@@ -9,7 +9,7 @@ internal static class FrozenOutput {
         var tables = extraction.Types;
         var names = extraction.Names;
 
-        json.WriteStartObject();
+        JsonOutput.StartDocument(json, "frozen");
         json.WriteString("input_sha256", inputSha256);
         ExtractionStatusOutput.Write(json, extraction);
         json.WriteNumber("region_start", frozen.Start);

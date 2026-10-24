@@ -4,7 +4,7 @@ using Atlas;
 
 internal static class UnwindOutput {
     internal static void Write(Utf8JsonWriter json, string inputSha256, PeImage image, UnwindTables tables) {
-        json.WriteStartObject();
+        JsonOutput.StartDocument(json, "unwind");
         json.WriteString("input_sha256", inputSha256);
         json.WriteNumber("image_base", image.ImageBase);
         json.WriteNumber("directory_rva", image.ExceptionRva);

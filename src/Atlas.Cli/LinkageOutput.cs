@@ -5,7 +5,7 @@ using Atlas;
 
 internal static class LinkageOutput {
     internal static void Write(Utf8JsonWriter json, string inputSha256, PeImage image, PeLinkage linkage) {
-        json.WriteStartObject();
+        JsonOutput.StartDocument(json, "linkage");
         json.WriteString("input_sha256", inputSha256);
         json.WriteNumber("image_base", image.ImageBase);
 

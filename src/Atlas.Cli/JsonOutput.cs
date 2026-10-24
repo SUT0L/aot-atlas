@@ -14,6 +14,12 @@ internal static class JsonOutput {
         return new Utf8JsonWriter(new StreamBuffer(stream, cancellationToken), new JsonWriterOptions { Indented = true });
     }
 
+    internal static void StartDocument(Utf8JsonWriter json, string operation) {
+        json.WriteStartObject();
+        json.WriteString("operation", operation);
+        json.WriteNumber("schema_version", 1);
+    }
+
     internal static void WriteString(Utf8JsonWriter json, string propertyName, string? value) {
         if (value is null)
             json.WriteNull(propertyName);

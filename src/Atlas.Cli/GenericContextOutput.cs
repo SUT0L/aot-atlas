@@ -16,7 +16,7 @@ internal static class GenericContextOutput {
         var map = result.Gc;
         var references = result.References;
         var consumers = result.Consumers;
-        json.WriteStartObject();
+        JsonOutput.StartDocument(json, "generic-context");
         json.WriteString("input_sha256", inputSha256);
         json.WriteNumber("image_base", image.ImageBase);
         json.WriteNumber("gcinfo_version", map.Version);

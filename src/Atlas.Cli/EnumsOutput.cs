@@ -6,7 +6,7 @@ internal static class EnumsOutput {
     internal static void Write(Utf8JsonWriter json, string inputSha256, Extraction extraction) {
         var enums = extraction.Enums;
 
-        json.WriteStartObject();
+        JsonOutput.StartDocument(json, "enums");
         json.WriteString("input_sha256", inputSha256);
         ExtractionStatusOutput.Write(json, extraction);
         json.WriteNumber("image_base", extraction.Image.ImageBase);

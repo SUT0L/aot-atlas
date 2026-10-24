@@ -7,7 +7,7 @@ internal static class CodeOutput {
         CodeFlow code, double seconds, long allocated) {
         var image = extraction.Image;
 
-        json.WriteStartObject();
+        JsonOutput.StartDocument(json, "code");
         json.WriteString("input_sha256", inputSha256);
         ExtractionStatusOutput.Write(json, extraction);
         json.WriteNumber("code_preparation_seconds", seconds);

@@ -4,7 +4,7 @@ using Atlas;
 internal static class DispatchCellsOutput {
     internal static void Write(Utf8JsonWriter json, string inputSha256, Extraction extraction,
         DispatchCells cells, double seconds) {
-        json.WriteStartObject();
+        JsonOutput.StartDocument(json, "dispatch-cells");
         json.WriteString("input_sha256", inputSha256);
         ExtractionStatusOutput.Write(json, extraction);
         json.WriteNumber("dispatch_cell_seconds", seconds);
@@ -190,7 +190,7 @@ internal static class DispatchCellsOutput {
         ulong receiver, ulong contract, ushort slot) {
         var result = new DispatchResolver(extraction).Resolve(receiver, contract, slot);
 
-        json.WriteStartObject();
+        JsonOutput.StartDocument(json, "resolve-dispatch");
         json.WriteString("input_sha256", inputSha256);
         ExtractionStatusOutput.Write(json, extraction);
         json.WriteNumber("receiver", receiver);

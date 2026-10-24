@@ -6,7 +6,7 @@ internal static class StringsOutput {
     internal static void Write(Utf8JsonWriter json, string inputSha256, PeImage image,
         NativeStrings strings, double seconds, long allocated, CancellationToken cancellationToken = default) {
         cancellationToken.ThrowIfCancellationRequested();
-        json.WriteStartObject();
+        JsonOutput.StartDocument(json, "strings");
         json.WriteString("input_sha256", inputSha256);
         json.WriteNumber("scan_seconds", seconds);
         json.WriteNumber("allocated_bytes", allocated);

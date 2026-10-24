@@ -6,7 +6,7 @@ internal static class PInvokeOutput {
     internal static void Write(Utf8JsonWriter json, string inputSha256, Extraction extraction) {
         var image = extraction.Image;
 
-        json.WriteStartObject();
+        JsonOutput.StartDocument(json, "pinvoke");
         json.WriteString("input_sha256", inputSha256);
         ExtractionStatusOutput.Write(json, extraction);
         json.WriteNumber("image_base", image.ImageBase);

@@ -3,8 +3,7 @@ using Atlas;
 
 internal static class SectionsOutput {
     internal static void Write(Utf8JsonWriter json, string inputSha256, PeImage image, ReadyToRun rtr) {
-        json.WriteStartObject();
-        json.WriteString("operation", "sections");
+        JsonOutput.StartDocument(json, "sections");
         json.WriteString("input_sha256", inputSha256);
         json.WriteString("representation", "initial_pe_image");
 

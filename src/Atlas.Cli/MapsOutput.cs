@@ -8,7 +8,7 @@ internal static class MapsOutput {
         cancellationToken.ThrowIfCancellationRequested();
         var signatures = metadata.PublishedSignatures;
 
-        json.WriteStartObject();
+        JsonOutput.StartDocument(json, "maps");
         json.WriteString("input_sha256", inputSha256);
         json.WriteString("map_format", maps.Format switch {
             MapFormat.Legacy => "legacy",

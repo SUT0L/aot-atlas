@@ -6,7 +6,7 @@ internal static class TemplatesOutput {
     internal static void Write(Utf8JsonWriter json, string inputSha256, Extraction extraction,
         CancellationToken cancellationToken = default) {
         cancellationToken.ThrowIfCancellationRequested();
-        json.WriteStartObject();
+        JsonOutput.StartDocument(json, "templates");
         json.WriteString("input_sha256", inputSha256);
         ExtractionStatusOutput.Write(json, extraction);
 

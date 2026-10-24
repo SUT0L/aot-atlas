@@ -8,7 +8,7 @@ internal static class TypesOutput {
         var gc = extraction.Gc;
         var names = extraction.Names;
         var image = extraction.Image;
-        json.WriteStartObject();
+        JsonOutput.StartDocument(json, "types");
         json.WriteString("input_sha256", inputSha256);
         ExtractionStatusOutput.Write(json, extraction);
         json.WriteNumber("type_preparation_seconds", extraction.TypesSeconds);

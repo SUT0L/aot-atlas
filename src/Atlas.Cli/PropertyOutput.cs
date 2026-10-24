@@ -4,7 +4,7 @@ using Atlas;
 internal static class PropertyOutput {
     internal static void Write(Utf8JsonWriter json, string inputSha256, Extraction extraction,
         PropertyProjections properties) {
-        json.WriteStartObject();
+        JsonOutput.StartDocument(json, "properties");
         json.WriteString("input_sha256", inputSha256);
         ExtractionStatusOutput.Write(json, extraction);
         json.WriteNumber("property_definitions", properties.Members.Properties.Count);
