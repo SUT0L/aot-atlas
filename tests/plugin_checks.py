@@ -5,6 +5,7 @@ import json
 import struct
 import subprocess
 import tempfile
+from contextlib import nullcontext
 from pathlib import Path
 
 import binaryninja as bn
@@ -393,10 +394,11 @@ def dictionary_tag_text(instance, slot, recipe):
     return f"native_layout::{recipe['offset']:08X}::{kind}::{identity}"
 
 
-def check_dictionary_workflow(plugin, binary, extraction):
+def check_dictionary_workflow(plugin, binary, extraction, view=None):
     image_base = preferred_image_base(binary)
     recipes = extraction["dictionaries"]["recipes"]
     samples = {}
+    verified_slots = []
 
     for instance in extraction["dictionaries"]["instances"]:
         for slot in instance["slots"]:
@@ -405,12 +407,15 @@ def check_dictionary_workflow(plugin, binary, extraction):
 
             recipe = recipes[slot["recipe"]]
             samples.setdefault(recipe["kind_name"], (instance, slot, recipe))
+            verified_slots.append((instance, slot, recipe))
 
     required_kinds = {"TypeHandle", "MethodDictionary", "StaticData", "InterfaceCall"}
     require(required_kinds <= samples.keys(), "dictionary fixture is missing a recovery kind")
 
-    with bn.load(str(binary), update_analysis=False,
-                 options={"analysis.debugInfo.internal": False}) as view:
+    source = (bn.load(str(binary), update_analysis=False,
+                      options={"analysis.debugInfo.internal": False})
+              if view is None else nullcontext(view))
+    with source as view:
         view.set_analysis_hold(True)
 
         try:
@@ -421,8 +426,8 @@ def check_dictionary_workflow(plugin, binary, extraction):
         view.update_analysis_and_wait()
         delta = view.start - image_base
 
-        for kind in sorted(required_kinds):
-            instance, slot, recipe = samples[kind]
+        for instance, slot, recipe in verified_slots:
+            kind = recipe["kind_name"]
             address = slot["address"] + delta
             variable = view.get_data_var_at(address)
             require(variable is not None and variable.type.width == 8,
@@ -483,8 +488,8 @@ def check_dictionary_workflow(plugin, binary, extraction):
                 "dispatch cell has no stub reference")
 
         slot_types = {
-            sample[1]["address"] + delta: view.get_data_var_at(sample[1]["address"] + delta).type
-            for sample in (samples[kind] for kind in sorted(required_kinds))}
+            slot["address"] + delta: view.get_data_var_at(slot["address"] + delta).type
+            for _, slot, _ in verified_slots}
         plugin.apply(view)
         view.update_analysis_and_wait()
         for address, expected_type in slot_types.items():
@@ -502,6 +507,7 @@ def check_dictionary_workflow(plugin, binary, extraction):
 
     return {
         "dictionary_kinds": len(required_kinds),
+        "dictionary_slots": len(verified_slots),
         "runtime_helpers": len(helpers["helpers"]),
         "dispatch_cells": len(cells),
         "repeat_stable": True,

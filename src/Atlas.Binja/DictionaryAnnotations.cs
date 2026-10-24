@@ -44,6 +44,32 @@ internal static unsafe class DictionaryAnnotations {
                 }
             }
 
+            // A reference to a later dictionary can create a user-layer void
+            // placeholder, so define every verified slot before adding references.
+            foreach (ref readonly var instance in CollectionsMarshal.AsSpan(dictionaries.Instances)) {
+                for (int i = instance.Slots.Start; i < instance.Slots.End; ++i) {
+                    if (task != 0 && (i & 1023) == 0 && Core.BNIsBackgroundTaskCancelled(task) != 0)
+                        throw new OperationCanceledException();
+
+                    ref readonly var slot = ref CollectionsMarshal.AsSpan(dictionaries.Slots)[i];
+                    if (slot.Status != DictionarySlotStatus.Verified)
+                        continue;
+
+                    ref readonly var recipe = ref CollectionsMarshal.AsSpan(dictionaries.Recipes)[slot.Recipe];
+                    ReadOnlySpan<char> kind = Kind(recipe);
+
+                    Utf8.TryWrite(
+                        symbol,
+                        $"dictionary_slot::{instance.Address - originalBase:X8}::{slot.Address - instance.Address:X4}::{kind}\0",
+                        out _);
+
+                    ulong address = stats.ImageBase + (slot.Address - originalBase);
+                    fixed (byte* name = symbol)
+                        symbols.DefineData(variables, address,
+                            recipe.Kind == DictionaryFixup.TypeHandle ? headerPointer : pointer, name, ref stats);
+                }
+            }
+
             foreach (ref readonly var instance in CollectionsMarshal.AsSpan(dictionaries.Instances)) {
                 var method = new MethodRecord(extraction, extraction.Maps.Methods.Count + instance.Method);
                 ulong witness = stats.ImageBase
@@ -62,12 +88,11 @@ internal static unsafe class DictionaryAnnotations {
                     ulong target = stats.ImageBase + (slot.Value - originalBase);
 
                     ReadOnlySpan<char> identity;
-                    ReadOnlySpan<char> kind;
+                    ReadOnlySpan<char> kind = Kind(recipe);
 
                     if (recipe.Kind == DictionaryFixup.MethodDictionary) {
                         var nested = new MethodRecord(extraction, extraction.Maps.Methods.Count + slot.Method - 1);
                         identity = renderer.Render(nested, false);
-                        kind = "MethodDictionary";
 
                         Core.BNAddUserDataReference(view, address,
                             stats.ImageBase
@@ -76,28 +101,15 @@ internal static unsafe class DictionaryAnnotations {
                     } else if (recipe.Kind == DictionaryFixup.GvmDispatchCell) {
                         var contract = extraction.DispatchCellMetadata.Entries[slot.GvmCellMetadata - 1];
                         identity = string.Concat(extraction.Names.Values[slot.Type - 1], "::", contract.Method.Name);
-                        kind = "GvmDispatchCell";
                         Core.BNAddUserDataReference(view, address,
                             stats.ImageBase + extraction.Header.Find(contract.Section).Start + (uint)contract.Vertex - originalBase);
                         ++stats.DataReferences;
                     } else {
                         identity = extraction.Names.Values[slot.Type - 1];
-                        kind = recipe.Kind == DictionaryFixup.TypeHandle ? "TypeHandle"
-                            : recipe.Kind == DictionaryFixup.InterfaceCall ? "InterfaceCall"
-                            : recipe.Number == 1 ? "GcStaticCell" : "NonGcStaticBase";
                     }
 
                     if (identity.Contains('\0'))
                         throw new InvalidDataException("A dictionary target name contains a NUL and cant be represented by native annotations.");
-
-                    Utf8.TryWrite(
-                        symbol,
-                        $"dictionary_slot::{instance.Address - originalBase:X8}::{slot.Address - instance.Address:X4}::{kind}\0",
-                        out _);
-
-                    fixed (byte* name = symbol)
-                        symbols.DefineData(variables, address,
-                            recipe.Kind == DictionaryFixup.TypeHandle ? headerPointer : pointer, name, ref stats);
 
                     int capacity = checked(Encoding.UTF8.GetMaxByteCount(identity.Length) + 80);
                     if (capacity > text.Length)
@@ -133,4 +145,11 @@ internal static unsafe class DictionaryAnnotations {
                 Core.BNFreeTagType(tagType);
         }
     }
+
+    private static ReadOnlySpan<char> Kind(in DictionaryRecipe recipe) =>
+        recipe.Kind == DictionaryFixup.MethodDictionary ? "MethodDictionary"
+        : recipe.Kind == DictionaryFixup.GvmDispatchCell ? "GvmDispatchCell"
+        : recipe.Kind == DictionaryFixup.TypeHandle ? "TypeHandle"
+        : recipe.Kind == DictionaryFixup.InterfaceCall ? "InterfaceCall"
+        : recipe.Number == 1 ? "GcStaticCell" : "NonGcStaticBase";
 }
