@@ -76,6 +76,8 @@ public sealed class MethodTables {
     private ReadyToRun? sourceHeader;
     private RuntimeMemory? sourceMemory;
     private RuntimeTypePublication? publication;
+    private int rollbackParsedCount = -1;
+    private Dictionary<int, TypeEvidence>? rollbackEvidence;
 
     internal readonly List<MethodTable> Types;
     internal readonly List<ulong> Pointers;
@@ -87,24 +89,6 @@ public sealed class MethodTables {
     internal bool IsComplete => parsedCount == Types.Count;
     internal bool HasPublication => publication is not null;
     internal void CompleteManualTypes() => parsedCount = Types.Count;
-
-    internal MethodTables Fork() {
-        var copy = new MethodTables(Types.Count) {
-            parsedCount = parsedCount,
-            sourceImage = sourceImage,
-            sourceHeader = sourceHeader,
-            sourceMemory = sourceMemory,
-            publication = publication
-        };
-        copy.Types.AddRange(Types);
-        copy.Pointers.AddRange(Pointers);
-        copy.Variances.AddRange(Variances);
-
-        foreach (var entry in Index)
-            copy.Index.Add(entry.Key, entry.Value);
-
-        return copy;
-    }
 
     public MethodTables(int initialTypeCapacity = 0) {
         Types = new(initialTypeCapacity);
@@ -127,6 +111,10 @@ public sealed class MethodTables {
                 && (existing.Kind != 0 || existing.IsGeneric))
                 throw new InvalidDataException("GVM owner is not an open type definition.");
 
+            if (index < rollbackParsedCount && (existing.Evidence | evidence) != existing.Evidence) {
+                rollbackEvidence ??= [];
+                rollbackEvidence.TryAdd(index, existing.Evidence);
+            }
             existing.Evidence |= evidence;
 
             return index;
@@ -141,7 +129,52 @@ public sealed class MethodTables {
         return index;
     }
 
-    // Parse appended roots only. Source contents and previously decoded entries must remain immutable.
+    internal void ReadAtomic(PeImage image, ReadyToRun rtr, RuntimeMemory memory) {
+        if (parsedCount == Types.Count) {
+            Read(image, rtr, memory);
+            return;
+        }
+
+        int originalParsedCount = parsedCount;
+        int originalTypeCount = Types.Count;
+        int originalPointerCount = Pointers.Count;
+        int originalVarianceCount = Variances.Count;
+        MethodTable[] pending = Types.GetRange(parsedCount, Types.Count - parsedCount).ToArray();
+        PeImage? originalImage = sourceImage;
+        ReadyToRun? originalHeader = sourceHeader;
+        RuntimeMemory? originalMemory = sourceMemory;
+        RuntimeTypePublication? originalPublication = publication;
+
+        rollbackParsedCount = parsedCount;
+        rollbackEvidence = null;
+        try {
+            Read(image, rtr, memory);
+        } catch {
+            foreach (var entry in rollbackEvidence ?? []) {
+                var type = Types[entry.Key];
+                type.Evidence = entry.Value;
+                Types[entry.Key] = type;
+            }
+
+            for (int i = originalTypeCount; i < Types.Count; ++i)
+                Index.Remove(Types[i].Address);
+            Types.RemoveRange(originalTypeCount, Types.Count - originalTypeCount);
+            pending.CopyTo(CollectionsMarshal.AsSpan(Types)[originalParsedCount..]);
+            Pointers.RemoveRange(originalPointerCount, Pointers.Count - originalPointerCount);
+            Variances.RemoveRange(originalVarianceCount, Variances.Count - originalVarianceCount);
+            parsedCount = originalParsedCount;
+            sourceImage = originalImage;
+            sourceHeader = originalHeader;
+            sourceMemory = originalMemory;
+            publication = originalPublication;
+            throw;
+        } finally {
+            rollbackParsedCount = -1;
+            rollbackEvidence = null;
+        }
+    }
+
+    // Completed roots have a closed graph; later reads may add evidence but cannot change their links.
     internal void Read(PeImage image, ReadyToRun rtr, RuntimeMemory memory, CancellationToken cancellationToken = default) {
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -407,53 +440,53 @@ public sealed class MethodTables {
             }
         }
 
-        foreach (ref readonly var type in CollectionsMarshal.AsSpan(Types)) {
+        foreach (ref readonly var type in CollectionsMarshal.AsSpan(Types)[parsedCount..]) {
             for (int i = type.Interfaces.Start; i < type.Interfaces.End; ++i) {
                 if (Pointers[i] != 0 && Types[Index[Pointers[i]]].ElementType != 0x15)
                     throw new InvalidDataException($"Interface map at 0x{type.Address:X} refers to a non-interface type.");
             }
         }
 
-        ValidateBaseTypes();
-        ValidateIdentityTypes();
+        ValidateBaseTypes(parsedCount);
+        ValidateIdentityTypes(first: parsedCount);
         parsedCount = cursor;
     }
 
-    internal void ValidateBaseTypes() {
-        var state = new byte[Types.Count];
+    internal void ValidateBaseTypes(int first = 0) {
+        var state = new byte[Types.Count - first];
 
-        for (int root = 0; root < Types.Count; ++root) {
+        for (int root = first; root < Types.Count; ++root) {
             int parent = root;
 
-            while (parent >= 0 && state[parent] == 0) {
-                state[parent] = 1;
+            while (parent >= first && state[parent - first] == 0) {
+                state[parent - first] = 1;
                 parent = BaseType(parent);
             }
 
-            if (parent >= 0 && state[parent] == 1)
+            if (parent >= first && state[parent - first] == 1)
                 throw new InvalidDataException($"Cyclic base type at MethodTable 0x{Types[parent].Address:X}.");
 
             parent = root;
 
-            while (parent >= 0 && state[parent] == 1) {
-                state[parent] = 2;
+            while (parent >= first && state[parent - first] == 1) {
+                state[parent - first] = 2;
                 parent = BaseType(parent);
             }
         }
     }
 
     // Identity dependencies exclude base classes and interfaces: C : Base<C> is valid.
-    internal void ValidateIdentityTypes(Span<int> order = default) {
-        var state = new byte[Types.Count];
-        var stack = new (int Type, int Next)[Types.Count];
+    internal void ValidateIdentityTypes(Span<int> order = default, int first = 0) {
+        var state = new byte[Types.Count - first];
+        var stack = new (int Type, int Next)[Types.Count - first];
         int written = 0;
 
-        for (int root = 0; root < Types.Count; ++root) {
-            if (state[root] != 0)
+        for (int root = first; root < Types.Count; ++root) {
+            if (state[root - first] != 0)
                 continue;
 
             stack[0] = (root, 0);
-            state[root] = 1;
+            state[root - first] = 1;
             int depth = 0;
 
             while (depth >= 0) {
@@ -463,18 +496,20 @@ public sealed class MethodTables {
                 if (frame.Next < IdentityDependencyCount(type)) {
                     ulong address = IdentityDependency(type, frame.Next++);
                     int child = Index[address];
-                    if (state[child] == 1)
+                    if (child < first)
+                        continue;
+                    if (state[child - first] == 1)
                         throw new InvalidDataException($"Cyclic runtime type identity at 0x{address:X}.");
 
-                    if (state[child] == 0) {
-                        state[child] = 1;
+                    if (state[child - first] == 0) {
+                        state[child - first] = 1;
                         stack[++depth] = (child, 0);
                     }
                 } else {
                     if (!order.IsEmpty)
                         order[written++] = frame.Type;
 
-                    state[frame.Type] = 2;
+                    state[frame.Type - first] = 2;
                     --depth;
                 }
             }

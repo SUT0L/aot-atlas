@@ -73,6 +73,7 @@ def main():
     required_fixture_modes = [
         ("--extraction-availability", (dictionary, property_probe)),
         ("--analysis-products", (dictionary, property_probe)),
+        ("--type-graphs", (dictionary,)),
         ("--extraction-phases", (dictionary, property_probe)),
         ("--trace-stages", (dictionary, property_probe)),
         ("--signature-ownership", (dictionary, property_probe)),

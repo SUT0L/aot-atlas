@@ -268,8 +268,8 @@ if (args.Length == 1 && args[0] == "--shared-bindings") {
     return;
 }
 
-if (args.Length == 1 && args[0] == "--type-graphs") {
-    TypeGraphChecks.Run();
+if (args.Length is 1 or 2 && args[0] == "--type-graphs") {
+    TypeGraphChecks.Run(args.Length == 2 ? args[1] : null);
     return;
 }
 

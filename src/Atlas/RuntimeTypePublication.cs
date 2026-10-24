@@ -49,9 +49,7 @@ public sealed class MethodTableBuilder {
 
         header = header.ValidateSource(image);
 
-        var working = draft.Fork();
-        working.Read(image, header, memory);
-        draft = working;
+        draft.ReadAtomic(image, header, memory);
         native = true;
     }
 

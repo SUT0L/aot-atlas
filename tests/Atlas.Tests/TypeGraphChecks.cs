@@ -10,7 +10,7 @@ internal static class TypeGraphChecks {
 
     private readonly record struct Row(uint Flags = Class, int Related = -1, int Definition = -1, int Argument = -1);
 
-    internal static void Run() {
+    internal static void Run(string? nativeFixture = null) {
         Rejects(() => Read([new(Related: 0)]), "Cyclic base type");
         Rejects(() => Read([new(Related: 1), new(Related: 0)]), "Cyclic base type");
         Rejects(() => Read([new(Generic, Definition: 1, Argument: 0), new(Definition)]),
@@ -36,6 +36,7 @@ internal static class TypeGraphChecks {
             chain[i] = new(Related: i == chain.Length - 1 ? -1 : i + 1);
 
         Assert(Read(chain).Types.Count == chain.Length, "Deep base chain changed.");
+        CheckIncrementalBuilder();
 
         // Public tables can also be assembled by callers without invoking the PE reader.
         var manual = new MethodTables();
@@ -67,10 +68,112 @@ internal static class TypeGraphChecks {
 
         Rejects(() => _ = new RuntimeNames(manual, new ReflectionMaps()), "Cyclic runtime type identity");
 
+        if (nativeFixture != null)
+            CheckNativeBatches(nativeFixture);
+
         Console.WriteLine("Type graphs: source-boundary base and identity cycles reject; C : Base<C>, deep base chains and manual-table consumers passed.");
     }
 
+    private static void CheckNativeBatches(string path) {
+        PeImage image = PeImage.ReadFile(path);
+        ReadyToRun header = ReadyToRun.Read(image);
+        RuntimeMemory memory = new(image, Hydration.Read(image, header));
+        RuntimeTypePublication graph = Extraction.Read(image, ExtractionStage.RuntimeTypes).Types.Publish();
+        int rootCount = Math.Min(1000, graph.TypeEntries.Length);
+        Assert(rootCount == 1000, "Native fixture has too few runtime types.");
+
+        ulong[] roots = new ulong[rootCount];
+        for (int i = 0; i < roots.Length; ++i)
+            roots[i] = graph.TypeEntries[i].Address;
+
+        var together = new MethodTableBuilder();
+        foreach (ulong root in roots)
+            together.Root(root);
+        together.Read(image, header, memory);
+        RuntimeTypePublication expected = together.Publish();
+
+        var incremental = new MethodTableBuilder();
+        for (int batch = 0; batch < 100; ++batch) {
+            for (int i = batch * 10; i < (batch + 1) * 10; ++i)
+                incremental.Root(roots[i]);
+            incremental.Read(image, header, memory);
+        }
+        RuntimeTypePublication actual = incremental.Publish();
+        Assert(actual.TypeEntries.Length == expected.TypeEntries.Length,
+            "Incremental reads changed the native type count.");
+
+        foreach (MethodTable entry in expected.TypeEntries) {
+            MethodTable other = actual.AtAddress(entry.Address);
+            MethodTable expectedScalars = entry;
+            MethodTable actualScalars = other;
+            expectedScalars.Vtable = default;
+            expectedScalars.Interfaces = default;
+            expectedScalars.Arguments = default;
+            expectedScalars.Variance = default;
+            actualScalars.Vtable = default;
+            actualScalars.Interfaces = default;
+            actualScalars.Arguments = default;
+            actualScalars.Variance = default;
+            Assert(expectedScalars.Equals(actualScalars), $"Incremental native type 0x{entry.Address:X} differs.");
+            Assert(SamePointers(expected, entry.Vtable, actual, other.Vtable)
+                && SamePointers(expected, entry.Interfaces, actual, other.Interfaces)
+                && SamePointers(expected, entry.Arguments, actual, other.Arguments)
+                && expected.VarianceValues.Slice(entry.Variance.Start, entry.Variance.Count)
+                    .SequenceEqual(actual.VarianceValues.Slice(other.Variance.Start, other.Variance.Count)),
+                $"Incremental native type 0x{entry.Address:X} changed its links.");
+        }
+
+        Console.WriteLine($"Incremental native types: 1000 roots in 100 reads match one read across {actual.TypeEntries.Length} types.");
+    }
+
+    private static bool SamePointers(RuntimeTypePublication left, IndexRange first,
+        RuntimeTypePublication right, IndexRange second) =>
+        left.PointerValues.Slice(first.Start, first.Count)
+            .SequenceEqual(right.PointerValues.Slice(second.Start, second.Count));
+
     private static MethodTables Read(Row[] rows) {
+        var (image, header, memory) = Fixture(rows);
+        var tables = new MethodTables();
+
+        tables.Add(Address(0), TypeEvidence.TypeMap);
+        tables.Read(image, header, memory);
+
+        return tables;
+    }
+
+    private static void CheckIncrementalBuilder() {
+        var (image, header, memory) = Fixture([
+            new(Related: -1), new(Related: 0), new(Class | 0x00080000, Related: -1)
+        ]);
+        var incremental = new MethodTableBuilder();
+        incremental.Root(Address(0));
+        incremental.Read(image, header, memory);
+        RuntimeTypePublication before = incremental.Publish();
+
+        incremental.Root(Address(1));
+        incremental.Root(Address(2));
+        Rejects(() => incremental.Read(image, header, memory), "dynamic MethodTable");
+        Assert(before.TypeEntries.Length == 1 && before.AtAddress(Address(0)).Evidence == TypeEvidence.TypeMap,
+            "Failed incremental read changed a retained publication.");
+
+        BinaryPrimitives.WriteUInt32LittleEndian(image.FileData.AsSpan(576 + 2 * 64), Class);
+        incremental.Read(image, header, memory);
+
+        var together = new MethodTableBuilder();
+        together.Root(Address(0));
+        together.Root(Address(1));
+        together.Root(Address(2));
+        together.Read(image, header, memory);
+
+        RuntimeTypePublication actual = incremental.Publish();
+        RuntimeTypePublication expected = together.Publish();
+        Assert(actual.TypeEntries.SequenceEqual(expected.TypeEntries)
+            && actual.PointerValues.SequenceEqual(expected.PointerValues)
+            && actual.VarianceValues.SequenceEqual(expected.VarianceValues),
+            "Retried incremental read differs from one complete read.");
+    }
+
+    private static (PeImage Image, ReadyToRun Header, RuntimeMemory Memory) Fixture(Row[] rows) {
         int length = checked(64 + rows.Length * 64);
         int aligned = (length + 511) / 512 * 512;
         byte[] bytes = new byte[512 + aligned];
@@ -127,12 +230,7 @@ internal static class TypeGraphChecks {
 
         var image = new PeImage(bytes);
         var header = ReadyToRun.Read(image);
-        var tables = new MethodTables();
-
-        tables.Add(Address(0), TypeEvidence.TypeMap);
-        tables.Read(image, header, new RuntimeMemory(image, default));
-
-        return tables;
+        return (image, header, new RuntimeMemory(image, default));
 
         void W16(int at, ushort value) => BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(at), value);
         void W32(int at, uint value) => BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(at), value);
