@@ -53,6 +53,16 @@ public enum MetadataTarget : byte {
 public readonly record struct CodeMetadataReference(ulong Instruction, ulong Target, MetadataTarget Evidence);
 
 public sealed class CodeFlow {
+    private readonly record struct ReceiverState(ulong Type, ulong Function, ushort Live) {
+        public static ReceiverState Merge(ReceiverState left, ReceiverState right) {
+            if (left.Type != right.Type)
+                return default;
+
+            ushort live = (ushort)(left.Live & right.Live);
+            return live == 0 ? default : new(left.Type, Math.Min(left.Function, right.Function), live);
+        }
+    }
+
     public readonly RuntimeCode Runtime;
     public readonly CodeContext Context;
 
@@ -421,13 +431,10 @@ public sealed class CodeFlow {
 
         var pending = new List<ulong>(Entrypoints);
         var joins = new List<ulong>(Entrypoints);
-        HashSet<ulong>? receiverEntryJoins = null;
 
         pending.Reverse();
 
         var infoFactory = new InstructionInfoFactory();
-
-        Span<ulong> receivers = stackalloc ulong[16];
 
         Span<ulong> dispatchCells = stackalloc ulong[2];
         Span<ulong> dispatchDefinitions = stackalloc ulong[2];
@@ -453,11 +460,6 @@ public sealed class CodeFlow {
 
             reader.Position = (int)offset;
             decoder.IP = start;
-
-            receivers.Clear();
-            Receivers.TryGetValue(start, out ulong initialReceiver);
-            receivers[1] = initialReceiver;
-            uint live = initialReceiver == 0 ? 0U : 2U;
 
             dispatchCells.Clear();
 
@@ -512,10 +514,10 @@ public sealed class CodeFlow {
                     Addresses.Add(new CodeEdge(instruction.IP, instruction.Immediate64));
 
                 bool dispatchLive = dispatchCells[0] != 0 || dispatchCells[1] != 0;
-                if (live != 0 || dispatchLive || instruction.IsIPRelativeMemoryOperand) {
+                if (dispatchLive || instruction.IsIPRelativeMemoryOperand) {
                     ref readonly var info = ref infoFactory.GetInfo(
                         in instruction,
-                        live != 0 || dispatchLive
+                        dispatchLive
                             ? InstructionInfoOptions.None
                             : InstructionInfoOptions.NoRegisterUsage);
 
@@ -546,74 +548,6 @@ public sealed class CodeFlow {
                             Addresses.Add(new CodeEdge(instruction.IP, instruction.IPRelativeMemoryAddress));
                     }
 
-                    if (live != 0) {
-                        int baseRegister = instruction.MemoryBase - Register.RAX;
-                        if ((uint)baseRegister < 16
-                            && receivers[baseRegister] != 0
-                            && instruction.MemoryIndex == Register.None
-                            && (instruction.Mnemonic == Mnemonic.Lea
-                                || instruction.SegmentPrefix is not (Register.FS or Register.GS))
-                            && instruction.MemoryDisplacement64 < 0x80000000) {
-                            var access = instruction.Mnemonic == Mnemonic.Lea
-                                ? MemoryAccessKind.Address
-                                : MemoryAccessKind.None;
-                            uint size = 0;
-
-                            foreach (var memory in info.GetUsedMemory()) {
-                                // Stack effects belong to a separate memory operand
-                                if (memory.Base != instruction.MemoryBase
-                                    || memory.Index != Register.None
-                                    || memory.Displacement != instruction.MemoryDisplacement64)
-                                    continue;
-
-                                access = memory.Access switch {
-                                    OpAccess.Write or OpAccess.CondWrite => MemoryAccessKind.Write,
-                                    OpAccess.ReadWrite or OpAccess.ReadCondWrite => MemoryAccessKind.ReadWrite,
-                                    OpAccess.Read or OpAccess.CondRead => MemoryAccessKind.Read,
-                                    _ => access
-                                };
-                                size = (uint)memory.MemorySize.GetSize();
-                            }
-
-                            if (access != MemoryAccessKind.None)
-                                ReceiverAccesses.Add(new ReceiverAccess(
-                                    receivers[baseRegister],
-                                    (uint)instruction.MemoryDisplacement64,
-                                    start,
-                                    instruction.IP,
-                                    access,
-                                    size));
-                        }
-
-                        int source = instruction.Op1Register - Register.RAX;
-                        int destination = instruction.Op0Register - Register.RAX;
-                        ulong copied = instruction.Mnemonic == Mnemonic.Mov
-                            && instruction.Op0Kind == OpKind.Register
-                            && instruction.Op1Kind == OpKind.Register
-                            && (uint)source < 16
-                            && (uint)destination < 16
-                                ? receivers[source]
-                                : 0;
-
-                        foreach (var register in info.GetUsedRegisters()) {
-                            if (register.Access is not (OpAccess.Write
-                                or OpAccess.CondWrite
-                                or OpAccess.ReadWrite
-                                or OpAccess.ReadCondWrite))
-                                continue;
-
-                            int index = register.Register.GetFullRegister() - Register.RAX;
-                            if ((uint)index < 16) {
-                                receivers[index] = 0;
-                                live &= ~(1U << index);
-                            }
-                        }
-
-                        if (copied != 0) {
-                            receivers[destination] = copied;
-                            live |= 1U << destination;
-                        }
-                    }
                 }
 
                 int definedRegister = instruction.Op0Register - Register.R10;
@@ -634,17 +568,6 @@ public sealed class CodeFlow {
                         pending.Add(target);
                         joins.Add(target);
 
-                        if (flow != FlowControl.Call
-                            && Receivers.TryGetValue(target, out ulong receiver)
-                            && receiver != 0) {
-                            int caller = Array.BinarySearch(Entrypoints, instruction.IP);
-                            if (caller < 0)
-                                caller = ~caller - 1;
-
-                            if (caller >= 0 && Entrypoints[caller] == target)
-                                (receiverEntryJoins ??= new()).Add(target);
-                        }
-
                         if (flow == FlowControl.Call)
                             Calls.Add(new CodeEdge(instruction.IP, target));
                         else if (flow == FlowControl.UnconditionalBranch)
@@ -652,11 +575,8 @@ public sealed class CodeFlow {
                     }
                 }
 
-                // Receiver identity does not cross calls or control-flow joins
-                if (flow != FlowControl.Next) {
-                    live = 0;
+                if (flow != FlowControl.Next)
                     dispatchCells.Clear();
-                }
 
                 if (flow == FlowControl.IndirectBranch)
                     IndirectBranches.Add(instruction.IP);
@@ -675,26 +595,7 @@ public sealed class CodeFlow {
         IndirectBranches.Sort();
         joins.Sort();
 
-        // A late backedge can invalidate receiver evidence already decoded at its target.
-        // Branches within the same function can also bypass its incoming call ABI.
-        // Cross-function tailcalls retain the separately established receiver contract.
-        int accessCount = 0;
-
-        for (int i = 0; i < ReceiverAccesses.Count; ++i) {
-            var access = ReceiverAccesses[i];
-            if (receiverEntryJoins?.Contains(access.Function) == true)
-                continue;
-
-            int join = joins.BinarySearch(access.Function + 1);
-            if (join < 0)
-                join = ~join;
-
-            if (join == joins.Count || joins[join] > access.Instruction)
-                ReceiverAccesses[accessCount++] = access;
-        }
-
-        ReceiverAccesses.RemoveRange(accessCount, ReceiverAccesses.Count - accessCount);
-        ReceiverAccesses.Sort(static (a, b) => a.Instruction.CompareTo(b.Instruction));
+        ReadReceiverAccesses(image);
 
         RemoveJoinedDispatchUses(DispatchCellUses, preserveHelperCalls: true);
         if (unprovenDispatchCellUses is not null)
@@ -720,5 +621,196 @@ public sealed class CodeFlow {
             uses.RemoveRange(count, uses.Count - count);
             uses.Sort(static (left, right) => left.Instruction.CompareTo(right.Instruction));
         }
+    }
+
+    private void ReadReceiverAccesses(PeImage image) {
+        var knownStates = new Dictionary<ulong, ReceiverState>(Entrypoints.Length);
+        var pending = new List<(ulong Address, ReceiverState State)>(Entrypoints.Length);
+        var unknown = new uint[image.Sections.Length][];
+
+        for (int i = Entrypoints.Length - 1; i >= 0; --i) {
+            ulong entry = Entrypoints[i];
+            Receivers.TryGetValue(entry, out ulong receiver);
+            var state = receiver == 0 ? default : new ReceiverState(receiver, entry, 2);
+            pending.Add((entry, state));
+        }
+
+        var readers = new ByteArrayCodeReader[image.Sections.Length];
+        var decoders = new Decoder[image.Sections.Length];
+
+        for (int i = 0; i < image.Sections.Length; ++i) {
+            ref readonly var section = ref image.Sections[i];
+            if (!section.Executable)
+                continue;
+
+            readers[i] = new ByteArrayCodeReader(image.FileData, section.FileOffset, section.FileSize);
+            decoders[i] = Decoder.Create(64, readers[i]);
+            unknown[i] = new uint[(section.FileSize + 31L) / 32];
+        }
+
+        bool MergeAt(int sectionIndex, int position, ulong address, ref ReceiverState state) {
+            var seen = unknown[sectionIndex];
+            uint bit = 1U << (position & 31);
+            int word = position >> 5;
+            if ((seen[word] & bit) != 0)
+                return false;
+
+            if (knownStates.TryGetValue(address, out var previous)) {
+                var merged = ReceiverState.Merge(previous, state);
+                if (merged == previous)
+                    return false;
+                state = merged;
+            }
+
+            if (state.Live == 0) {
+                knownStates.Remove(address);
+                seen[word] |= bit;
+            } else {
+                knownStates[address] = state;
+            }
+
+            return true;
+        }
+
+        var infoFactory = new InstructionInfoFactory();
+        int processed = 0;
+
+        while (pending.Count != 0) {
+            var (address, state) = pending[^1];
+            pending.RemoveAt(pending.Count - 1);
+            int sectionIndex = image.FindSection(address);
+            if (sectionIndex < 0 || !image.Sections[sectionIndex].Executable)
+                continue;
+
+            ref readonly var section = ref image.Sections[sectionIndex];
+            ulong offset = address - image.ImageBase - section.Rva;
+            if (offset >= (ulong)section.FileSize)
+                continue;
+
+            var reader = readers[sectionIndex];
+            var decoder = decoders[sectionIndex];
+            reader.Position = (int)offset;
+            decoder.IP = address;
+
+            while (reader.CanReadByte) {
+                if ((processed++ & 1023) == 0)
+                    cancellationToken.ThrowIfCancellationRequested();
+
+                int position = reader.Position;
+                ulong instructionAddress = decoder.IP;
+                if (!MergeAt(sectionIndex, position, instructionAddress, ref state))
+                    break;
+
+                decoder.Decode(out var instruction);
+                if (instruction.IsInvalid)
+                    break;
+
+                if (state.Live != 0) {
+                    ref readonly var info = ref infoFactory.GetInfo(in instruction);
+                    int source = instruction.Op1Register - Register.RAX;
+                    int destination = instruction.Op0Register - Register.RAX;
+                    bool copied = instruction.Mnemonic == Mnemonic.Mov
+                        && instruction.Op0Kind == OpKind.Register
+                        && instruction.Op1Kind == OpKind.Register
+                        && (uint)source < 16
+                        && (uint)destination < 16
+                        && (state.Live & (1 << source)) != 0;
+
+                    ushort live = state.Live;
+                    foreach (var register in info.GetUsedRegisters()) {
+                        if (register.Access is not (OpAccess.Write
+                            or OpAccess.CondWrite
+                            or OpAccess.ReadWrite
+                            or OpAccess.ReadCondWrite))
+                            continue;
+
+                        int index = register.Register.GetFullRegister() - Register.RAX;
+                        if ((uint)index < 16)
+                            live &= (ushort)~(1 << index);
+                    }
+
+                    if (copied)
+                        live |= (ushort)(1 << destination);
+
+                    state = live == 0 ? default : state with { Live = live };
+                }
+
+                var flow = instruction.FlowControl;
+                if (flow is FlowControl.ConditionalBranch or FlowControl.UnconditionalBranch) {
+                    ulong target = instruction.NearBranchTarget;
+                    int entryIndex = Array.BinarySearch(Entrypoints, target);
+                    int sourceIndex = Array.BinarySearch(Entrypoints, instruction.IP);
+                    if (sourceIndex < 0)
+                        sourceIndex = ~sourceIndex - 1;
+
+                    // A separate function entry has its own call ABI. An internal backedge does not.
+                    if (entryIndex < 0 || sourceIndex < 0 || Entrypoints[sourceIndex] == target)
+                        pending.Add((target, state));
+                }
+
+                if (flow is FlowControl.Call or FlowControl.IndirectCall)
+                    state = default;
+                else if (flow is not (FlowControl.Next or FlowControl.ConditionalBranch))
+                    break;
+            }
+        }
+
+        foreach (var (address, state) in knownStates) {
+            if (state.Live == 0)
+                continue;
+
+            int sectionIndex = image.FindSection(address);
+            if (sectionIndex < 0 || !image.Sections[sectionIndex].Executable)
+                continue;
+
+            ref readonly var section = ref image.Sections[sectionIndex];
+            ulong offset = address - image.ImageBase - section.Rva;
+            if (offset >= (ulong)section.FileSize)
+                continue;
+
+            var reader = readers[sectionIndex];
+            var decoder = decoders[sectionIndex];
+            reader.Position = (int)offset;
+            decoder.IP = address;
+            decoder.Decode(out var instruction);
+            if (instruction.IsInvalid)
+                continue;
+
+            int baseRegister = instruction.MemoryBase - Register.RAX;
+            if ((uint)baseRegister >= 16
+                || (state.Live & (1 << baseRegister)) == 0
+                || instruction.MemoryIndex != Register.None
+                || (instruction.Mnemonic != Mnemonic.Lea
+                    && instruction.SegmentPrefix is Register.FS or Register.GS)
+                || instruction.MemoryDisplacement64 >= 0x80000000)
+                continue;
+
+            ref readonly var info = ref infoFactory.GetInfo(in instruction);
+            var access = instruction.Mnemonic == Mnemonic.Lea
+                ? MemoryAccessKind.Address : MemoryAccessKind.None;
+            uint size = 0;
+
+            foreach (var memory in info.GetUsedMemory()) {
+                if (memory.Base != instruction.MemoryBase
+                    || memory.Index != Register.None
+                    || memory.Displacement != instruction.MemoryDisplacement64)
+                    continue;
+
+                access = memory.Access switch {
+                    OpAccess.Write or OpAccess.CondWrite => MemoryAccessKind.Write,
+                    OpAccess.ReadWrite or OpAccess.ReadCondWrite => MemoryAccessKind.ReadWrite,
+                    OpAccess.Read or OpAccess.CondRead => MemoryAccessKind.Read,
+                    _ => access
+                };
+                size = (uint)memory.MemorySize.GetSize();
+            }
+
+            if (access != MemoryAccessKind.None)
+                ReceiverAccesses.Add(new ReceiverAccess(
+                    state.Type, (uint)instruction.MemoryDisplacement64,
+                    state.Function, address, access, size));
+        }
+
+        ReceiverAccesses.Sort(static (a, b) => a.Instruction.CompareTo(b.Instruction));
     }
 }

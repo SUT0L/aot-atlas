@@ -67,6 +67,63 @@ internal static class CodeFlowChecks {
         Assert(code.ReceiverAccesses.SequenceEqual([
             new ReceiverAccess(Owner, 8, Start, Start, MemoryAccessKind.Read, 4)]));
 
+        byte[] sharedTail = Convert.FromHexString("8B4108EB078B410CEB0290908B4110C3");
+        var sharedImage = PeFixture.Create(sharedTail, ".text", 0x60000020);
+        code = new CodeFlow(sharedImage, [Start, Start + 5], new Dictionary<ulong, ulong> {
+            [Start] = Owner,
+            [Start + 5] = Owner
+        });
+        Assert(code.ReceiverAccesses.SequenceEqual([
+            new ReceiverAccess(Owner, 8, Start, Start, MemoryAccessKind.Read, 4),
+            new ReceiverAccess(Owner, 12, Start + 5, Start + 5, MemoryAccessKind.Read, 4),
+            new ReceiverAccess(Owner, 16, Start, Start + 12, MemoryAccessKind.Read, 4)
+        ]));
+
+        code = new CodeFlow(sharedImage, [Start, Start + 5], new Dictionary<ulong, ulong> {
+            [Start] = Owner,
+            [Start + 5] = Owner + 8
+        });
+        Assert(code.ReceiverAccesses.SequenceEqual([
+            new ReceiverAccess(Owner, 8, Start, Start, MemoryAccessKind.Read, 4),
+            new ReceiverAccess(Owner + 8, 12, Start + 5, Start + 5, MemoryAccessKind.Read, 4)
+        ]));
+
+        byte[] clearedTail = Convert.FromHexString("8B4108EB098B410C31C9EB0290908B4110C3");
+        code = new CodeFlow(
+            PeFixture.Create(clearedTail, ".text", 0x60000020),
+            [Start, Start + 5], new Dictionary<ulong, ulong> {
+                [Start] = Owner,
+                [Start + 5] = Owner
+            });
+        Assert(code.ReceiverAccesses.SequenceEqual([
+            new ReceiverAccess(Owner, 8, Start, Start, MemoryAccessKind.Read, 4),
+            new ReceiverAccess(Owner, 12, Start + 5, Start + 5, MemoryAccessKind.Read, 4)
+        ]));
+
+        const int roots = 64;
+        byte[] manyRoots = new byte[roots * 5 + 4];
+        var rootAddresses = new ulong[roots];
+        var rootReceivers = new Dictionary<ulong, ulong>(roots);
+
+        for (int i = 0; i < roots; ++i) {
+            int offset = i * 5;
+            manyRoots[offset] = 0xE9;
+            BinaryPrimitives.WriteInt32LittleEndian(manyRoots.AsSpan(offset + 1), roots * 5 - offset - 5);
+            rootAddresses[i] = Start + (uint)offset;
+            rootReceivers.Add(rootAddresses[i], Owner);
+        }
+
+        Convert.FromHexString("8B4108C3").CopyTo(manyRoots, roots * 5);
+        var manyRootImage = PeFixture.Create(manyRoots, ".text", 0x60000020);
+        code = new CodeFlow(manyRootImage, rootAddresses, rootReceivers);
+        Assert(code.ReceiverAccesses.SequenceEqual([
+            new ReceiverAccess(Owner, 8, Start, Start + roots * 5, MemoryAccessKind.Read, 4)
+        ]));
+
+        rootReceivers[rootAddresses[^1]] = Owner + 8;
+        code = new CodeFlow(manyRootImage, rootAddresses, rootReceivers);
+        Assert(code.ReceiverAccesses.Count == 0);
+
         // Calls enter under the ABI contract, unlike internal branches.
         code = Decode(Convert.FromHexString("8B4108E8F8FFFFFFC3"));
         Assert(code.ReceiverAccesses.Count == 1);
@@ -146,7 +203,7 @@ internal static class CodeFlowChecks {
         Assert(code.Jumps.Count == expectedJumps.Length
             && code.Jumps.OrderBy(edge => edge.Instruction).SequenceEqual(expectedJumps));
 
-        Console.WriteLine($"Code flow: 13 instruction fixtures, 512 seeded receiver loops, and seeded graph, {reachable.Count}/{blocks} blocks reached.");
+        Console.WriteLine($"Code flow: 18 instruction fixtures, 512 seeded receiver loops, and seeded graph, {reachable.Count}/{blocks} blocks reached.");
     }
 
     private static CodeFlow Decode(byte[] instructions) {
