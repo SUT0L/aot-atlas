@@ -248,6 +248,22 @@ def verify_property_accessor_symbols(view, extraction, delta):
                 f"0x{address:X}: missing property accessor symbol")
 
 
+def verify_property_annotation_bounds(view, extraction, image_base, delta):
+    owners = {projection["owner"] for projection in extraction["properties"]["projections"]}
+    expected_tags = {owner + delta for owner in owners}
+    actual_tags = [address for address, tag in view.get_tags(auto=False)
+                   if tag.type.name == "AOT Atlas properties"]
+    require(len(actual_tags) == len(expected_tags) and set(actual_tags) == expected_tags,
+            f"property tags differ: expected {len(expected_tags)}, observed {len(actual_tags)}")
+
+    expected_ids = {f"aot-atlas:property-view:v1:{owner - image_base:08X}" for owner in owners}
+    actual_ids = {view.get_type_id(name) for name in view.type_names
+                  if str(name).startswith("atlas::properties::")}
+    require(actual_ids == expected_ids,
+            f"property view types differ: missing={sorted(expected_ids - actual_ids)[:3]!r}, "
+            f"extra={sorted(map(str, actual_ids - expected_ids))[:3]!r}")
+
+
 def check_property_workflow(plugin, binary, extraction, temporary_directory):
     image_base = preferred_image_base(binary)
     database = temporary_directory / "property-check.bndb"
@@ -271,6 +287,7 @@ def check_property_workflow(plugin, binary, extraction, temporary_directory):
         owners, accessors = verify_property_projection(
             view, extraction, image_base, view.start - image_base)
         verify_property_accessor_symbols(view, extraction, view.start - image_base)
+        verify_property_annotation_bounds(view, extraction, image_base, view.start - image_base)
 
         # The first analysis can discover import symbols after Atlas has applied its annotations
         # A second application reconciles those stronger host symbols
@@ -279,6 +296,7 @@ def check_property_workflow(plugin, binary, extraction, temporary_directory):
 
         verify_property_projection(view, extraction, image_base, view.start - image_base)
         verify_property_accessor_symbols(view, extraction, view.start - image_base)
+        verify_property_annotation_bounds(view, extraction, image_base, view.start - image_base)
 
         accessor = accessors[0]
         address = accessor["address"] + view.start - image_base
@@ -394,6 +412,33 @@ def dictionary_tag_text(instance, slot, recipe):
     return f"native_layout::{recipe['offset']:08X}::{kind}::{identity}"
 
 
+def verify_dictionary_annotation_bounds(view, verified_slots, image_base, delta):
+    expected_tags = {
+        (slot["address"] + delta, dictionary_tag_text(instance, slot, recipe))
+        for instance, slot, recipe in verified_slots
+    }
+    actual_tags = [(address, tag.data) for address, tag in view.get_tags(auto=False)
+                   if tag.type.name == "AOT Atlas dictionaries"]
+    require(len(actual_tags) == len(expected_tags) and set(actual_tags) == expected_tags,
+            f"dictionary tags differ: expected {len(expected_tags)}, observed {len(actual_tags)}")
+
+    def slot_symbol(instance, slot, recipe):
+        kind = recipe["kind_name"]
+        if kind == "StaticData":
+            kind = "GcStaticCell" if recipe["storage"] == "gc_cell" else "NonGcStaticBase"
+        return (f"dictionary_slot::{instance['dictionary'] - image_base:08X}::"
+                f"{slot['address'] - instance['dictionary']:04X}::{kind}")
+
+    expected_symbols = {
+        (slot["address"] + delta, slot_symbol(instance, slot, recipe))
+        for instance, slot, recipe in verified_slots
+    }
+    actual_symbols = [(symbol.address, symbol.raw_name) for symbol in view.get_symbols()
+                      if symbol.raw_name.startswith("dictionary_slot::")]
+    require(len(actual_symbols) == len(expected_symbols) and set(actual_symbols) == expected_symbols,
+            f"dictionary symbols differ: expected {len(expected_symbols)}, observed {len(actual_symbols)}")
+
+
 def check_dictionary_workflow(plugin, binary, extraction, view=None):
     image_base = preferred_image_base(binary)
     recipes = extraction["dictionaries"]["recipes"]
@@ -445,6 +490,8 @@ def check_dictionary_workflow(plugin, binary, extraction, view=None):
                     f"{kind}: missing NativeLayout recipe reference")
             require(instance["method_witness"] + delta in references,
                     f"{kind}: missing method witness reference")
+
+        verify_dictionary_annotation_bounds(view, verified_slots, image_base, delta)
 
         helpers = extraction["runtime_helpers"]
         require(helpers["status"] == "Complete", "runtime helper fixture did not resolve")
