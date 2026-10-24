@@ -53,6 +53,12 @@ def main():
                 "-c", "Release", "-r", rid, "--self-contained",
                 "--output", output / "canonical")
             canonical_probe = output / "canonical" / "PropertyCanonicalProbe.exe"
+        run("dotnet", "publish", "tests/PropertySharedProbe/PropertySharedProbe.csproj",
+            "-c", "Release", "-r", rid, "--self-contained",
+            "--output", output / "property-shared")
+        run("dotnet", "publish", "tests/PropertyGcProbe/PropertyGcProbe.csproj",
+            "-c", "Release", "-r", rid, "--self-contained",
+            "--output", output / "property-gc")
     else:
         dictionary = dictionary or root / "artifacts" / "DictionaryProbe.exe"
         property_probe = property_probe or root / "artifacts" / "PropertyDispatchProbe.exe"
@@ -67,6 +73,10 @@ def main():
         "--extraction-availability", dictionary, property_probe)
     run("dotnet", root / "tests" / "Atlas.Tests" / "bin" / "Release" / "net10.0" / "Atlas.Tests.dll",
         "--analysis-products", dictionary, property_probe)
+    if windows:
+        run("dotnet", root / "tests" / "Atlas.Tests" / "bin" / "Release" / "net10.0" / "Atlas.Tests.dll",
+            "--properties", output / "property-shared" / "PropertySharedProbe.exe",
+            output / "property-gc" / "PropertyGcProbe.exe")
 
     run("dotnet", "publish", "src/Atlas.Cli/Atlas.Cli.csproj",
         "-c", "Release", "-r", rid, "--self-contained", "--output", output / "cli")

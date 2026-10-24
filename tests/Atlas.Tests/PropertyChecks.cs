@@ -60,7 +60,12 @@ internal static class PropertyChecks {
                     type.Methods.Count == 0 && type.Properties.Count == 0 && type.Fields.Count == 0),
                     "Competing methods must remain stripped from reflection metadata.");
 
-                if (lines.Any(line => line.StartsWith("shared-unboxed|"))) {
+                bool unboxedPublished = metadata.Types.Any(type =>
+                    type.Name == "UnboxedCollision" && type.Properties.Count != 0);
+                var unboxedLines = lines.Where(line => line.StartsWith("shared-unboxed|")).ToArray();
+                Assert(unboxedLines.Length == (unboxedPublished ? 1 : 0),
+                    "The shared fixture lost its unboxed runtime observation.");
+                if (unboxedPublished) {
                     Assert(abi.Methods.Any(method => method.UnboxedTarget == projection.Getter),
                         "The fixture did not fold an unboxed value-type getter into the reference getter.");
                 }
@@ -156,18 +161,15 @@ internal static class PropertyChecks {
                     properties.Members.Properties[projection.Property].Name is "ReferenceView" or "NumericView");
                 Assert(observed == 2, "Legitimate scalar/reference value projections were lost.");
 
-                string? storeLine = lines.SingleOrDefault(line => line.StartsWith("store-only|"));
-                if (storeLine != null) {
-                    string[] values = storeLine.Split('|');
-                    var store = properties.Projections.Single(projection =>
-                        properties.Members.Properties[projection.Property].Name == "ComputedRead");
+                string[] values = lines.Single(line => line.StartsWith("store-only|")).Split('|');
+                var store = properties.Projections.Single(projection =>
+                    properties.Members.Properties[projection.Property].Name == "ComputedRead");
 
-                    Assert(store.Getter == 0 && store.Setter != 0
-                        && store.Offset == int.Parse(values[1])
-                        && store.Size == uint.Parse(values[2])
-                        && values[3] == "21" && values[4] == "42",
-                        "A computed getter became a readable property storage alias.");
-                }
+                Assert(store.Getter == 0 && store.Setter != 0
+                    && store.Offset == int.Parse(values[1])
+                    && store.Size == uint.Parse(values[2])
+                    && values[3] == "21" && values[4] == "42",
+                    "A computed getter became a readable property storage alias.");
             } else {
                 throw new InvalidDataException("Expected a property projection fixture with a live storage oracle.");
             }
