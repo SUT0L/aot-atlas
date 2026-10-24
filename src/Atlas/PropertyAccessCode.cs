@@ -51,7 +51,7 @@ public sealed class PropertyAccessCode {
 
         Span<ulong> visited = stackalloc ulong[8];
 
-        Span<Instruction> code = stackalloc Instruction[8];
+        Span<Instruction> code = stackalloc Instruction[14];
         int count = 0;
 
         for (int hop = 0; hop < visited.Length; ++hop) {
@@ -235,6 +235,18 @@ public sealed class PropertyAccessCode {
             result.Size = 8;
             result.Helper = code[start + 1].NearBranchTarget;
             result.Status = PropertyAccessStatus.HelperRequired;
+        }
+
+        if (result.Status == PropertyAccessStatus.Unsupported
+            && storage.Kind == AbiKind.Value && storage.Size == 16) {
+            foreach (ref readonly var instruction in code[..count]) {
+                if (instruction.Code != Code.Call_rel32_64)
+                    continue;
+
+                result.Helper = instruction.NearBranchTarget;
+                result.Status = PropertyAccessStatus.HelperRequired;
+                break;
+            }
         }
 
         return result;

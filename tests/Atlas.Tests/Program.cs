@@ -604,6 +604,7 @@ MethodGcCancellationChecks.Run();
 MarshallingChecks.Run([]);
 TypeMapsChecks.Run();
 CodeFlowChecks.Run();
+PropertyAccessCodeChecks.Run();
 
 foreach (string probe in args) {
     var image = new PeImage(File.ReadAllBytes(probe));

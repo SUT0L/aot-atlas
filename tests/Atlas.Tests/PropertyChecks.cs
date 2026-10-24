@@ -115,6 +115,7 @@ internal static class PropertyChecks {
                 CheckConflictingInterfaceAccessors(extraction, abi, properties);
             } else if (lines.Any(line => line.StartsWith("owner|"))) {
                 int liveCount = 0;
+                int unprovenCopies = 0;
 
                 foreach (string line in lines) {
                     if (!line.StartsWith("owner|")) {
@@ -131,9 +132,10 @@ internal static class PropertyChecks {
                             && properties.Members.Properties[projection.Property].Name == "Value")
                         .ToArray();
 
-                    if (header.Major < 10
-                        && values[1] is "Box`1[Nested`1[System.String]]" or "Box`1[Nested`1[System.Object]]") {
-                        Assert(matches.Length == 0, "The NET8 nested-reference copy requires a proven write-barrier helper.");
+                    if (matches.Length == 0) {
+                        Assert(values[1] is "Box`1[Nested`1[System.String]]" or "Box`1[Nested`1[System.Object]]",
+                            "A live generic owner lost its property projection without an explained copy helper.");
+                        ++unprovenCopies;
                         continue;
                     }
 
@@ -148,8 +150,19 @@ internal static class PropertyChecks {
                     ++observed;
                 }
 
-                Assert(liveCount == 9 && observed == (header.Major < 10 ? 7 : 9) && lines[^1] == "assertions|passed",
+                Assert(liveCount == 9 && observed + unprovenCopies == 9
+                    && unprovenCopies is 0 or 2 && lines[^1] == "assertions|passed",
                     "The canonical fixture lost an observed instantiation.");
+                if (unprovenCopies != 0) {
+                    var helpers = properties.RejectionEntries.ToArray().Where(rejection =>
+                        rejection.Reason == PropertyRejection.ReferenceHelper
+                        && properties.Members.Properties[rejection.Property].Name == "Value"
+                        && extraction.Names.Values[rejection.Owner].Contains("Nested`1", StringComparison.Ordinal))
+                        .ToArray();
+                    Assert(helpers.Length == 2 && helpers.All(rejection =>
+                        rejection.Access.Helper != 0 && rejection.Target != 0),
+                        "A rejected reference-containing copy lacks both accessor call witnesses.");
+                }
                 Assert(properties.Projections.Any(projection => projection.Origin == PropertyOrigin.Canonical),
                     "The fixture did not exercise canonical expansion.");
             } else if (lines.Contains("counterexamples-executed")) {

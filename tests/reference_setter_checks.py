@@ -33,10 +33,11 @@ def main():
     report = json.loads(output.read_bytes())
     helpers = [entry for entry in report["rejection_witnesses"]
                if entry["reason"] == "ReferenceHelper"]
-    require(len(helpers) == 1 and report["rejected"].get("ReferenceHelper") == 1,
+    direct = [entry for entry in helpers if entry.get("first_opcode") == "Lea_r64_m"]
+    require(len(direct) == 1 and report["rejected"].get("ReferenceHelper") == len(helpers),
             f"The compiled reference setter lost its explicit helper rejection: {helpers}")
 
-    witness = helpers[0]
+    witness = direct[0]
     require(witness["owner_name"].startswith("Box`1<")
             and witness["property_name"] == "Value"
             and witness["accessor_metadata"] != 0
@@ -51,6 +52,12 @@ def main():
                     and projection["setter"] != 0
                     for projection in report["projections"]),
             "An unproved reference setter became a storage projection")
+    require(all(entry.get("helper") and entry.get("target")
+                and not any(projection["getter"] == entry["target"]
+                            or projection["setter"] == entry["target"]
+                            for projection in report["projections"])
+                for entry in helpers),
+            "A helper mediated accessor was accepted without independent proof")
 
     print("Reference setter remains rejected with an exact helper call witness.")
 
