@@ -1041,6 +1041,12 @@ internal sealed unsafe class AnnotationReconciliation : IDisposable {
     internal void DefineVariable(ulong address, TypeConfidence* type) {
         var key = new Key(Kind.Variable, address - imageBase);
         Fact? before = Capture(key);
+        // DataVariables preserves every pre-apply user variable. A newly
+        // materialised user void came from a reference in this apply.
+        if (before is { Automatic: false, Type: not 0 } && Core.BNGetTypeClass(before.Type) == 0) {
+            Core.BNUndefineUserDataVariable(View, address);
+            before = null;
+        }
         if (!Accept(key, before, before == null || before.Automatic))
             return;
 

@@ -439,6 +439,51 @@ def verify_dictionary_annotation_bounds(view, verified_slots, image_base, delta)
             f"dictionary symbols differ: expected {len(expected_symbols)}, observed {len(actual_symbols)}")
 
 
+def verify_dispatch_cells(view, cells, image_base, delta):
+    expected_symbols = set()
+    terminators = set()
+
+    for cell in cells:
+        address = cell["address"] + delta
+        variable = view.get_data_var_at(address)
+        require(variable is not None and variable.type.width == 16,
+                f"dispatch cell 0x{address:X} has no 16-byte structure: {variable!r}")
+        members = [(member.name, member.offset, member.type.width) for member in variable.type.members]
+        require(members == [("stub", 0, 8), ("cache_or_interface", 8, 8)],
+                f"dispatch cell 0x{address:X} has the wrong members")
+        require(cell["stub"] + delta in view.get_data_refs_from(address),
+                f"dispatch cell 0x{address:X} has no stub reference")
+        second_refs = set(view.get_data_refs_from(address + 8))
+        require(cell["interface"] + delta in second_refs,
+                f"dispatch cell 0x{address:X} has no interface reference")
+        require(cell["terminator"] + delta + 8 in second_refs,
+                f"dispatch cell 0x{address:X} has no terminator reference")
+        for slot in cell["dictionary_slots"]:
+            require(slot + delta in view.get_data_refs_from(address),
+                    f"dispatch cell 0x{address:X} has no dictionary slot reference")
+        for call in cell["calls"]:
+            require(address in view.get_data_refs_from(call["definition"] + delta),
+                    f"dispatch cell 0x{address:X} has no definition reference")
+            require(address in view.get_data_refs_from(call["instruction"] + delta),
+                    f"dispatch cell 0x{address:X} has no call reference")
+
+        name = (f"dispatch_cell::{cell['interface_name']}::slot_{cell['slot']}::"
+                f"{cell['address'] - image_base:08X}")
+        expected_symbols.add((address, name))
+        terminators.add(cell["terminator"] + delta + 8)
+
+    for address in terminators:
+        variable = view.get_data_var_at(address)
+        require(variable is not None and variable.type.width == 2,
+                f"dispatch terminator 0x{address:X} has no 2-byte type")
+        expected_symbols.add((address, f"dispatch_slot::{address - delta - image_base - 8:08X}"))
+
+    actual_symbols = [(symbol.address, symbol.raw_name) for symbol in view.get_symbols()
+                      if symbol.raw_name.startswith(("dispatch_cell::", "dispatch_slot::"))]
+    require(len(actual_symbols) == len(expected_symbols) and set(actual_symbols) == expected_symbols,
+            f"dispatch symbols differ: expected {len(expected_symbols)}, observed {len(actual_symbols)}")
+
+
 def check_dictionary_workflow(plugin, binary, extraction, view=None):
     image_base = preferred_image_base(binary)
     recipes = extraction["dictionaries"]["recipes"]
@@ -515,24 +560,7 @@ def check_dictionary_workflow(plugin, binary, extraction, view=None):
 
         cells = extraction["dispatch_cells"]["cells"]
         require(cells, "dispatch-cell fixture produced no cells")
-
-        cell = cells[0]
-        cell_address = cell["address"] + delta
-        variable = view.get_data_var_at(cell_address)
-        require(variable is not None and variable.type.width == 16,
-                "dispatch cell has no 16-byte data variable")
-
-        members = [(member.name, member.offset, member.type.width) for member in variable.type.members]
-        require(members == [("stub", 0, 8), ("cache_or_interface", 8, 8)],
-                "dispatch cell has the wrong structure")
-
-        names = {symbol.full_name for symbol in view.get_symbols(cell_address, 1)}
-        expected_name = (f"dispatch_cell::{cell['interface_name']}::slot_{cell['slot']}::"
-                         f"{cell['address'] - image_base:08X}")
-        require(expected_name in names, "dispatch cell has the wrong symbol")
-
-        require(cell["stub"] + delta in view.get_data_refs_from(cell_address),
-                "dispatch cell has no stub reference")
+        verify_dispatch_cells(view, cells, image_base, delta)
 
         slot_types = {
             slot["address"] + delta: view.get_data_var_at(slot["address"] + delta).type
@@ -543,14 +571,21 @@ def check_dictionary_workflow(plugin, binary, extraction, view=None):
             variable = view.get_data_var_at(address)
             require(variable is not None and variable.type == expected_type,
                     f"repeat apply changed dictionary slot 0x{address:X}")
+        verify_dispatch_cells(view, cells, image_base, delta)
 
         user_address = samples["InterfaceCall"][1]["address"] + delta
         user_type = bn.Type.int(4, False)
         view.define_user_data_var(user_address, user_type)
+        referenced_cells = {slot.get("dispatch_cell") for _, slot, _ in verified_slots}
+        edited_cell = next(cell["address"] + delta for cell in cells
+                           if cell["address"] in referenced_cells)
+        view.define_user_data_var(edited_cell, user_type)
         plugin.apply(view)
         view.update_analysis_and_wait()
         require(view.get_data_var_at(user_address).type == user_type,
                 "repeat apply replaced the user dictionary type")
+        require(view.get_data_var_at(edited_cell).type == user_type,
+                "repeat apply replaced the user dispatch cell type")
 
     return {
         "dictionary_kinds": len(required_kinds),
