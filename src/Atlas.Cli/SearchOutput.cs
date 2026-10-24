@@ -15,30 +15,6 @@ internal static class SearchOutput {
         var strings = products.Strings!;
         var frozen = extraction.Frozen;
 
-        var references = new Dictionary<ulong, int>(strings.Items.Count + frozen.Objects.Count);
-
-        foreach (ref readonly var item in CollectionsMarshal.AsSpan(strings.Items))
-            references.TryAdd(image.ImageBase + item.Rva, 0);
-
-        foreach (ref readonly var item in CollectionsMarshal.AsSpan(frozen.Objects)) {
-            if (item.Kind == FrozenKind.String)
-                references.TryAdd(frozen.Start + (uint)item.Offset, 0);
-        }
-
-        var fieldReferences = new int[extraction.Fields.FieldTypes.Count];
-
-        if (code is not null) {
-            foreach (ref readonly var edge in CollectionsMarshal.AsSpan(code.Addresses)) {
-                ref int count = ref CollectionsMarshal.GetValueRefOrNullRef(references, edge.Target);
-
-                if (!System.Runtime.CompilerServices.Unsafe.IsNullRef(ref count))
-                    ++count;
-            }
-
-            foreach (int field in CollectionsMarshal.AsSpan(code.FieldBindings))
-                ++fieldReferences[field];
-        }
-
         json.WriteStartObject();
         json.WriteString("operation", "search");
         json.WriteNumber("schema_version", 1);
@@ -318,15 +294,38 @@ internal static class SearchOutput {
             }
         }
 
+        var matchedFields = new List<int>();
+
         for (int i = 0; i < extraction.Fields.FieldTypes.Count; ++i) {
             ref readonly var field = ref CollectionsMarshal.AsSpan(extraction.Fields.FieldTypes)[i];
             ref readonly var item = ref CollectionsMarshal.AsSpan(extraction.Maps.Fields)[field.MapIndex];
-
             int owner = field.Owner - 1;
             var name = QualifiedName(names.Values[owner], item.Name, ref buffer);
 
-            if (!name.Contains(query, StringComparison.OrdinalIgnoreCase))
-                continue;
+            if (name.Contains(query, StringComparison.OrdinalIgnoreCase))
+                matchedFields.Add(i);
+        }
+
+        Dictionary<int, int>? fieldReferences = null;
+
+        if (code is not null && matchedFields.Count != 0) {
+            fieldReferences = new Dictionary<int, int>(matchedFields.Count);
+            foreach (int index in matchedFields)
+                fieldReferences.Add(index, 0);
+
+            foreach (int field in CollectionsMarshal.AsSpan(code.FieldBindings)) {
+                ref int count = ref CollectionsMarshal.GetValueRefOrNullRef(fieldReferences, field);
+
+                if (!System.Runtime.CompilerServices.Unsafe.IsNullRef(ref count))
+                    ++count;
+            }
+        }
+
+        foreach (int i in matchedFields) {
+            ref readonly var field = ref CollectionsMarshal.AsSpan(extraction.Fields.FieldTypes)[i];
+            ref readonly var item = ref CollectionsMarshal.AsSpan(extraction.Maps.Fields)[field.MapIndex];
+            int owner = field.Owner - 1;
+            var name = QualifiedName(names.Values[owner], item.Name, ref buffer);
 
             json.WriteStartObject();
             json.WriteString("kind", "field");
@@ -342,21 +341,70 @@ internal static class SearchOutput {
             if (code is null)
                 json.WriteNull("reference_count");
             else
-                json.WriteNumber("reference_count", fieldReferences[i]);
+                json.WriteNumber("reference_count", fieldReferences![i]);
             json.WriteEndObject();
 
             ++hits;
         }
 
-        foreach (ref readonly var item in CollectionsMarshal.AsSpan(frozen.Objects)) {
+        var matchedFrozen = new List<int>();
+
+        for (int i = 0; i < frozen.Objects.Count; ++i) {
+            ref readonly var item = ref CollectionsMarshal.AsSpan(frozen.Objects)[i];
             if (item.Kind != FrozenKind.String)
                 continue;
 
             var data = frozen.Data.Span.Slice(item.Data.Start, item.Data.Count);
             var text = MemoryMarshal.Cast<byte, char>(data);
 
-            if (!text.Contains(query, StringComparison.OrdinalIgnoreCase))
-                continue;
+            if (text.Contains(query, StringComparison.OrdinalIgnoreCase))
+                matchedFrozen.Add(i);
+        }
+
+        var matchedNative = new List<int>();
+
+        for (int i = 0; i < strings.Items.Count; ++i) {
+            ref readonly var item = ref CollectionsMarshal.AsSpan(strings.Items)[i];
+            var bytes = image.FileData.AsSpan(item.Data.Start, item.Data.Count);
+            ReadOnlySpan<char> text;
+
+            if (item.Wide) {
+                text = MemoryMarshal.Cast<byte, char>(bytes);
+            } else {
+                if (bytes.Length > buffer.Length)
+                    Array.Resize(ref buffer, Math.Max(bytes.Length, buffer.Length * 2));
+
+                int length = Encoding.ASCII.GetChars(bytes, buffer);
+                text = buffer.AsSpan(0, length);
+            }
+
+            if (text.Contains(query, StringComparison.OrdinalIgnoreCase))
+                matchedNative.Add(i);
+        }
+
+        Dictionary<ulong, int>? references = null;
+
+        if (code is not null && matchedFrozen.Count + matchedNative.Count != 0) {
+            references = new Dictionary<ulong, int>(matchedFrozen.Count + matchedNative.Count);
+
+            foreach (int i in matchedFrozen)
+                references.TryAdd(frozen.Start + (uint)frozen.Objects[i].Offset, 0);
+
+            foreach (int i in matchedNative)
+                references.TryAdd(image.ImageBase + strings.Items[i].Rva, 0);
+
+            foreach (ref readonly var edge in CollectionsMarshal.AsSpan(code.Addresses)) {
+                ref int count = ref CollectionsMarshal.GetValueRefOrNullRef(references, edge.Target);
+
+                if (!System.Runtime.CompilerServices.Unsafe.IsNullRef(ref count))
+                    ++count;
+            }
+        }
+
+        foreach (int i in matchedFrozen) {
+            ref readonly var item = ref CollectionsMarshal.AsSpan(frozen.Objects)[i];
+            var data = frozen.Data.Span.Slice(item.Data.Start, item.Data.Count);
+            var text = MemoryMarshal.Cast<byte, char>(data);
 
             ulong address = frozen.Start + (uint)item.Offset;
 
@@ -372,13 +420,14 @@ internal static class SearchOutput {
             if (code is null)
                 json.WriteNull("reference_count");
             else
-                json.WriteNumber("reference_count", references[address]);
+                json.WriteNumber("reference_count", references![address]);
             json.WriteEndObject();
 
             ++hits;
         }
 
-        foreach (ref readonly var item in CollectionsMarshal.AsSpan(strings.Items)) {
+        foreach (int i in matchedNative) {
+            ref readonly var item = ref CollectionsMarshal.AsSpan(strings.Items)[i];
             var bytes = image.FileData.AsSpan(item.Data.Start, item.Data.Count);
 
             ReadOnlySpan<char> text;
@@ -393,9 +442,6 @@ internal static class SearchOutput {
                 text = buffer.AsSpan(0, length);
             }
 
-            if (!text.Contains(query, StringComparison.OrdinalIgnoreCase))
-                continue;
-
             ulong address = image.ImageBase + item.Rva;
 
             json.WriteStartObject();
@@ -408,7 +454,7 @@ internal static class SearchOutput {
             if (code is null)
                 json.WriteNull("reference_count");
             else
-                json.WriteNumber("reference_count", references[address]);
+                json.WriteNumber("reference_count", references![address]);
             json.WriteEndObject();
 
             ++hits;
