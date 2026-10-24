@@ -161,7 +161,7 @@ internal static unsafe class PropertyFunctionAnnotations {
                     }
 
                     try {
-                        if (Core.BNFunctionHasUserType(function) == 0) {
+                        if (Core.BNCanApplyAutoDiscoveredFunctionType(function)) {
                             Core.BNApplyAutoDiscoveredFunctionType(function, type);
                             ++applied;
                         }

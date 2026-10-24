@@ -105,6 +105,11 @@ internal static unsafe partial class Core {
             ApplyFunctionType(function, type);
     }
 
+    internal static bool BNCanApplyAutoDiscoveredFunctionType(nint function) =>
+        AnnotationReconciliation.Current is { } owned
+            ? owned.CanApplyFunctionType(function)
+            : BNFunctionHasUserType(function) == 0;
+
     internal static void BNTagSetData(nint tag, byte* text) {
         if (AnnotationReconciliation.Current is { } owned)
             owned.SetTagData(tag, text);

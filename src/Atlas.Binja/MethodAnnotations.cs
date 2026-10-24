@@ -377,7 +377,7 @@ internal static unsafe class MethodAnnotations {
                             constructor = functions[j].Role == FunctionRole.Constructor
                                 && extraction.Statics.Constructors[functions[j].Record - delegateEnd].GenericContext == 0;
 
-                        if (constructor && Core.BNFunctionHasUserType(function) == 0)
+                        if (constructor && Core.BNCanApplyAutoDiscoveredFunctionType(function))
                             Core.BNApplyAutoDiscoveredFunctionType(function, constructorType);
 
                         int prototype = functions[begin].Prototype;
@@ -393,7 +393,7 @@ internal static unsafe class MethodAnnotations {
                         }
 
                         // A shared body can retain the common pointer ABI, but a metadata role with an unknown ABI prevents that conclusion
-                        if (prototype != 0 && Core.BNFunctionHasUserType(function) == 0)
+                        if (prototype != 0 && Core.BNCanApplyAutoDiscoveredFunctionType(function))
                             Core.BNApplyAutoDiscoveredFunctionType(function, marshallingTypes.Prototypes[prototype].Type);
 
                         int managed = -1;
@@ -437,7 +437,7 @@ internal static unsafe class MethodAnnotations {
                                 }
                             }
 
-                            if (compatible && Core.BNFunctionHasUserType(function) == 0) {
+                            if (compatible && Core.BNCanApplyAutoDiscoveredFunctionType(function)) {
                                 nint type = managedTypes.Function(view, extraction, managedAbi, managed,
                                     runtimeTypes, headerType, voidType, voidPointer, unboxed);
                                 Core.BNApplyAutoDiscoveredFunctionType(function, type);

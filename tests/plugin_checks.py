@@ -752,18 +752,51 @@ def check_dictionary_workflow(plugin, binary, extraction, view=None,
                       options={"analysis.debugInfo.internal": False})
               if view is None else nullcontext(view))
     with source as view:
+        def abi_shape(rva):
+            function = view.get_function_at(view.start + rva)
+            require(function is not None, f"owned ABI has no function at RVA 0x{rva:X}")
+            function_type = function.type
+            return (str(function_type.return_value), str(function_type.return_value_location),
+                    str(function_type.calling_convention), function_type.stack_adjustment.value,
+                    tuple((parameter.name, str(parameter.type), str(parameter.location))
+                          for parameter in function_type.parameters))
+
+        def abi_flags(rva):
+            function_type = view.get_function_at(view.start + rva).type
+            return (function_type.can_return.value, function_type.can_return.confidence,
+                    function_type.pure.value, function_type.pure.confidence)
+
         view.set_analysis_hold(True)
 
         try:
             stats = plugin.apply(view)
+            owned_abi = owned_annotation_facts(view)[5]
+            first_abi_shapes = {
+                rva: abi_shape(rva)
+                for rva in owned_abi}
         finally:
             view.set_analysis_hold(False)
 
         view.update_analysis_and_wait()
         delta = view.start - image_base
         verify_work_counts(view, stats)
-        owned_abi = owned_annotation_facts(view)[5]
         require(len(owned_abi) >= 20, "dictionary fixture did not exercise owned ABI signatures")
+        require(owned_annotation_facts(view)[5] == owned_abi,
+                "analysis changed ABI ownership without a plugin application")
+        refined_abi = {
+            rva for rva, initial_shape in first_abi_shapes.items()
+            if abi_shape(rva) != initial_shape}
+        require(all(not view.get_function_at(view.start + rva).has_user_type for rva in refined_abi),
+                "an automatic ABI refinement was actually a user type edit")
+        analysed_flags = {rva: abi_flags(rva) for rva in owned_abi}
+
+        def check_resolved_flags(addresses):
+            for rva in addresses:
+                before = analysed_flags[rva]
+                after = abi_flags(rva)
+                require(after[0] == before[0] and after[1] >= before[1]
+                        and after[2] == before[2] and after[3] >= before[3],
+                        f"repeat apply weakened host resolved ABI flags at RVA 0x{rva:X}")
 
         for instance, slot, recipe in verified_slots:
             kind = recipe["kind_name"]
@@ -815,10 +848,17 @@ def check_dictionary_workflow(plugin, binary, extraction, view=None,
             slot["address"] + delta: view.get_data_var_at(slot["address"] + delta).type
             for _, slot, _ in verified_slots}
         repeat_stats = plugin.apply(view)
+        check_resolved_flags(owned_abi - refined_abi)
         view.update_analysis_and_wait()
         verify_work_counts(view, repeat_stats)
-        require(owned_annotation_facts(view)[5] == owned_abi,
-                "repeat apply lost unchanged ABI ownership")
+        repeat_abi = owned_annotation_facts(view)[5]
+        require(repeat_abi == owned_abi - refined_abi,
+                "repeat apply lost unchanged ABI ownership or reclaimed a refined signature: "
+                f"refined={[hex(rva) for rva in sorted(refined_abi)]}, "
+                f"missing={[hex(rva) for rva in sorted((owned_abi - refined_abi) - repeat_abi)]}, "
+                f"unexpected={[hex(rva) for rva in sorted(repeat_abi - (owned_abi - refined_abi))]}")
+        check_resolved_flags(repeat_abi)
+        owned_abi = repeat_abi
         for address, expected_type in slot_types.items():
             variable = view.get_data_var_at(address)
             require(variable is not None and variable.type == expected_type,
@@ -868,11 +908,32 @@ def check_dictionary_workflow(plugin, binary, extraction, view=None,
         require(changed_auto_type != prior_auto_type,
                 "automatic ABI mutation did not change the host signature")
         plugin.apply(view)
-        view.update_analysis_and_wait()
         require(str(view.get_function_at(changed_rva + view.start).type) == changed_auto_type,
                 "plugin replaced a changed automatic ABI")
+        view.update_analysis_and_wait()
         require(owned_annotation_facts(view)[5] == owned_abi - {min(owned_abi), changed_rva},
                 "changed automatic ABI was not excluded independently")
+
+        retained_abi = owned_annotation_facts(view)[5]
+        pure_rva = next((rva for rva in sorted(retained_abi)
+                         if view.get_function_at(view.start + rva).is_pure.value
+                         and view.get_function_at(view.start + rva).is_pure.confidence > 0), None)
+        require(pure_rva is not None, "fixture has no proven pure automatic function")
+        pure_function = view.get_function_at(view.start + pure_rva)
+        view.set_analysis_hold(True)
+        try:
+            pure_function.set_auto_pure(bn.BoolWithConfidence(False, 255))
+            require(pure_function.is_pure.value is False and pure_function.is_pure.confidence == 255,
+                    "host did not retain the changed automatic purity value")
+            purity_stats = plugin.apply(view)
+            require(pure_function.is_pure.value is False and pure_function.is_pure.confidence == 255,
+                    "plugin replaced a known automatic purity change")
+            require(owned_annotation_facts(view)[5] == retained_abi - {pure_rva},
+                    "known automatic purity change kept Atlas ABI ownership")
+        finally:
+            view.set_analysis_hold(False)
+        view.update_analysis_and_wait()
+        verify_work_counts(view, purity_stats)
 
         if database is not None:
             plugin.apply_fields(view)
@@ -897,6 +958,25 @@ def check_dictionary_workflow(plugin, binary, extraction, view=None,
         with saved as restored:
             restored.update_analysis_and_wait()
             verify_persisted_annotations(restored, saved_annotations)
+            restored_stats = plugin.apply(restored)
+            restored.update_analysis_and_wait()
+            verify_work_counts(restored, restored_stats)
+            verify_persisted_annotations(restored, saved_annotations)
+
+            edited_rva = min(saved_annotations["facts"][5])
+            edited_function = restored.get_function_at(restored.start + edited_rva)
+            require(edited_function is not None, "restored ABI function is absent")
+            edited_function.set_user_type(bn.Type.function(bn.Type.int(2, False), []))
+            restored.update_analysis_and_wait()
+            analyst_type = str(edited_function.type)
+            edited_stats = plugin.apply(restored)
+            restored.update_analysis_and_wait()
+            verify_work_counts(restored, edited_stats)
+            require(edited_function.has_user_type and str(edited_function.type) == analyst_type,
+                    "repeat apply replaced an analyst ABI edit after database reload")
+            require(owned_annotation_facts(restored)[5]
+                    == saved_annotations["facts"][5] - {edited_rva},
+                    "analyst ABI edit after reload changed unrelated ownership")
 
     return {
         "dictionary_kinds": len(required_kinds),
@@ -904,6 +984,7 @@ def check_dictionary_workflow(plugin, binary, extraction, view=None,
         "runtime_helpers": len(helpers["helpers"]),
         "dispatch_cells": len(cells),
         "repeat_stable": True,
+        "refined_automatic_abi": len(refined_abi),
         "user_type_preserved": True,
         "abi_ownership_preserved": True,
         "database_restored": database is not None,

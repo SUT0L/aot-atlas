@@ -78,6 +78,7 @@ internal sealed unsafe class AnnotationReconciliation : IDisposable {
     private readonly string temporary;
     private HashSet<ulong>? initialUserVariables;
     private readonly bool fieldsOnly;
+    private bool reuseUnchangedAbi;
     private readonly CancellationToken cancellationToken;
     private bool complete;
     private bool disposed;
@@ -928,29 +929,57 @@ internal sealed unsafe class AnnotationReconciliation : IDisposable {
         }
     }
 
-    private static bool SameAbiMetadata(Fact current, Fact expected) {
-        if (current.Bytes.AsSpan().SequenceEqual(expected.Bytes))
+    private static bool CompatibleAbiMetadata(ReadOnlySpan<byte> observed, ReadOnlySpan<byte> saved,
+        bool automatic, bool restored) {
+        if (observed.SequenceEqual(saved))
             return true;
 
-        // Binary Ninja can raise the automatic can-return confidence after analysis.
-        // The can-return value and every other ABI property must still match.
-        ReadOnlySpan<byte> observed = current.Bytes;
-        ReadOnlySpan<byte> saved = expected.Bytes;
-        return current.Automatic && observed.Length == saved.Length && observed.Length >= 3
-            && observed[..^3].SequenceEqual(saved[..^3])
-            && observed[^2..].SequenceEqual(saved[^2..]);
+        // Analysis can resolve an unknown automatic stack adjustment, can-return
+        // value, or purity value. Known values and every other property must match.
+        const int tailBytes = 8 + 1 + 2 + 2 + 2;
+        if (!automatic || observed.Length != saved.Length || observed.Length < tailBytes)
+            return false;
+
+        int stack = observed.Length - tailBytes;
+        int varargs = stack + 9;
+        int canReturn = varargs + 2;
+        int purity = canReturn + 2;
+
+        bool samePrefix = observed[..stack].SequenceEqual(saved[..stack]);
+        if (!samePrefix && restored && stack >= 3 && saved[2] == byte.MaxValue && observed[2] == 0) {
+            // BNDB restores some Atlas return locations without their confidence.
+            // The location itself and every other ABI property must still match.
+            samePrefix = observed[..2].SequenceEqual(saved[..2])
+                && observed[3..stack].SequenceEqual(saved[3..stack]);
+        }
+
+        return samePrefix
+            && (saved[stack + 8] == 0 || observed.Slice(stack, 8).SequenceEqual(saved.Slice(stack, 8)))
+            && observed.Slice(varargs, 2).SequenceEqual(saved.Slice(varargs, 2))
+            && (saved[canReturn + 1] == 0 || observed[canReturn] == saved[canReturn])
+            && (saved[purity + 1] == 0 || observed[purity] == saved[purity]);
     }
 
-    private static bool Equal(Fact? current, Fact expected) => current != null
-        && current.Automatic == expected.Automatic
-        && current.Confidence == expected.Confidence
-        && EqualSymbol(current.Symbol, expected.Symbol)
-        && current.Text.AsSpan().SequenceEqual(expected.Text)
-        && (expected.Key.Kind == Kind.Abi ? SameAbiMetadata(current, expected)
-            : current.Bytes.AsSpan().SequenceEqual(expected.Bytes))
-        && current.Size == expected.Size
-        && (SameType(current.Type, expected.Type)
-            || expected.Key.Kind == Kind.Abi && SameAbiSignature(current.Type, expected.Type));
+    private bool Equal(Fact? current, Fact expected) {
+        if (current == null)
+            return false;
+
+        // BNDB can reload an Atlas automatic function type as a user type.
+        // The same input receipt and exact ABI still establish our ownership.
+        bool restoredAbi = reuseUnchangedAbi && expected.Key.Kind == Kind.Abi
+            && expected.Automatic && !current.Automatic;
+
+        return (current.Automatic == expected.Automatic || restoredAbi)
+            && current.Confidence == expected.Confidence
+            && EqualSymbol(current.Symbol, expected.Symbol)
+            && current.Text.AsSpan().SequenceEqual(expected.Text)
+            && (expected.Key.Kind == Kind.Abi
+                ? CompatibleAbiMetadata(current.Bytes, expected.Bytes, current.Automatic || restoredAbi, restoredAbi)
+                : current.Bytes.AsSpan().SequenceEqual(expected.Bytes))
+            && current.Size == expected.Size
+            && (SameType(current.Type, expected.Type)
+                || expected.Key.Kind == Kind.Abi && SameAbiSignature(current.Type, expected.Type));
+    }
 
     private static bool EqualSymbol(SymbolSnapshot? current, SymbolSnapshot? expected) => current == expected
         || (current != null && expected != null
@@ -1162,11 +1191,28 @@ internal sealed unsafe class AnnotationReconciliation : IDisposable {
         return Core.AddFunction(View, selectedPlatform, address, auto, type);
     }
 
+    internal bool CanApplyFunctionType(nint function) {
+        if (Core.BNFunctionHasUserType(function) == 0)
+            return true;
+        if (!reuseUnchangedAbi)
+            return false;
+
+        var key = new Key(Kind.Abi, Core.BNGetFunctionStart(function) - imageBase);
+        return facts.TryGetValue(key, out var existing) && !existing.Excluded
+            && Equal(Capture(key), existing);
+    }
+
     internal void ApplyFunctionType(nint function, nint type) {
         var key = new Key(Kind.Abi, Core.BNGetFunctionStart(function) - imageBase);
         Fact? before = Capture(key);
         if (!Accept(key, before, before != null && before.Automatic))
             return;
+
+        if (reuseUnchangedAbi && facts.TryGetValue(key, out var existing) && !existing.Excluded) {
+            existing.Type = before!.Type;
+            existing.Bytes = before.Bytes;
+            return;
+        }
 
         nint prior = facts.TryGetValue(key, out var old) ? old.PriorType : before!.Type;
         var after = new Fact {
@@ -1401,6 +1447,11 @@ internal sealed unsafe class AnnotationReconciliation : IDisposable {
             return false;
         format = (MapFormat)input.Bytes[72];
         return true;
+    }
+
+    internal void SetInputIdentity(ReadOnlySpan<byte> stamp) {
+        reuseUnchangedAbi = facts.TryGetValue(new Key(Kind.Metadata, Id: "aot-atlas:apply-input"), out var input)
+            && !input.Excluded && input.Bytes.AsSpan().SequenceEqual(stamp);
     }
 
     internal void RememberInputFormat(MapFormat format) {

@@ -396,6 +396,7 @@ internal static unsafe class NativeApply {
         ApplicationBuild.TryWriteBytes(stamp[40..]);
         ExtractionBuild.TryWriteBytes(stamp[56..]);
         stamp[72] = (byte)format;
+        reconciliation.SetInputIdentity(stamp);
 
         fixed (byte* key = "aot-atlas:apply-input\0"u8)
         fixed (byte* bytes = stamp) {
