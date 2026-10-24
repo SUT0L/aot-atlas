@@ -13,6 +13,7 @@ internal static unsafe class InstanceTypes {
         nint voidPointer,
         Span<nint> references,
         Span<nint> staticFields,
+        Span<byte> scopes,
         nint task) {
         var tables = CollectionsMarshal.AsSpan(extraction.Types.Types);
         var layouts = extraction.Fields.Layouts.AsSpan();
@@ -25,6 +26,8 @@ internal static unsafe class InstanceTypes {
         var runs = CollectionsMarshal.AsSpan(extraction.Gc.Runs);
 
         int count = tables.Length;
+        if (scopes.Length != count)
+            throw new ArgumentException("Runtime type scope count does not match the type table.", nameof(scopes));
 
         int maxName = 0;
         int maxArguments = 0;
@@ -127,6 +130,7 @@ internal static unsafe class InstanceTypes {
                     if (enumeration != 0 && enums[enumeration - 1] == 0)
                         enumeration = 0;
                     if (layouts[i].Length == 0 && !indirect && enumeration == 0) {
+                        scopes[i] = 1;
                         parts[1] = opaque;
                         nint named = Core.BNCreateNamedType(3, id, &name);
                         references[i] = Core.BNCreateNamedTypeReference(named, 0, 1, &qualifier, &qualifier);

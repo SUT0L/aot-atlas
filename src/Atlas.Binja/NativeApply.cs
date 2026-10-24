@@ -436,6 +436,7 @@ internal static unsafe class NativeApply {
 
         nint[] arrayTypes = new nint[2 * (maxArray + 1)];
         nint[] runtimeTypes = new nint[types.Length];
+        byte[] runtimeTypeScopes = new byte[types.Length];
         nint[] propertyTypes = new nint[types.Length];
         nint[] staticFields = new nint[extraction.Maps.Fields.Count];
 
@@ -453,7 +454,8 @@ internal static unsafe class NativeApply {
             var headerConfidence = new TypeConfidence(headerType);
             interfacePointer = Core.BNCreatePointerTypeOfWidth(8, &headerConfidence, &qualifier, &qualifier, 0);
 
-            InstanceTypes.Apply(view, extraction, headerType, pointer, runtimeTypes, staticFields, task);
+            InstanceTypes.Apply(view, extraction, headerType, pointer, runtimeTypes, staticFields,
+                runtimeTypeScopes, task);
 
             if (prepared.Properties is { } properties) {
                 PropertyTypes.Apply(
@@ -593,7 +595,8 @@ internal static unsafe class NativeApply {
                             stats.ImageBase + (reference.Target - image.ImageBase));
                     }
 
-                    fieldRecords = FieldAnnotations.Store(view, image, code, cancellationToken);
+                    fieldRecords = FieldAnnotations.Store(view, extraction, code, runtimeTypeScopes,
+                        cancellationToken);
                 }
 
                 AnalysisAnnotations.Apply(ownership, view, evidence, ref stats, task);

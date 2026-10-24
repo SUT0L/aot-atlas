@@ -1,30 +1,82 @@
 using System.Buffers.Binary;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.Unicode;
 
 namespace Atlas.Binja;
 
 internal static unsafe class FieldAnnotations {
-    internal static byte[] Store(nint view, PeImage image, CodeFlow code, CancellationToken cancellationToken = default) {
-        cancellationToken.ThrowIfCancellationRequested();
+    private readonly record struct FieldRecord(uint Type, uint Offset, uint Function, uint Instruction, uint Size);
+    private readonly record struct SavedName(bool Opaque, string Leaf);
+    private static readonly UTF8Encoding StrictUtf8 = new(false, true);
 
-        byte[] bytes = new byte[checked(8 + 20 * code.FieldReferences.Count)];
-        "ATFLD001"u8.CopyTo(bytes);
-        int position = 8;
+    internal static byte[] Store(nint view, Extraction extraction, CodeFlow code, ReadOnlySpan<byte> scopes,
+        CancellationToken cancellationToken = default) {
+        cancellationToken.ThrowIfCancellationRequested();
+        PeImage image = extraction.Image;
+        var entries = CollectionsMarshal.AsSpan(extraction.Types.Types);
+        if (entries.Length != scopes.Length)
+            throw new ArgumentException("Runtime type scopes do not match the type table.", nameof(scopes));
+
+        var types = new SortedSet<uint>();
+        using var output = new MemoryStream();
+        using var writer = new BinaryWriter(output, Encoding.UTF8, leaveOpen: true);
+        writer.Write("ATFLD002"u8);
+        writer.Write(code.FieldReferences.Count);
 
         foreach (ref readonly var reference in CollectionsMarshal.AsSpan(code.FieldReferences)) {
             cancellationToken.ThrowIfCancellationRequested();
 
             ref readonly var access = ref CollectionsMarshal.AsSpan(code.ReceiverAccesses)[reference.AccessIndex];
-            var record = bytes.AsSpan(position, 20);
-
-            BinaryPrimitives.WriteUInt32LittleEndian(record, checked((uint)(access.Type - image.ImageBase)));
-            BinaryPrimitives.WriteUInt32LittleEndian(record[4..], access.Offset);
-            BinaryPrimitives.WriteUInt32LittleEndian(record[8..], checked((uint)(access.Function - image.ImageBase)));
-            BinaryPrimitives.WriteUInt32LittleEndian(record[12..], checked((uint)(access.Instruction - image.ImageBase)));
-            BinaryPrimitives.WriteUInt32LittleEndian(record[16..], access.Size);
-            position += 20;
+            uint type = checked((uint)(access.Type - image.ImageBase));
+            types.Add(type);
+            writer.Write(type);
+            writer.Write(access.Offset);
+            writer.Write(checked((uint)(access.Function - image.ImageBase)));
+            writer.Write(checked((uint)(access.Instruction - image.ImageBase)));
+            writer.Write(access.Size);
         }
+
+        writer.Write(types.Count);
+        var indices = new Dictionary<uint, int>(types.Count);
+        for (int i = 0; i < entries.Length; ++i) {
+            uint type = checked((uint)(entries[i].Address - image.ImageBase));
+            if (types.Contains(type))
+                indices.Add(type, i);
+        }
+        Span<byte> identifier = stackalloc byte[64];
+        fixed (byte* id = identifier) {
+            foreach (uint type in types) {
+                cancellationToken.ThrowIfCancellationRequested();
+                ulong address = image.ImageBase + type;
+                if (!indices.TryGetValue(type, out int index) || scopes[index] > 1)
+                    throw new InvalidDataException($"Field receiver type 0x{address:X} has no runtime name.");
+                var saved = new SavedName(scopes[index] == 1, extraction.Names.Values[index]);
+                if (string.IsNullOrEmpty(saved.Leaf) || saved.Leaf.Contains('\0'))
+                    throw new InvalidDataException($"Field receiver type 0x{address:X} has an invalid name.");
+
+                identifier.Clear();
+                if (!Utf8.TryWrite(identifier, $"aot-atlas:runtime-type:v1:{type:X8}\0", out _))
+                    throw new InvalidDataException("A runtime type identifier does not fit the field record.");
+
+                QualifiedName name = Core.BNGetAnalysisTypeNameById(view, id);
+                try {
+                    if (name.Count != 0 && !Matches(name, saved))
+                        throw new InvalidDataException($"Field receiver type 0x{address:X} changed its name.");
+
+                    byte[] text = StrictUtf8.GetBytes(saved.Leaf);
+                    writer.Write(type);
+                    writer.Write((byte)(saved.Opaque ? 1 : 0));
+                    writer.Write(text.Length);
+                    writer.Write(text);
+                } finally {
+                    Core.BNFreeQualifiedName(&name);
+                }
+            }
+        }
+
+        writer.Flush();
+        byte[] bytes = output.ToArray();
 
         fixed (byte* key = "aot-atlas:field-references\0"u8)
         fixed (byte* data = bytes) {
@@ -39,6 +91,95 @@ internal static unsafe class FieldAnnotations {
 
         return bytes;
     }
+
+    private static FieldRecord[] ReadRecords(ReadOnlySpan<byte> bytes, out Dictionary<uint, SavedName> savedNames) {
+        savedNames = [];
+        if (bytes.Length < 8)
+            throw new InvalidDataException("The Atlas field-reference record is truncated.");
+
+        if (bytes[..8].SequenceEqual("ATFLD001"u8)) {
+            if ((bytes.Length - 8) % 20 != 0)
+                throw new InvalidDataException("The Atlas field-reference record has an invalid length.");
+            var legacy = new FieldRecord[(bytes.Length - 8) / 20];
+            for (int i = 0, position = 8; i < legacy.Length; ++i, position += 20)
+                legacy[i] = ReadRecord(bytes.Slice(position, 20));
+            return legacy;
+        }
+
+        if (!bytes[..8].SequenceEqual("ATFLD002"u8) || bytes.Length < 16)
+            throw new InvalidDataException("The Atlas field-reference record has an invalid format.");
+
+        using var input = new MemoryStream(bytes.ToArray(), writable: false);
+        using var reader = new BinaryReader(input, Encoding.UTF8);
+        input.Position = 8;
+        int count = reader.ReadInt32();
+        if (count < 0 || count > (bytes.Length - 16) / 20)
+            throw new InvalidDataException("The Atlas field-reference count is invalid.");
+
+        var records = new FieldRecord[count];
+        for (int i = 0; i < count; ++i)
+            records[i] = new FieldRecord(reader.ReadUInt32(), reader.ReadUInt32(), reader.ReadUInt32(),
+                reader.ReadUInt32(), reader.ReadUInt32());
+
+        int nameCount = reader.ReadInt32();
+        if (nameCount < 0 || nameCount > count)
+            throw new InvalidDataException("The Atlas field receiver name count is invalid.");
+        savedNames.EnsureCapacity(nameCount);
+        for (int i = 0; i < nameCount; ++i) {
+            if (input.Length - input.Position < 9)
+                throw new InvalidDataException("The Atlas field receiver name is truncated.");
+            uint type = reader.ReadUInt32();
+            byte scope = reader.ReadByte();
+            int length = reader.ReadInt32();
+            if (scope > 1 || length <= 0 || length > input.Length - input.Position)
+                throw new InvalidDataException("The Atlas field receiver name is invalid.");
+            string leaf = StrictUtf8.GetString(reader.ReadBytes(length));
+            if (leaf.Contains('\0') || !savedNames.TryAdd(type, new SavedName(scope == 1, leaf)))
+                throw new InvalidDataException("The Atlas field receiver name is repeated or contains a NUL.");
+        }
+
+        if (input.Position != input.Length)
+            throw new InvalidDataException("The Atlas field receiver names do not cover the field references.");
+        foreach (FieldRecord record in records) {
+            if (!savedNames.ContainsKey(record.Type))
+                throw new InvalidDataException("The Atlas field receiver names do not cover the field references.");
+        }
+        return records;
+    }
+
+    private static FieldRecord ReadRecord(ReadOnlySpan<byte> record) => new(
+        BinaryPrimitives.ReadUInt32LittleEndian(record),
+        BinaryPrimitives.ReadUInt32LittleEndian(record[4..]),
+        BinaryPrimitives.ReadUInt32LittleEndian(record[8..]),
+        BinaryPrimitives.ReadUInt32LittleEndian(record[12..]),
+        BinaryPrimitives.ReadUInt32LittleEndian(record[16..]));
+
+    private static QualifiedName NativeName(SavedName saved) {
+        byte[] leaf = StrictUtf8.GetBytes(saved.Leaf + '\0');
+        fixed (byte* text = leaf)
+        fixed (byte* atlas = "atlas\0"u8)
+        fixed (byte* runtime = "runtime\0"u8)
+        fixed (byte* opaque = "opaque\0"u8)
+        fixed (byte* join = "::\0"u8) {
+            byte** parts = stackalloc byte*[3] { atlas, saved.Opaque ? opaque : runtime, text };
+            QualifiedName name = new() {
+                Names = Core.BNAllocStringList(parts, 3),
+                Join = Core.BNAllocString(join),
+                Count = 3
+            };
+            if (name.Names == null || name.Join == null) {
+                Core.BNFreeQualifiedName(&name);
+                throw new OutOfMemoryException("Binary Ninja could not allocate a field receiver name.");
+            }
+            return name;
+        }
+    }
+
+    private static bool Matches(QualifiedName name, SavedName saved) => name.Count == 3
+        && Marshal.PtrToStringUTF8((nint)name.Names[0]) == "atlas"
+        && Marshal.PtrToStringUTF8((nint)name.Names[1]) == (saved.Opaque ? "opaque" : "runtime")
+        && Marshal.PtrToStringUTF8((nint)name.Names[2]) == saved.Leaf
+        && Marshal.PtrToStringUTF8((nint)name.Join) == "::";
 
     internal static bool TryApply(AnnotationView currentView, bool required, out int count, out MapFormat format,
         CancellationToken cancellationToken = default, AnnotationArtifacts? artifacts = null) {
@@ -127,14 +268,9 @@ internal static unsafe class FieldAnnotations {
                 }
             }
 
-            if (bytes.Length < 8
-                || (bytes.Length - 8) % 20 != 0
-                || !bytes[..8].SequenceEqual("ATFLD001"u8))
-                throw new InvalidDataException("The Atlas field-reference record has an invalid format.");
-
-            int count = (bytes.Length - 8) / 20;
+            FieldRecord[] records = ReadRecords(bytes, out var savedNames);
             int applied = 0;
-            names.EnsureCapacity(count);
+            names.EnsureCapacity(savedNames.Count);
 
             ulong imageBase = Core.BNGetImageBase(view);
             platform = Core.BNGetDefaultPlatform(view);
@@ -148,30 +284,36 @@ internal static unsafe class FieldAnnotations {
             Span<byte> identifier = stackalloc byte[64];
 
             fixed (byte* id = identifier) {
-                for (int position = 8; position < bytes.Length; position += 20) {
+                foreach (FieldRecord record in records) {
                     cancellationToken.ThrowIfCancellationRequested();
 
-                    var record = bytes.Slice(position, 20);
-                    uint type = BinaryPrimitives.ReadUInt32LittleEndian(record);
-                    uint offset = BinaryPrimitives.ReadUInt32LittleEndian(record[4..]);
-                    uint entrypoint = BinaryPrimitives.ReadUInt32LittleEndian(record[8..]);
-                    ulong instruction = checked(imageBase + BinaryPrimitives.ReadUInt32LittleEndian(record[12..]));
+                    uint type = record.Type;
+                    uint offset = record.Offset;
+                    uint entrypoint = record.Function;
+                    ulong instruction = checked(imageBase + record.Instruction);
                     ulong functionAddress = checked(imageBase + entrypoint);
                     ulong typeAddress = checked(imageBase + type);
-                    uint size = BinaryPrimitives.ReadUInt32LittleEndian(record[16..]);
+                    uint size = record.Size;
 
                     if (!names.TryGetValue(type, out var name)) {
                         Utf8.TryWrite(identifier, $"aot-atlas:runtime-type:v1:{type:X8}\0", out _);
                         name = Core.BNGetAnalysisTypeNameById(view, id);
                         if (name.Count == 0) {
                             Core.BNFreeQualifiedName(&name);
-                            // A BNDB can omit an unresolved receiver type identity.
-                            // Rebuild saved field evidence from the original input.
-                            if (!artifacts.HasValue) {
+                            if (savedNames.TryGetValue(type, out SavedName saved))
+                                name = NativeName(saved);
+                            else if (!artifacts.HasValue) {
+                                // Legacy field records need a fresh extraction to recover a missing name.
                                 inputCurrent = false;
                                 return 0;
+                            } else {
+                                throw new InvalidOperationException($"Atlas runtime type 0x{typeAddress:X} is missing.");
                             }
-                            throw new InvalidOperationException($"Atlas runtime type 0x{typeAddress:X} is missing.");
+                        }
+
+                        if (savedNames.TryGetValue(type, out SavedName expected) && !Matches(name, expected)) {
+                            Core.BNFreeQualifiedName(&name);
+                            throw new InvalidDataException($"Field receiver type 0x{typeAddress:X} changed its name.");
                         }
 
                         names.Add(type, name);
