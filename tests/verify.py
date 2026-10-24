@@ -93,6 +93,7 @@ def main():
     run(sys.executable, "tests/command_contract_checks.py", cli, test_assembly, dictionary)
     run(sys.executable, "tests/search_cost_checks.py", cli, dictionary)
     run(sys.executable, "tests/search_scope_checks.py", cli, dictionary)
+    run(sys.executable, "tests/speed_budget_checks.py", cli, dictionary)
     run(sys.executable, "tests/analysis_status_checks.py", cli, property_probe, dictionary)
     run(sys.executable, "tests/function_pointer_checks.py", cli, dictionary)
     run(sys.executable, "tests/property_rejection_checks.py", cli, property_probe)
