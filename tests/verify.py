@@ -70,6 +70,9 @@ def main():
         run("dotnet", "publish", "tests/PropertyGcProbe/PropertyGcProbe.csproj",
             "-c", "Release", "-r", rid, "--self-contained",
             "--output", output / "property-gc")
+        run("dotnet", "publish", "tests/GcArrayShapeProbe/GcArrayShapeProbe.csproj",
+            "-c", "Release", "-r", rid, "--self-contained",
+            "--output", output / "gc-array")
         if string_probe is None:
             run("dotnet", "publish", "tests/StringProbe/StringProbe.csproj",
                 "-c", "Release", "-r", rid, "--self-contained",
@@ -110,6 +113,9 @@ def main():
         required_fixture_modes.append((
             "--properties", (output / "property-shared" / "PropertySharedProbe.exe",
                              output / "property-gc" / "PropertyGcProbe.exe")))
+        required_fixture_modes.append((
+            "--gc-array-elements", (output / "gc-array" / "GcArrayShapeProbe.exe",
+                                    output / "gc-array" / "GcArrayShapeProbe.map")))
     if dictionary_map is not None:
         required_fixture_modes.append(("--generic-context", (dictionary, dictionary_map)))
 
@@ -128,6 +134,11 @@ def main():
     run(sys.executable, "tests/property_rejection_checks.py", cli, property_probe)
     run(sys.executable, "tests/reference_setter_checks.py", cli, canonical_probe)
     run(sys.executable, "tests/metadata_name_checks.py", cli, dictionary)
+    if windows:
+        run(sys.executable, "tests/gc_array_cli_checks.py", cli,
+            output / "gc-array" / "GcArrayShapeProbe.exe",
+            output / "gc-array" / "GcArrayShapeProbe.map",
+            output / "gc-array" / "types.json")
     if string_probe is not None:
         run(sys.executable, "tests/string_precision_checks.py", cli, string_probe, string_oracle,
             output / "string-precision.json")

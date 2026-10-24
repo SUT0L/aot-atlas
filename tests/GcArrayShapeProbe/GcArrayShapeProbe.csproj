@@ -6,4 +6,13 @@
     <PublishAot>true</PublishAot>
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
+  <Target Name="WriteGcArrayShapeProbeLinkerMap" BeforeTargets="LinkNative" Condition="'$(_targetOS)' == 'win'">
+    <ItemGroup>
+      <LinkerArg Include="/MAP:&quot;$(NativeIntermediateOutputPath)GcArrayShapeProbe.map&quot;" />
+    </ItemGroup>
+  </Target>
+  <Target Name="StageGcArrayShapeProbeLinkerMap" AfterTargets="LinkNative" Condition="'$(_targetOS)' == 'win'">
+    <Copy SourceFiles="$(NativeIntermediateOutputPath)GcArrayShapeProbe.map"
+          DestinationFiles="$(PublishDir)GcArrayShapeProbe.map" />
+  </Target>
 </Project>
