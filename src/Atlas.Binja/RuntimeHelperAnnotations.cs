@@ -55,7 +55,7 @@ internal static unsafe class RuntimeHelperAnnotations {
 
         try {
             fixed (byte* name = "runtime::classlib_functions\0"u8)
-                symbols.DefineData(variables, stats.ImageBase + helpers.Table - original, table, name, ref stats);
+                symbols.DefineData(variables, stats.ImageBase + helpers.Table - original, table, name);
 
             foreach (var helper in helpers.Helpers) {
                 ulong address = stats.ImageBase + helper.Address - original;
@@ -76,10 +76,8 @@ internal static unsafe class RuntimeHelperAnnotations {
                 fixed (byte* name = buffer)
                     symbols.Define(address, 0, name);
 
-                ++stats.Symbols;
 
                 Core.BNAddUserDataReference(view, stats.ImageBase + helper.Cell - original, address);
-                ++stats.DataReferences;
             }
 
             Core.BNAddUserDataReference(
@@ -87,7 +85,6 @@ internal static unsafe class RuntimeHelperAnnotations {
             Core.BNAddUserDataReference(
                 view, stats.ImageBase + helpers.Registration - original,
                 stats.ImageBase + helpers.ModuleArray - original);
-            stats.DataReferences += 2;
         } finally {
             Core.BNFreePlatform(platform);
             Core.BNFreeType(table);

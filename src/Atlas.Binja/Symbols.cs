@@ -164,11 +164,8 @@ internal sealed unsafe class Symbols {
             Core.BNDefineUserSymbol(view, symbol);
     }
 
-    internal void DefineData(DataVariables variables, ulong address, nint type, byte* name, ref ApplyStats stats) {
+    internal void DefineData(DataVariables variables, ulong address, nint type, byte* name) {
         Define(address, 3, name);
         variables.Define(address, type);
-
-        ++stats.Symbols;
-        ++stats.DataVariables;
     }
 }

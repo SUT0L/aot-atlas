@@ -131,6 +131,98 @@ class Plugin:
         return stats
 
 
+def owned_annotation_facts(view):
+    receipt = memoryview(view.query_metadata("aot-atlas:owned-annotations"))
+    require(receipt[:8] == b"ATOWN001", "Atlas ownership receipt has the wrong format")
+    snapshot_size = struct.unpack_from("<I", receipt, 8)[0]
+    offset = 12 + snapshot_size
+    require(offset + 4 <= len(receipt), "Atlas ownership receipt is truncated")
+
+    def read(format_code):
+        nonlocal offset
+        value = struct.unpack_from(format_code, receipt, offset)[0]
+        offset += struct.calcsize(format_code)
+        return value
+
+    def skip_string():
+        nonlocal offset
+        size = 0
+        shift = 0
+        while True:
+            byte = read("<B")
+            size |= (byte & 0x7F) << shift
+            if byte < 0x80:
+                break
+            shift += 7
+            require(shift <= 28, "Atlas ownership string length is invalid")
+        offset += size
+        require(offset <= len(receipt), "Atlas ownership string is truncated")
+
+    facts = {1: set(), 2: set(), 3: set()}
+    fact_count = read("<i")
+    require(fact_count >= 0, "Atlas ownership fact count is invalid")
+    for _ in range(fact_count):
+        kind = read("<B")
+        address = read("<Q")
+        target = read("<Q")
+        skip_string()
+        excluded = read("<B")
+        read("<B")
+        text_count = read("<i")
+        require(text_count >= 0, "Atlas ownership text count is invalid")
+        for _ in range(text_count):
+            skip_string()
+        read("<i")
+        read("<i")
+        read("<Q")
+        read("<B")
+        if read("<B"):
+            read("<B")
+            for _ in range(3):
+                skip_string()
+            read("<B")
+            read("<Q")
+            skip_string()
+            namespace_count = read("<i")
+            require(namespace_count >= 0, "Atlas ownership namespace count is invalid")
+            for _ in range(namespace_count):
+                skip_string()
+        size = read("<i")
+        require(size >= 0, "Atlas ownership value size is invalid")
+        offset += size
+        require(offset <= len(receipt), "Atlas ownership value is truncated")
+        if not excluded and kind in facts:
+            fact = (address, target) if kind == 3 else address
+            require(fact not in facts[kind], "Atlas ownership fact is duplicated")
+            facts[kind].add(fact)
+
+    require(offset == len(receipt), "Atlas ownership receipt has trailing bytes")
+    return facts
+
+
+def verify_work_counts(view, stats):
+    facts = owned_annotation_facts(view)
+    require(stats.symbols == len(facts[1]), "plugin symbol count differs from owned host facts")
+    require(stats.data_variables == len(facts[2]), "plugin data variable count differs from owned host facts")
+    require(stats.data_references == len(facts[3]), "plugin reference count differs from owned host facts")
+
+    user_symbols = {symbol.address for symbol in view.get_symbols() if not symbol.auto}
+    require({view.start + rva for rva in facts[1]} <= user_symbols,
+            "an owned symbol is absent from the host")
+    variables = view.data_vars
+    for rva in facts[2]:
+        variable = variables.get(view.start + rva)
+        require(variable is not None and not variable.auto_discovered and variable.type.width > 0,
+                f"owned data variable 0x{view.start + rva:X} is absent from the host")
+
+    references = {}
+    for source, target in facts[3]:
+        if source not in references:
+            references[source] = set(view.get_data_refs_from(view.start + source))
+        require(view.start + target in references[source],
+                f"owned data reference 0x{view.start + source:X} -> 0x{view.start + target:X} is absent")
+
+
 def preferred_image_base(binary):
     data = binary.read_bytes()
     pe_offset = struct.unpack_from("<I", data, 60)[0]
@@ -283,6 +375,7 @@ def check_property_workflow(plugin, binary, extraction, temporary_directory):
                 "plugin stats contain the wrong input hash")
         require(stats.method_tables == len(extraction["types"]["types"]),
                 "plugin stats contain the wrong MethodTable count")
+        verify_work_counts(view, stats)
 
         owners, accessors = verify_property_projection(
             view, extraction, image_base, view.start - image_base)
@@ -291,8 +384,9 @@ def check_property_workflow(plugin, binary, extraction, temporary_directory):
 
         # The first analysis can discover import symbols after Atlas has applied its annotations
         # A second application reconciles those stronger host symbols
-        plugin.apply(view)
+        repeat_stats = plugin.apply(view)
         view.update_analysis_and_wait()
+        verify_work_counts(view, repeat_stats)
 
         verify_property_projection(view, extraction, image_base, view.start - image_base)
         verify_property_accessor_symbols(view, extraction, view.start - image_base)
@@ -509,12 +603,13 @@ def check_dictionary_workflow(plugin, binary, extraction, view=None):
         view.set_analysis_hold(True)
 
         try:
-            plugin.apply(view)
+            stats = plugin.apply(view)
         finally:
             view.set_analysis_hold(False)
 
         view.update_analysis_and_wait()
         delta = view.start - image_base
+        verify_work_counts(view, stats)
 
         for instance, slot, recipe in verified_slots:
             kind = recipe["kind_name"]
@@ -565,8 +660,9 @@ def check_dictionary_workflow(plugin, binary, extraction, view=None):
         slot_types = {
             slot["address"] + delta: view.get_data_var_at(slot["address"] + delta).type
             for _, slot, _ in verified_slots}
-        plugin.apply(view)
+        repeat_stats = plugin.apply(view)
         view.update_analysis_and_wait()
+        verify_work_counts(view, repeat_stats)
         for address, expected_type in slot_types.items():
             variable = view.get_data_var_at(address)
             require(variable is not None and variable.type == expected_type,
@@ -580,8 +676,9 @@ def check_dictionary_workflow(plugin, binary, extraction, view=None):
         edited_cell = next(cell["address"] + delta for cell in cells
                            if cell["address"] in referenced_cells)
         view.define_user_data_var(edited_cell, user_type)
-        plugin.apply(view)
+        edited_stats = plugin.apply(view)
         view.update_analysis_and_wait()
+        verify_work_counts(view, edited_stats)
         require(view.get_data_var_at(user_address).type == user_type,
                 "repeat apply replaced the user dictionary type")
         require(view.get_data_var_at(edited_cell).type == user_type,

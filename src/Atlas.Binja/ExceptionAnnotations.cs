@@ -93,20 +93,18 @@ internal static unsafe class ExceptionAnnotations {
                     if (headers.Add(frame.Trailer)) {
                         int key = ((frame.Flags & 4) != 0 ? 1 : 0) | ((frame.Flags & 16) != 0 ? 2 : 0);
                         Utf8.TryWrite(text, $"nativeaot::unwind_header::{frame.Trailer:X8}\0", out _);
-                        symbols.DefineData(variables, stats.ImageBase + frame.Trailer, types[key], name, ref stats);
+                        symbols.DefineData(variables, stats.ImageBase + frame.Trailer, types[key], name);
 
                         if (frame.AssociatedData != 0) {
                             Core.BNAddUserDataReference(
                                 view, stats.ImageBase + frame.Trailer + 1,
                                 stats.ImageBase + frame.AssociatedData);
-                            ++stats.DataReferences;
                         }
 
                         if (eh != 0) {
                             Core.BNAddUserDataReference(
                                 view, stats.ImageBase + frame.Trailer + (frame.AssociatedData == 0 ? 1U : 5U),
                                 stats.ImageBase + eh);
-                            ++stats.DataReferences;
                         }
                     }
 
@@ -114,13 +112,12 @@ internal static unsafe class ExceptionAnnotations {
                         Utf8.TryWrite(text, $"nativeaot::associated_data::{frame.AssociatedData:X8}\0", out _);
                         symbols.DefineData(
                             variables, stats.ImageBase + frame.AssociatedData,
-                            types[4 + frame.AssociatedFlags], name, ref stats);
+                            types[4 + frame.AssociatedFlags], name);
 
                         if (frame.UnboxingTarget != 0) {
                             Core.BNAddUserDataReference(
                                 view, stats.ImageBase + frame.AssociatedData + 1,
                                 stats.ImageBase + frame.UnboxingTarget);
-                            ++stats.DataReferences;
                         }
                     }
 
@@ -130,7 +127,6 @@ internal static unsafe class ExceptionAnnotations {
 
                     if (entry.Function.Begin != root) {
                         Core.BNAddUserDataReference(view, stats.ImageBase + entry.Address, stats.ImageBase + root);
-                        ++stats.DataReferences;
                     }
 
                     if (eh != 0) {
@@ -143,13 +139,11 @@ internal static unsafe class ExceptionAnnotations {
                             Core.BNAddUserDataReference(
                                 view, stats.ImageBase + clause.HandlerCell,
                                 stats.ImageBase + root + clause.HandlerOffset);
-                            ++stats.DataReferences;
 
                             if (clause.Kind == ExceptionClauseKind.Filter) {
                                 Core.BNAddUserDataReference(
                                     view, stats.ImageBase + clause.FilterCell,
                                     stats.ImageBase + root + clause.FilterOffset);
-                                ++stats.DataReferences;
                             }
                         }
                     }
@@ -169,7 +163,7 @@ internal static unsafe class ExceptionAnnotations {
                     }
 
                     Utf8.TryWrite(text, $"nativeaot::eh_info::{blob.Address:X8}\0", out _);
-                    symbols.DefineData(variables, stats.ImageBase + blob.Address, type, name, ref stats);
+                    symbols.DefineData(variables, stats.ImageBase + blob.Address, type, name);
 
                     foreach (ref readonly var clause in managed.Clauses.AsSpan(blob.Clauses.Start, blob.Clauses.Count)) {
                         int length = ExceptionText.Clause(text, managed.RegionSource, clause);
@@ -179,7 +173,6 @@ internal static unsafe class ExceptionAnnotations {
                         if (clause.Kind == ExceptionClauseKind.Typed && !clause.TypeUnavailable) {
                             Core.BNAddUserDataReference(
                                 view, stats.ImageBase + clause.TypeCell, stats.ImageBase + clause.Type);
-                            ++stats.DataReferences;
                         }
                     }
                 }

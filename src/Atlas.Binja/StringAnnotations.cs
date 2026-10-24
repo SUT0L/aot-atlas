@@ -136,14 +136,10 @@ internal static unsafe class StringAnnotations {
                         definedEnd = end;
                     }
 
-                    if (referenced && !overlap)
-                        ++stats.DataVariables;
-
                     string encoding = item.Wide ? "utf16le" : "ascii";
                     if (referenced) {
                         Utf8.TryWrite(symbol, $"candidate::cstring::{encoding}::{item.Rva:X8}\0", out _);
                         symbols.Define(address, 3, name);
-                        ++stats.Symbols;
                     }
 
                     // Quote the original code units without replacing lone surrogates.
@@ -160,7 +156,6 @@ internal static unsafe class StringAnnotations {
             foreach (ref readonly var reference in references) {
                 Core.BNAddUserDataReference(view, stats.ImageBase + (reference.Instruction - image.ImageBase),
                     stats.ImageBase + (reference.Target - image.ImageBase));
-                ++stats.DataReferences;
             }
         } finally {
             foreach (nint type in arrays.Values)

@@ -236,7 +236,6 @@ internal static unsafe class MethodAnnotations {
 
                 fixed (byte* name = buffer)
                     symbols.Define(witness, 3, name);
-                ++stats.Symbols;
             }
 
             if (i < runtimeCount && targets[3] != 0) {
@@ -247,10 +246,8 @@ internal static unsafe class MethodAnnotations {
 
                 fixed (byte* name = buffer)
                     symbols.Define(dictionary, 3, name);
-                ++stats.Symbols;
 
                 Core.BNAddUserDataReference(view, dictionary, witness);
-                ++stats.DataReferences;
             }
 
             foreach (ulong target in targets) {
@@ -258,18 +255,15 @@ internal static unsafe class MethodAnnotations {
                     continue;
 
                 Core.BNAddUserDataReference(view, witness, stats.ImageBase + (target - originalBase));
-                ++stats.DataReferences;
             }
 
             foreach (ulong argument in arguments) {
                 Core.BNAddUserDataReference(view, witness, stats.ImageBase + (argument - originalBase));
-                ++stats.DataReferences;
             }
 
             if (code[(int)FunctionRole.Unboxed] != 0) {
                 Core.BNAddUserDataReference(
                     view, witness, stats.ImageBase + (code[(int)FunctionRole.Unboxed] - originalBase));
-                ++stats.DataReferences;
             }
 
             for (int role = 0; role < code.Length; ++role) {
@@ -473,7 +467,6 @@ internal static unsafe class MethodAnnotations {
                         }
 
                         symbols.Define(address, 0, output);
-                        ++stats.Symbols;
 
                         nuint oldCount = 0;
                         nint* tags = Core.BNGetUserFunctionTagsOfType(function, tagType, &oldCount);

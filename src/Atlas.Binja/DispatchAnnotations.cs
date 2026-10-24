@@ -96,7 +96,7 @@ internal static unsafe class DispatchAnnotations {
                     Utf8Formatter.TryFormat(rva, buffer.AsSpan(14), out _, new StandardFormat('X', 8));
                     buffer[22] = 0;
 
-                    symbols.DefineData(variables, stats.ImageBase + rva, type, name, ref stats);
+                    symbols.DefineData(variables, stats.ImageBase + rva, type, name);
                 }
 
                 foreach (ref readonly var slot in CollectionsMarshal.AsSpan(dispatch.SealedSlots)) {
@@ -108,12 +108,11 @@ internal static unsafe class DispatchAnnotations {
                     Utf8Formatter.TryFormat(rva, buffer.AsSpan(13), out _, new StandardFormat('X', 8));
                     buffer[21] = 0;
 
-                    symbols.DefineData(variables, stats.ImageBase + rva, i32, name, ref stats);
+                    symbols.DefineData(variables, stats.ImageBase + rva, i32, name);
 
                     if (slot.Target != 0) {
                         Core.BNAddUserDataReference(
                             view, stats.ImageBase + rva, stats.ImageBase + (slot.Target - originalBase));
-                        ++stats.DataReferences;
                     }
                 }
 
@@ -126,7 +125,6 @@ internal static unsafe class DispatchAnnotations {
 
                     Core.BNAddUserDataReference(view, stats.ImageBase + (types[i].Address - originalBase),
                         stats.ImageBase + (dispatch.Maps[dispatch.TypeMaps[i] - 1].Address - originalBase));
-                    ++stats.DataReferences;
                 }
 
                 foreach (ref readonly var target in CollectionsMarshal.AsSpan(dispatch.Targets)) {
@@ -145,13 +143,11 @@ internal static unsafe class DispatchAnnotations {
                         view, witness, stats.ImageBase + (types[target.InterfaceType].Address - originalBase));
                     Core.BNAddUserDataReference(view, witness + 4, stats.ImageBase + (cell - originalBase));
                     Core.BNAddUserDataReference(view, witness + 4, stats.ImageBase + (target.Target - originalBase));
-                    stats.DataReferences += 4;
 
                     if (target.GenericContext != 0) {
                         Core.BNAddUserDataReference(
                             view, witness + (entry.Kind is DispatchKind.Static or DispatchKind.StaticDefault ? 6UL : 4UL),
                             stats.ImageBase + (target.GenericContext - originalBase));
-                        ++stats.DataReferences;
                     }
                 }
 
@@ -170,24 +166,19 @@ internal static unsafe class DispatchAnnotations {
 
                     ulong address = stats.ImageBase + rva;
                     symbols.Define(address, 3, name);
-                    ++stats.Symbols;
 
                     Core.BNAddUserDataReference(view, address, stats.ImageBase + (entry.DeclaringType - originalBase));
-                    ++stats.DataReferences;
 
                     if (slot.DeclaringType != entry.DeclaringType) {
                         Core.BNAddUserDataReference(view, address, stats.ImageBase + (slot.DeclaringType - originalBase));
-                        ++stats.DataReferences;
                     }
 
                     if (slot.TargetCell != 0) {
                         Core.BNAddUserDataReference(view, address, stats.ImageBase + (slot.TargetCell - originalBase));
-                        ++stats.DataReferences;
                     }
 
                     if (slot.Target != 0) {
                         Core.BNAddUserDataReference(view, address, stats.ImageBase + (slot.Target - originalBase));
-                        ++stats.DataReferences;
                     }
                 }
             }

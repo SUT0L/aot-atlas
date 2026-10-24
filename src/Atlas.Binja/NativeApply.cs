@@ -456,9 +456,8 @@ internal static unsafe class NativeApply {
             InstanceTypes.Apply(view, extraction, headerType, pointer, runtimeTypes, staticFields, task);
 
             if (prepared.Properties is { } properties) {
-                var propertyStats = PropertyTypes.Apply(
+                PropertyTypes.Apply(
                     ownership, view, extraction, properties, runtimeTypes, pointer, propertyTypes, task);
-                stats.DataReferences += (uint)propertyStats.References;
             }
 
             nint[] displayTypes = new nint[runtimeTypes.Length];
@@ -501,13 +500,10 @@ internal static unsafe class NativeApply {
                         ulong address = stats.ImageBase + (entry.Address - image.ImageBase);
                         symbols.Define(address, 3, symbolName);
                         variables.Define(address, headerType);
-                        ++stats.Symbols;
-                        ++stats.DataVariables;
 
                         if (entry.RelatedType != 0) {
                             Core.BNAddUserDataReference(
                                 view, address + 8, stats.ImageBase + (entry.RelatedType - image.ImageBase));
-                            ++stats.DataReferences;
                         }
 
                         for (int kind = 0; kind < 2; ++kind) {
@@ -527,8 +523,6 @@ internal static unsafe class NativeApply {
 
                             symbols.Define(arrayAddress, 3, arrayName);
                             variables.Define(arrayAddress, arrayTypes[2 * slots.Count + kind]);
-                            ++stats.Symbols;
-                            ++stats.DataVariables;
 
                             for (int slot = 0; slot < slots.Count; ++slot) {
                                 ulong target = pointers[slots.Start + slot];
@@ -538,7 +532,6 @@ internal static unsafe class NativeApply {
                                 Core.BNAddUserDataReference(
                                     view, arrayAddress + (uint)slot * 8UL,
                                     stats.ImageBase + (target - image.ImageBase));
-                                ++stats.DataReferences;
                             }
                         }
                     }
@@ -598,7 +591,6 @@ internal static unsafe class NativeApply {
                         Core.BNAddUserDataReference(
                             view, stats.ImageBase + (reference.Instruction - image.ImageBase),
                             stats.ImageBase + (reference.Target - image.ImageBase));
-                        ++stats.DataReferences;
                     }
 
                     fieldRecords = FieldAnnotations.Store(view, image, code, cancellationToken);
@@ -641,7 +633,10 @@ internal static unsafe class NativeApply {
         }
 
         cancellationToken.ThrowIfCancellationRequested();
-        reconciliation.Complete();
+        var owned = reconciliation.Complete();
+        stats.Symbols = owned.Symbols;
+        stats.DataVariables = owned.Variables;
+        stats.DataReferences = owned.References;
         stats.ApplySeconds = Stopwatch.GetElapsedTime(applyStart).TotalSeconds;
         artifacts = new(stats, format, fieldRecords);
 

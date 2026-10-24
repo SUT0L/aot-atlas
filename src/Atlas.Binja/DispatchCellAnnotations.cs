@@ -95,12 +95,11 @@ internal static unsafe class DispatchCellAnnotations {
                         + extraction.Types.Types[cell.InterfaceType].Address - original;
                     ulong terminator = stats.ImageBase + cell.Terminator - original + 8;
 
-                    symbols.DefineData(variables, address, cellType, name, ref stats);
+                    symbols.DefineData(variables, address, cellType, name);
 
                     Core.BNAddUserDataReference(view, address, stats.ImageBase + cell.Stub - original);
                     Core.BNAddUserDataReference(view, address + 8, contract);
                     Core.BNAddUserDataReference(view, address + 8, terminator);
-                    stats.DataReferences += 3;
 
                     if (terminators.Add(terminator)) {
                         "dispatch_slot::".CopyTo(text.AsSpan());
@@ -109,7 +108,7 @@ internal static unsafe class DispatchCellAnnotations {
                         bytes = Encoding.UTF8.GetBytes(text.AsSpan(0, 15 + digits), buffer);
                         buffer[bytes] = 0;
 
-                        symbols.DefineData(variables, terminator, u16, name, ref stats);
+                        symbols.DefineData(variables, terminator, u16, name);
                     }
 
                     for (int i = cell.Uses.Start; i < cell.Uses.End; ++i) {
@@ -117,13 +116,11 @@ internal static unsafe class DispatchCellAnnotations {
                         Core.BNAddUserDataReference(view, stats.ImageBase + use.Definition - original, address);
                         Core.BNAddUserDataReference(view, stats.ImageBase + use.Instruction - original, address);
                         Core.BNAddUserDataReference(view, stats.ImageBase + use.Instruction - original, contract);
-                        stats.DataReferences += 3;
                     }
 
                     for (int i = cell.DictionarySlots.Start; i < cell.DictionarySlots.End; ++i) {
                         ulong slot = extraction.Dictionaries.Slots[cells.DictionarySlots[i]].Address;
                         Core.BNAddUserDataReference(view, address, stats.ImageBase + slot - original);
-                        ++stats.DataReferences;
                     }
                 }
             }
@@ -198,15 +195,13 @@ internal static unsafe class DispatchCellAnnotations {
         ulong originalAddress, ulong receiver, ulong code, nint cellType, byte[] text, ref ApplyStats stats) {
         ulong address = stats.ImageBase + originalAddress - extraction.Image.ImageBase;
         fixed (byte* name = text)
-            symbols.DefineData(variables, address, cellType, name, ref stats);
+            symbols.DefineData(variables, address, cellType, name);
 
         if (receiver != 0 && extraction.Image.FindSection(receiver) >= 0) {
             Core.BNAddUserDataReference(view, address, stats.ImageBase + receiver - extraction.Image.ImageBase);
-            ++stats.DataReferences;
         }
         if (code != 0 && extraction.Image.FindSection(code) >= 0) {
             Core.BNAddUserDataReference(view, address + 8, stats.ImageBase + code - extraction.Image.ImageBase);
-            ++stats.DataReferences;
         }
     }
 

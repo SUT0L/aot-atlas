@@ -349,11 +349,9 @@ internal static unsafe class Staticantations {
         fixed (byte* name = fullName.IsEmpty ? text : fullName) {
             symbols.Define(rebased, 3, name);
         }
-        ++stats.Symbols;
 
         if (type != 0) {
             variables.Define(rebased, type);
-            ++stats.DataVariables;
         }
     }
 
@@ -366,7 +364,6 @@ internal static unsafe class Staticantations {
         if (target != 0) {
             Core.BNAddUserDataReference(
                 view, stats.ImageBase + (source - originalBase), stats.ImageBase + (target - originalBase));
-            ++stats.DataReferences;
         }
     }
 

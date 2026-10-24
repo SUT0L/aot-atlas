@@ -66,7 +66,7 @@ internal static unsafe class DictionaryAnnotations {
                     ulong address = stats.ImageBase + (slot.Address - originalBase);
                     fixed (byte* name = symbol)
                         symbols.DefineData(variables, address,
-                            recipe.Kind == DictionaryFixup.TypeHandle ? headerPointer : pointer, name, ref stats);
+                            recipe.Kind == DictionaryFixup.TypeHandle ? headerPointer : pointer, name);
                 }
             }
 
@@ -97,13 +97,11 @@ internal static unsafe class DictionaryAnnotations {
                         Core.BNAddUserDataReference(view, address,
                             stats.ImageBase
                                 + (extraction.Header.Find(nested.Section).Start + (uint)nested.Vertex - originalBase));
-                        ++stats.DataReferences;
                     } else if (recipe.Kind == DictionaryFixup.GvmDispatchCell) {
                         var contract = extraction.DispatchCellMetadata.Entries[slot.GvmCellMetadata - 1];
                         identity = string.Concat(extraction.Names.Values[slot.Type - 1], "::", contract.Method.Name);
                         Core.BNAddUserDataReference(view, address,
                             stats.ImageBase + extraction.Header.Find(contract.Section).Start + (uint)contract.Vertex - originalBase);
-                        ++stats.DataReferences;
                     } else {
                         identity = extraction.Names.Values[slot.Type - 1];
                     }
@@ -131,12 +129,10 @@ internal static unsafe class DictionaryAnnotations {
                     Core.BNAddUserDataReference(
                         view, address, stats.ImageBase + (nativeLayout + (uint)recipe.Offset - originalBase));
                     Core.BNAddUserDataReference(view, address, witness);
-                    stats.DataReferences += 3;
 
                     if (recipe.Kind is DictionaryFixup.InterfaceCall or DictionaryFixup.StaticData) {
                         Core.BNAddUserDataReference(view, address,
                             stats.ImageBase + (extraction.Types.Types[slot.Type - 1].Address - originalBase));
-                        ++stats.DataReferences;
                     }
                 }
             }

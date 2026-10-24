@@ -5,13 +5,11 @@ using System.Text;
 
 namespace Atlas.Binja;
 
-internal readonly record struct PropertyApplyStats(int Types, int Tags, int References);
-
 internal static unsafe class PropertyTypes {
 
     // Each nonzero output owns a new reference
     // The caller keeps runtime types alive alongside these views and frees both after their consumers finish
-    internal static PropertyApplyStats Apply(
+    internal static void Apply(
         TagOwnership ownership,
         nint view,
         Extraction extraction,
@@ -22,7 +20,7 @@ internal static unsafe class PropertyTypes {
         nint task) {
         var projections = CollectionsMarshal.AsSpan(properties.Projections);
         if (projections.IsEmpty) {
-            return default;
+            return;
         }
 
         var ranges = new IndexRange[runtimeTypes.Length];
@@ -31,7 +29,6 @@ internal static unsafe class PropertyTypes {
         int maximumName = 0;
 
         int typeCount = 0;
-        int referenceCount = 0;
 
         for (int start = 0; start < projections.Length;) {
             int end = start + 1;
@@ -253,7 +250,6 @@ internal static unsafe class PropertyTypes {
                         ulong translated = imageBase + target - extraction.Image.ImageBase;
                         text.Append(accessor == 0 ? " getter=0x" : " setter=0x").Append(translated.ToString("X"));
                         Core.BNAddUserDataReference(view, address, translated);
-                        ++referenceCount;
                     }
 
                     text.Append('\n');
@@ -290,6 +286,5 @@ internal static unsafe class PropertyTypes {
             Core.BNFreeTagType(tagType);
         }
 
-        return new PropertyApplyStats(typeCount, typeCount, referenceCount);
     }
 }

@@ -67,7 +67,6 @@ internal static unsafe class AnalysisAnnotations {
                     throw new OperationCanceledException();
 
                 Core.BNAddUserDataReference(view, reference.From, reference.To);
-                ++stats.DataReferences;
             }
         } finally {
             foreach (nint tagType in tagTypes) {

@@ -65,7 +65,6 @@ internal static unsafe class ContextAnnotations {
                     utf8[bytes] = 0;
 
                     symbols.Define(address, 0, name);
-                    ++stats.Symbols;
 
                     var origin = context.Origins.Values[item.Origin - 1];
                     ulong parent = stats.ImageBase + (context.Functions[item.Parent].Address - image.ImageBase);

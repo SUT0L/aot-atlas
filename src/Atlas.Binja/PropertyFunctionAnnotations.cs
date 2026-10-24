@@ -189,7 +189,6 @@ internal static unsafe class PropertyFunctionAnnotations {
                             symbols.Define(address, 0, name);
                         }
 
-                        ++stats.Symbols;
                     } finally {
                         Core.BNFreeType(type);
                         Core.BNFreeFunction(function);

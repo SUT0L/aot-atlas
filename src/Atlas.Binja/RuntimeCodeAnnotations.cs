@@ -53,7 +53,6 @@ internal static unsafe class RuntimeCodeAnnotations {
                     }
 
                     symbols.Define(address, 0, name);
-                    ++stats.Symbols;
 
                     // Vtable and dispatch stages already link their pointer cells
                     // Finalizers and initializer lists need the same navigation
@@ -62,7 +61,6 @@ internal static unsafe class RuntimeCodeAnnotations {
                             continue;
 
                         Core.BNAddUserDataReference(view, stats.ImageBase + (role.Witness - baseAddress), address);
-                        ++stats.DataReferences;
                     }
                 }
             }

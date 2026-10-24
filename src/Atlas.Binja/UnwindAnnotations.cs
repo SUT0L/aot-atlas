@@ -80,7 +80,7 @@ internal static unsafe class UnwindAnnotations {
 
                 "pe::runtime_functions\0"u8.CopyTo(text);
                 symbols.DefineData(
-                    variables, stats.ImageBase + extraction.Image.ExceptionRva, array, name, ref stats);
+                    variables, stats.ImageBase + extraction.Image.ExceptionRva, array, name);
 
                 Core.BNFreeType(array);
 
@@ -109,7 +109,7 @@ internal static unsafe class UnwindAnnotations {
                     }
 
                     Utf8.TryWrite(text, $"pe::unwind_info::{info.Address:X8}\0", out _);
-                    symbols.DefineData(variables, stats.ImageBase + info.Address, types[key], name, ref stats);
+                    symbols.DefineData(variables, stats.ImageBase + info.Address, types[key], name);
 
                     if (info.ChainedEntry != 0)
                         embedded[info.ChainedEntry - 1] = true;
@@ -119,7 +119,6 @@ internal static unsafe class UnwindAnnotations {
                             view,
                             stats.ImageBase + info.Address + (uint)info.TailOffset,
                             stats.ImageBase + info.Handler);
-                        ++stats.DataReferences;
                         functions.Add(info.Handler);
                     }
                 }
@@ -134,16 +133,14 @@ internal static unsafe class UnwindAnnotations {
 
                     if (i >= unwind.DirectoryCount && !embedded[i]) {
                         Utf8.TryWrite(text, $"pe::runtime_function::{entry.Address:X8}\0", out _);
-                        symbols.DefineData(variables, address, entryType, name, ref stats);
+                        symbols.DefineData(variables, address, entryType, name);
                     }
 
                     Core.BNAddUserDataReference(view, address, stats.ImageBase + entry.Function.Begin);
                     Core.BNAddUserDataReference(view, address + 8, stats.ImageBase + (entry.Function.Unwind & ~1U));
-                    stats.DataReferences += 2;
 
                     if (entry.Parent != 0 && root.Function.Begin != entry.Function.Begin) {
                         Core.BNAddUserDataReference(view, address, stats.ImageBase + root.Function.Begin);
-                        ++stats.DataReferences;
                     }
 
                     Utf8.TryWrite(

@@ -5,6 +5,8 @@ using System.Text;
 namespace Atlas.Binja;
 
 internal sealed unsafe class AnnotationReconciliation : IDisposable {
+    internal readonly record struct OwnedCounts(uint Symbols, uint Variables, uint References);
+
     private enum SnapshotTypeKind : byte {
         Structure = 4,
         Pointer = 6,
@@ -413,7 +415,7 @@ internal sealed unsafe class AnnotationReconciliation : IDisposable {
         return index;
     }
 
-    private void Save() {
+    private OwnedCounts Save() {
         nint library;
         fixed (byte* name = "Atlas annotation provenance\0"u8)
             library = Core.BNNewTypeLibrary(Core.BNGetPlatformArchitecture(platform), name);
@@ -422,11 +424,28 @@ internal sealed unsafe class AnnotationReconciliation : IDisposable {
 
         using var records = new MemoryStream();
         using var writer = new BinaryWriter(records, Encoding.UTF8, leaveOpen: true);
+        uint symbols = 0;
+        uint variables = 0;
+        uint references = 0;
         try {
             var typeIndexes = new Dictionary<nint, int>();
             writer.Write(facts.Count);
             foreach (var fact in facts.Values) {
                 cancellationToken.ThrowIfCancellationRequested();
+
+                if (!fact.Excluded) {
+                    switch (fact.Key.Kind) {
+                        case Kind.Symbol:
+                            ++symbols;
+                            break;
+                        case Kind.Variable:
+                            ++variables;
+                            break;
+                        case Kind.Reference:
+                            ++references;
+                            break;
+                    }
+                }
 
                 writer.Write((byte)fact.Key.Kind);
                 writer.Write(fact.Key.Address);
@@ -509,6 +528,7 @@ internal sealed unsafe class AnnotationReconciliation : IDisposable {
             Core.BNFreeTypeLibrary(library);
             File.Delete(temporary);
         }
+        return new OwnedCounts(symbols, variables, references);
     }
 
     private void PreserveForwardDeclarations(nint library) {
@@ -1491,7 +1511,7 @@ internal sealed unsafe class AnnotationReconciliation : IDisposable {
         }
     }
 
-    internal void Complete() {
+    internal OwnedCounts Complete() {
         // References and ABI must disappear before types; generated tags and
         // symbols must disappear before deciding whether a function has user work.
         Kind[] order = fieldsOnly
@@ -1523,9 +1543,10 @@ internal sealed unsafe class AnnotationReconciliation : IDisposable {
             }
         }
         cancellationToken.ThrowIfCancellationRequested();
-        Save();
+        OwnedCounts owned = Save();
         complete = true;
         CleanRetiredTags();
+        return owned;
     }
 
     private void CleanRetiredTags() {

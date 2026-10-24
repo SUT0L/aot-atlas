@@ -149,17 +149,14 @@ internal static unsafe class FrozenAnnotations {
                     }
 
                     variables.Define(address, nativeType);
-                    ++stats.DataVariables;
 
                     Core.BNAddUserDataReference(
                         view, address, stats.ImageBase + (table.Address - extraction.Image.ImageBase));
-                    ++stats.DataReferences;
 
                     for (int i = entry.References.Start; i < entry.References.End; ++i) {
                         ref readonly var reference = ref references[i];
                         Core.BNAddUserDataReference(
                             view, address + reference.Offset, region + (uint)objects[reference.Target].Offset);
-                        ++stats.DataReferences;
                     }
 
                     ReadOnlySpan<byte> kind = entry.Kind switch {
@@ -213,7 +210,6 @@ internal static unsafe class FrozenAnnotations {
                         symbols.Define(address, 3, symbolName);
                     }
 
-                    ++stats.Symbols;
 
                     "rtr::206::"u8.CopyTo(tagText);
                     symbolText.AsSpan(8, descriptorEnd - 8).CopyTo(tagText.AsSpan(10));

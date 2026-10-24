@@ -90,14 +90,13 @@ internal static unsafe class PInvokeAnnotations {
                     Utf8.TryWrite(text.AsSpan(prefix.Length + module.Name.Count), $"::{rva:X8}\0", out _);
                     ulong address = stats.ImageBase + rva;
 
-                    symbols.DefineData(variables, address, types[0], name, ref stats);
+                    symbols.DefineData(variables, address, types[0], name);
 
                     Core.BNAddUserDataReference(
                         view, address + 8, stats.ImageBase + (module.NameAddress - extraction.Image.ImageBase));
                     Core.BNAddUserDataReference(
                         view, address + 16,
                         stats.ImageBase + (module.CallingAssemblyType - extraction.Image.ImageBase));
-                    stats.DataReferences += 2;
                 }
 
                 processed = 0;
@@ -128,16 +127,14 @@ internal static unsafe class PInvokeAnnotations {
                     Utf8.TryWrite(text.AsSpan(position), $"::{rva:X8}\0", out _);
                     ulong address = stats.ImageBase + rva;
 
-                    symbols.DefineData(variables, address, types[method.ByOrdinal ? 2 : 1], name, ref stats);
+                    symbols.DefineData(variables, address, types[method.ByOrdinal ? 2 : 1], name);
 
                     Core.BNAddUserDataReference(
                         view, address + 16, stats.ImageBase + (module.Address - extraction.Image.ImageBase));
-                    ++stats.DataReferences;
 
                     if (!method.ByOrdinal) {
                         Core.BNAddUserDataReference(
                             view, address + 8, stats.ImageBase + (method.EntryPoint - extraction.Image.ImageBase));
-                        ++stats.DataReferences;
                     }
                 }
             }
