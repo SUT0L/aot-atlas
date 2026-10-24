@@ -32,10 +32,11 @@ internal static class ExtractCommand {
         maps = extraction.Maps;
         var analysis = extraction.UnwindAnalysis;
         var gcInfo = products.GcInfo;
-        var fatPointers = products.FunctionPointers!;
-        var delegates = products.DelegateConsumers!.Value;
+        var fatPointers = products.RequireFunctionPointers();
+        var delegates = products.RequireDelegateConsumers();
         var contextResult = analysis.Managed is null ? null : new GenericContextResult(
-            image, analysis.Managed, gcInfo!, products.GenericContexts!, products.DictionaryConsumers!,
+            image, analysis.Managed, products.RequireGcInfo(), products.RequireGenericContexts(),
+            products.RequireDictionaryConsumers(),
             delegates.Status, delegates.Error);
 
         json.WritePropertyName("metadata");
@@ -103,31 +104,31 @@ internal static class ExtractCommand {
             ExceptionsOutput.Write(json, inputSha256, image, extraction.Unwind, analysis.Managed);
 
             json.WritePropertyName("gcinfo");
-            GcInfoOutput.Write(json, inputSha256, image, analysis.Managed, gcInfo!, cancellationToken);
+            GcInfoOutput.Write(json, inputSha256, image, analysis.Managed, products.RequireGcInfo(), cancellationToken);
 
             json.WritePropertyName("generic_context");
             GenericContextOutput.Write(json, inputSha256, image, contextResult!);
 
-            var abi = products.Abi!;
-            var code = products.Code!;
+            var abi = products.RequireAbi();
+            var code = products.RequireCode();
 
             json.WritePropertyName("code");
             CodeOutput.Write(json, inputSha256, extraction, code,
                 products.CodeMeasurement.Seconds, products.CodeMeasurement.AllocatedBytes);
 
             json.WritePropertyName("dispatch_cells");
-            DispatchCellsOutput.Write(json, inputSha256, extraction, products.DispatchCells!,
+            DispatchCellsOutput.Write(json, inputSha256, extraction, products.RequireDispatchCells(),
                 products.DispatchCellMeasurement.Seconds);
 
             json.WritePropertyName("runtime_helpers");
             RuntimeHelpersOutput.Write(json, inputSha256,
-                products.Helpers!);
+                products.RequireHelpers());
 
             json.WritePropertyName("methods");
             MethodsOutput.Write(json, inputSha256, extraction, abi, products.AbiMeasurement.Seconds, cancellationToken);
 
             json.WritePropertyName("properties");
-            PropertyOutput.Write(json, inputSha256, extraction, products.Properties!);
+            PropertyOutput.Write(json, inputSha256, extraction, products.RequireProperties());
         } else {
             json.WritePropertyName("templates");
             TemplatesOutput.Write(json, inputSha256, extraction, cancellationToken);
@@ -143,7 +144,7 @@ internal static class ExtractCommand {
             delegates.Status, delegates.Error);
 
         json.WritePropertyName("strings");
-        StringsOutput.Write(json, inputSha256, image, products.Strings!,
+        StringsOutput.Write(json, inputSha256, image, products.RequireStrings(),
             products.StringMeasurement.Seconds, products.StringMeasurement.AllocatedBytes, cancellationToken);
 
         json.WritePropertyName("sections");

@@ -10,8 +10,8 @@ internal sealed class PreparedAnalysis {
     internal RuntimeHelpers? Helpers => Products.Helpers;
     internal MethodGcMap? GcInfo => Products.GcInfo;
     internal GenericContextReferences? GenericContexts => Products.GenericContexts;
-    internal FatFunctionPointers FunctionPointers => Products.FunctionPointers!;
-    internal NativeStrings Strings => Products.Strings!;
+    internal FatFunctionPointers FunctionPointers => Products.RequireFunctionPointers();
+    internal NativeStrings Strings => Products.RequireStrings();
     internal ReadOnlySpan<CodeEdge> StringReferences => Products.StringReferences;
 
     internal static PreparedAnalysis Read(PeImage image, MapFormat mapFormat = MapFormat.Auto,

@@ -54,6 +54,18 @@ internal static class AnalysisProductChecks {
             Check(selected.Abi is not null && selected.Code is not null && selected.Members is null
                 && selected.Properties is null && selected.DispatchCells is null && selected.GcInfo is null
                 && selected.FunctionPointers is null && selected.GenericContexts is null && selected.Strings is null);
+            Check(ReferenceEquals(selected.RequireCode(), selected.Code));
+            RejectProduct(selected.RequireStrings, "not requested");
+
+            byte[] withoutUnwind = (byte[])image.FileData.Clone();
+            int unwindEntry = image.FileRange(image.ImageBase + image.ExceptionRva).Start;
+            uint unwindRva = BinaryPrimitives.ReadUInt32LittleEndian(withoutUnwind.AsSpan(unwindEntry + 8));
+            int unwindHeader = image.FileRange(image.ImageBase + unwindRva).Start;
+            withoutUnwind[unwindHeader] = (byte)((withoutUnwind[unwindHeader] & ~7) | 7);
+            var unavailable = AnalysisProducts.Read(new PeImage(withoutUnwind),
+                requested: AnalysisProduct.Code);
+            Check(unavailable.Code is null);
+            RejectProduct(unavailable.RequireCode, "managed unwind is unavailable");
 
             var contexts = AnalysisProducts.Read(image,
                 requested: AnalysisProduct.GenericContexts);
@@ -135,5 +147,15 @@ internal static class AnalysisProductChecks {
         }
 
         throw new Exception($"Expected {typeof(T).Name}.");
+    }
+
+    private static void RejectProduct<T>(Func<T> read, string reason) {
+        try {
+            read();
+        } catch (InvalidOperationException error) when (error.Message.Contains(reason, StringComparison.Ordinal)) {
+            return;
+        }
+
+        throw new Exception($"Expected product failure containing '{reason}'.");
     }
 }

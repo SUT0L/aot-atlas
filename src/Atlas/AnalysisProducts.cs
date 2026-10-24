@@ -33,6 +33,7 @@ public sealed class AnalysisProducts {
         | ExtractionStage.MethodTracing | ExtractionStage.Dispatch | ExtractionStage.Linkage;
 
     public Extraction Extraction { get; }
+    public AnalysisProduct Requested { get; }
     public MetadataMembers? Members { get; }
     public ManagedAbi? Abi { get; }
     public PropertyProjections? Properties { get; }
@@ -48,6 +49,45 @@ public sealed class AnalysisProducts {
     private readonly List<CodeEdge>? stringReferences;
     public ReadOnlySpan<CodeEdge> StringReferences => stringReferences is null
         ? [] : CollectionsMarshal.AsSpan(stringReferences);
+
+    public MetadataMembers RequireMembers() => Require(AnalysisProduct.MetadataMembers, Members);
+    public ManagedAbi RequireAbi() => Require(AnalysisProduct.Abi, Abi);
+    public PropertyProjections RequireProperties() => Require(AnalysisProduct.Properties, Properties);
+    public CodeFlow RequireCode() => Require(AnalysisProduct.Code, Code);
+    public DispatchCells RequireDispatchCells() => Require(AnalysisProduct.DispatchCells, DispatchCells);
+    public RuntimeHelpers RequireHelpers() => Require(AnalysisProduct.Helpers, Helpers);
+    public MethodGcMap RequireGcInfo() => Require(AnalysisProduct.GcInfo, GcInfo);
+    public GenericContextReferences RequireGenericContexts() => Require(AnalysisProduct.GenericContexts, GenericContexts);
+    public DictionarySlotConsumers RequireDictionaryConsumers() => Require(
+        AnalysisProduct.GenericContexts | AnalysisProduct.FunctionPointers, DictionaryConsumers);
+    public FatFunctionPointers RequireFunctionPointers() => Require(AnalysisProduct.FunctionPointers, FunctionPointers);
+    public NativeStrings RequireStrings() => Require(AnalysisProduct.Strings, Strings);
+
+    public DelegateConsumerResult RequireDelegateConsumers() {
+        if (DelegateConsumers is { } result)
+            return result;
+
+        if ((Requested & (AnalysisProduct.FunctionPointers | AnalysisProduct.GenericContexts)) == 0)
+            throw new InvalidOperationException("Delegate consumers were not requested.");
+
+        throw new InvalidOperationException("Requested delegate consumers were not produced.");
+    }
+
+    private T Require<T>(AnalysisProduct product, T? value) where T : class {
+        if (value is not null)
+            return value;
+
+        if ((Requested & product) == 0)
+            throw new InvalidOperationException($"{product} was not requested.");
+
+        const AnalysisProduct managedProducts = AnalysisProduct.Abi | AnalysisProduct.Properties
+            | AnalysisProduct.Code | AnalysisProduct.DispatchCells | AnalysisProduct.GcInfo
+            | AnalysisProduct.GenericContexts;
+        if ((product & managedProducts) != 0 && Extraction.UnwindAnalysis.Managed is null)
+            throw new InvalidOperationException($"{product} is unavailable because managed unwind is unavailable.");
+
+        throw new InvalidOperationException($"Requested {product} was not produced.");
+    }
 
     public AnalysisMeasurement ExtractionMeasurement { get; }
     public AnalysisMeasurement TotalMeasurement { get; }
@@ -92,6 +132,7 @@ public sealed class AnalysisProducts {
         long operationStart = Stopwatch.GetTimestamp();
         cancellationToken.ThrowIfCancellationRequested();
         requested = RequiredProducts(requested);
+        Requested = requested;
         var requiredStages = RequiredExtractionStages(requested);
 
         if ((ExtractionPlan.Required(stages) & requiredStages) != requiredStages)
@@ -161,7 +202,7 @@ public sealed class AnalysisProducts {
                 cancellationToken.ThrowIfCancellationRequested();
                 allocated = GC.GetAllocatedBytesForCurrentThread();
                 start = Stopwatch.GetTimestamp();
-                Properties = new PropertyProjections(extraction, Abi!, cancellationToken);
+                Properties = new PropertyProjections(extraction, RequireAbi(), cancellationToken);
                 PropertyMeasurement = AnalysisMeasurement.Since(start, allocated);
             }
 
@@ -169,7 +210,7 @@ public sealed class AnalysisProducts {
                 cancellationToken.ThrowIfCancellationRequested();
                 allocated = GC.GetAllocatedBytesForCurrentThread();
                 start = Stopwatch.GetTimestamp();
-                Code = new CodeFlow(extraction, Abi!, cancellationToken);
+                Code = new CodeFlow(extraction, RequireAbi(), cancellationToken);
                 CodeMeasurement = AnalysisMeasurement.Since(start, allocated);
             }
 
@@ -177,7 +218,7 @@ public sealed class AnalysisProducts {
                 cancellationToken.ThrowIfCancellationRequested();
                 allocated = GC.GetAllocatedBytesForCurrentThread();
                 start = Stopwatch.GetTimestamp();
-                DispatchCells = new DispatchCells(extraction, Code!, cancellationToken);
+                DispatchCells = new DispatchCells(extraction, RequireCode(), cancellationToken);
                 DispatchCellMeasurement = AnalysisMeasurement.Since(start, allocated);
             }
         }
@@ -212,7 +253,7 @@ public sealed class AnalysisProducts {
             start = Stopwatch.GetTimestamp();
             FunctionPointers = new FatFunctionPointers(
                 image, header, extraction.Memory, analysis.Unwind, GcInfo,
-                DelegateConsumers!.Value.Consumers, cancellationToken);
+                RequireDelegateConsumers().Consumers, cancellationToken);
             DictionaryConsumers = FunctionPointers.DictionaryConsumers;
             var pointerMeasurement = AnalysisMeasurement.Since(start, allocated);
             FunctionPointerMeasurement = new(
@@ -228,7 +269,7 @@ public sealed class AnalysisProducts {
                 start = Stopwatch.GetTimestamp();
                 DictionaryConsumers = new DictionarySlotConsumers(
                     image, extraction.Memory, analysis.RequireUnwind(), GcInfo,
-                    DelegateConsumers!.Value.Consumers, cancellationToken);
+                    RequireDelegateConsumers().Consumers, cancellationToken);
                 var contextMeasurement = AnalysisMeasurement.Since(start, allocated);
                 GenericContextMeasurement = (requested & AnalysisProduct.FunctionPointers) != 0
                     ? contextMeasurement
@@ -253,7 +294,7 @@ public sealed class AnalysisProducts {
             allocated = GC.GetAllocatedBytesForCurrentThread();
             start = Stopwatch.GetTimestamp();
             stringReferences = new List<CodeEdge>();
-            Strings!.AppendReferences(image.ImageBase, Code.AddressEdges, stringReferences, cancellationToken);
+            RequireStrings().AppendReferences(image.ImageBase, Code.AddressEdges, stringReferences, cancellationToken);
             StringReferenceMeasurement = AnalysisMeasurement.Since(start, allocated);
         }
 

@@ -56,7 +56,7 @@ internal static class SearchOutput {
 
         var abi = products.Abi;
         var code = products.Code;
-        var strings = products.Strings!;
+        var strings = products.RequireStrings();
         var frozen = extraction.Frozen;
 
         JsonOutput.StartDocument(json, "search");
