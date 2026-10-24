@@ -29,6 +29,9 @@ public readonly record struct AnalysisMeasurement(double Seconds, long Allocated
 }
 
 public sealed class AnalysisProducts {
+    private const ExtractionStage CodeStages = ExtractionStage.MemberLayouts
+        | ExtractionStage.MethodTracing | ExtractionStage.Dispatch | ExtractionStage.Linkage;
+
     public Extraction Extraction { get; }
     public MetadataMembers? Members { get; }
     public ManagedAbi? Abi { get; }
@@ -70,7 +73,8 @@ public sealed class AnalysisProducts {
             throw new ArgumentException("The extraction stages do not provide the requested analysis products.", nameof(stages));
 
         var input = Extraction.ReadInputs(image, mapFormat, cancellationToken);
-        return new(image, input.Header, input.Metadata, input.Maps, input.Fixups, requested, selected, cancellationToken);
+        return new(image, input.Header, input.Metadata, input.Maps, input.Fixups, requested, selected,
+            cancellationToken, allowStageExpansion: stages is null);
     }
 
     internal AnalysisProducts(
@@ -81,7 +85,8 @@ public sealed class AnalysisProducts {
         ulong[] fixups,
         AnalysisProduct requested = AnalysisProduct.All,
         ExtractionStage stages = ExtractionStage.All,
-        CancellationToken cancellationToken = default) {
+        CancellationToken cancellationToken = default,
+        bool allowStageExpansion = false) {
         long operationAllocated = GC.GetAllocatedBytesForCurrentThread();
         long operationStart = Stopwatch.GetTimestamp();
         cancellationToken.ThrowIfCancellationRequested();
@@ -91,12 +96,39 @@ public sealed class AnalysisProducts {
         if ((ExtractionPlan.Required(stages) & requiredStages) != requiredStages)
             throw new ArgumentException("The extraction stages do not provide the requested analysis products.", nameof(stages));
 
+        RuntimeHelpers? startupHelpers = null;
+        AnalysisMeasurement helperMeasurement = default;
         long allocated = GC.GetAllocatedBytesForCurrentThread();
         long start = Stopwatch.GetTimestamp();
+
+        if ((requested & AnalysisProduct.Helpers) != 0
+            && (ExtractionPlan.Required(stages) & CodeStages) != CodeStages) {
+            try {
+                var hydrated = Hydration.Read(image, header, cancellationToken);
+                var memory = new RuntimeMemory(image, hydrated);
+                var unwind = new UnwindTables(image, cancellationToken);
+                startupHelpers = new RuntimeHelpers(image, header, memory, unwind, cancellationToken);
+            } catch (Exception error) when (error is InvalidDataException or NotSupportedException or OverflowException) {
+                startupHelpers = null;
+            }
+
+            helperMeasurement = AnalysisMeasurement.Since(start, allocated);
+
+            if (startupHelpers?.Status != RuntimeHelperStatus.Complete) {
+                if (!allowStageExpansion)
+                    throw new ArgumentException("The extraction stages do not provide the helper code fallback.", nameof(stages));
+                stages |= CodeStages;
+            }
+        }
+
+        allocated = GC.GetAllocatedBytesForCurrentThread();
+        start = Stopwatch.GetTimestamp();
         Extraction = new Extraction(image, header, metadata, maps, fixups, stages, cancellationToken);
         ExtractionMeasurement = AnalysisMeasurement.Since(start, allocated);
         var extraction = Extraction;
         var analysis = extraction.UnwindAnalysis;
+        if (startupHelpers?.Status != RuntimeHelperStatus.Complete)
+            startupHelpers = analysis.Startup;
 
         if ((requested & AnalysisProduct.MetadataMembers) != 0) {
             cancellationToken.ThrowIfCancellationRequested();
@@ -112,7 +144,8 @@ public sealed class AnalysisProducts {
                 GcInfoMeasurement = AnalysisMeasurement.Since(start, allocated);
             }
 
-            if ((requested & AnalysisProduct.Helpers) != 0 && analysis.Startup is null)
+            if ((requested & AnalysisProduct.Helpers) != 0
+                && startupHelpers?.Status != RuntimeHelperStatus.Complete)
                 requested |= AnalysisProduct.Code | AnalysisProduct.Abi;
 
             if ((requested & AnalysisProduct.Abi) != 0) {
@@ -152,8 +185,13 @@ public sealed class AnalysisProducts {
             cancellationToken.ThrowIfCancellationRequested();
             allocated = GC.GetAllocatedBytesForCurrentThread();
             start = Stopwatch.GetTimestamp();
-            Helpers = analysis.Startup ?? (Code is null ? null : new RuntimeHelpers(extraction, Code, cancellationToken));
-            HelperMeasurement = AnalysisMeasurement.Since(start, allocated);
+            Helpers = startupHelpers?.Status == RuntimeHelperStatus.Complete
+                ? startupHelpers
+                : Code is null ? startupHelpers : new RuntimeHelpers(extraction, Code, cancellationToken);
+            var fallbackMeasurement = AnalysisMeasurement.Since(start, allocated);
+            HelperMeasurement = new(
+                helperMeasurement.Seconds + fallbackMeasurement.Seconds,
+                helperMeasurement.AllocatedBytes + fallbackMeasurement.AllocatedBytes);
         }
 
         if ((requested & AnalysisProduct.FunctionPointers) != 0) {
@@ -237,9 +275,8 @@ public sealed class AnalysisProducts {
         if ((requested & AnalysisProduct.Properties) != 0)
             stages |= ExtractionStage.Dispatch;
 
-        if ((requested & (AnalysisProduct.Code | AnalysisProduct.Helpers)) != 0)
-            stages |= ExtractionStage.MemberLayouts | ExtractionStage.MethodTracing
-                | ExtractionStage.Dispatch | ExtractionStage.Linkage;
+        if ((requested & AnalysisProduct.Code) != 0)
+            stages |= CodeStages;
 
         if ((requested & AnalysisProduct.DispatchCells) != 0)
             stages |= ExtractionStage.DictionaryBindings;

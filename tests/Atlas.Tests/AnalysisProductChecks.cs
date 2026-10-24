@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using Atlas;
 
 internal static class AnalysisProductChecks {
@@ -73,6 +74,39 @@ internal static class AnalysisProductChecks {
                 && contexts.DictionaryConsumers.InitialDelegateSlots.SequenceEqual(products.DictionaryConsumers.InitialDelegateSlots)
                 && contexts.DictionaryConsumers.Failures.SequenceEqual(products.DictionaryConsumers.Failures)
                 && contexts.DictionaryConsumers.UnresolvedOwners.SequenceEqual(products.DictionaryConsumers.UnresolvedOwners));
+
+            var helpers = AnalysisProducts.Read(image, requested: AnalysisProduct.Helpers);
+            Check(helpers.Extraction.Stages == AnalysisProducts.RequiredExtractionStages(AnalysisProduct.Helpers)
+                && helpers.Extraction.Stages == ExtractionStage.RuntimeTypes);
+            Check(helpers.Helpers?.Status == RuntimeHelperStatus.Complete
+                && products.Helpers?.Status == RuntimeHelperStatus.Complete
+                && helpers.Helpers.HelperEntries.SequenceEqual(products.Helpers.HelperEntries)
+                && helpers.Helpers.StartupEdges.SequenceEqual(products.Helpers.StartupEdges));
+            Check(helpers.Code is null && helpers.Abi is null && helpers.Properties is null
+                && helpers.DispatchCells is null && helpers.Strings is null);
+
+            var fullHelpers = AnalysisProducts.Read(image, requested: AnalysisProduct.Helpers,
+                stages: AnalysisProducts.RequiredExtractionStages(AnalysisProduct.Code));
+            Check(fullHelpers.Helpers?.Status == helpers.Helpers!.Status
+                && fullHelpers.Helpers!.HelperEntries.SequenceEqual(helpers.Helpers.HelperEntries)
+                && fullHelpers.Helpers.StartupEdges.SequenceEqual(helpers.Helpers.StartupEdges));
+            Check(fullHelpers.Code is not null && fullHelpers.Abi is not null);
+            Check(helpers.TotalMeasurement.AllocatedBytes < fullHelpers.TotalMeasurement.AllocatedBytes);
+
+            byte[] damagedTable = (byte[])image.FileData.Clone();
+            BinaryPrimitives.WriteUInt64LittleEndian(
+                damagedTable.AsSpan(image.FileRange(helpers.Helpers!.Table).Start), 0);
+            var fallback = AnalysisProducts.Read(new PeImage(damagedTable),
+                requested: AnalysisProduct.Helpers);
+            Check((fallback.Extraction.Stages & AnalysisProducts.RequiredExtractionStages(AnalysisProduct.Code))
+                == AnalysisProducts.RequiredExtractionStages(AnalysisProduct.Code));
+            Check(fallback.Code is not null && fallback.Abi is not null
+                && fallback.Helpers?.Status != RuntimeHelperStatus.Complete);
+            Reject<ArgumentException>(() => AnalysisProducts.Read(new PeImage(damagedTable),
+                requested: AnalysisProduct.Helpers, stages: ExtractionStage.RuntimeTypes));
+
+            Console.WriteLine($"Helper product: {helpers.TotalMeasurement.AllocatedBytes} B startup path versus "
+                + $"{fullHelpers.TotalMeasurement.AllocatedBytes} B code path; damaged startup selected code fallback.");
 
             using var canceled = new CancellationTokenSource();
             canceled.Cancel();

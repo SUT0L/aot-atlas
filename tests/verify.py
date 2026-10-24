@@ -64,6 +64,8 @@ def main():
 
     run("dotnet", root / "tests" / "Atlas.Tests" / "bin" / "Release" / "net10.0" / "Atlas.Tests.dll",
         "--extraction-availability", dictionary, property_probe)
+    run("dotnet", root / "tests" / "Atlas.Tests" / "bin" / "Release" / "net10.0" / "Atlas.Tests.dll",
+        "--analysis-products", dictionary, property_probe)
 
     run("dotnet", "publish", "src/Atlas.Cli/Atlas.Cli.csproj",
         "-c", "Release", "-r", rid, "--self-contained", "--output", output / "cli")
