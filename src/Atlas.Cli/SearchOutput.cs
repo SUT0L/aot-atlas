@@ -5,7 +5,8 @@ using Atlas;
 
 internal static class SearchOutput {
     internal static int WriteTypes(Utf8JsonWriter json, string inputSha256,
-        Extraction extraction, string query) {
+        Extraction extraction, string query, CancellationToken cancellationToken = default) {
+        cancellationToken.ThrowIfCancellationRequested();
         var names = extraction.Names;
         var types = CollectionsMarshal.AsSpan(extraction.Types.Types);
 
@@ -27,6 +28,8 @@ internal static class SearchOutput {
         int hits = 0;
 
         for (int i = 0; i < types.Length; ++i) {
+            if ((i & 255) == 0)
+                cancellationToken.ThrowIfCancellationRequested();
             if (!names.Values[i].Contains(query, StringComparison.OrdinalIgnoreCase))
                 continue;
 
@@ -45,7 +48,9 @@ internal static class SearchOutput {
         return hits;
     }
 
-    internal static int Write(Utf8JsonWriter json, string inputSha256, AnalysisProducts products, string query) {
+    internal static int Write(Utf8JsonWriter json, string inputSha256,
+        AnalysisProducts products, string query, CancellationToken cancellationToken = default) {
+        cancellationToken.ThrowIfCancellationRequested();
         var extraction = products.Extraction;
         var image = extraction.Image;
         var names = extraction.Names;
@@ -77,6 +82,8 @@ internal static class SearchOutput {
         char[] buffer = new char[4096];
 
         for (int i = 0; i < types.Length; ++i) {
+            if ((i & 255) == 0)
+                cancellationToken.ThrowIfCancellationRequested();
             if (!names.Values[i].Contains(query, StringComparison.OrdinalIgnoreCase))
                 continue;
 
@@ -105,6 +112,8 @@ internal static class SearchOutput {
         }
 
         for (int i = 0; i < templateEnd; ++i) {
+            if ((i & 255) == 0)
+                cancellationToken.ThrowIfCancellationRequested();
             ReadOnlySpan<char> text;
 
             int section;
@@ -188,6 +197,7 @@ internal static class SearchOutput {
         }
 
         foreach (ref readonly var item in CollectionsMarshal.AsSpan(extraction.Statics.Constructors)) {
+            cancellationToken.ThrowIfCancellationRequested();
             var name = QualifiedName(
                 names.Values[extraction.Types.Index[item.Type]], ".cctor", ref buffer);
 
@@ -209,6 +219,8 @@ internal static class SearchOutput {
         var virtuals = extraction.Virtuals;
 
         for (int i = 0; i < virtuals.Entries.Count; ++i) {
+            if ((i & 255) == 0)
+                cancellationToken.ThrowIfCancellationRequested();
             ref readonly var item = ref CollectionsMarshal.AsSpan(virtuals.Entries)[i];
             ref readonly var slot = ref CollectionsMarshal.AsSpan(virtuals.Slots)[i];
             var name = QualifiedName(
@@ -238,6 +250,8 @@ internal static class SearchOutput {
         int structCount = marshalling.Structs.Count;
 
         for (int i = 0; i < structCount + marshalling.Delegates.Count; ++i) {
+            if ((i & 255) == 0)
+                cancellationToken.ThrowIfCancellationRequested();
             int type;
             int offset;
             int section;
@@ -292,6 +306,7 @@ internal static class SearchOutput {
                 Array.Resize(ref buffer, runtime.NameCapacity);
 
             foreach (ref readonly var role in CollectionsMarshal.AsSpan(runtime.Roles)) {
+                cancellationToken.ThrowIfCancellationRequested();
                 int length = RuntimeCode.WriteName(extraction, role, buffer);
                 var name = buffer.AsSpan(0, length);
 
@@ -318,6 +333,7 @@ internal static class SearchOutput {
                 Array.Resize(ref buffer, context.Origins.NameCapacity);
 
             foreach (ref readonly var function in context.Functions.AsSpan()) {
+                cancellationToken.ThrowIfCancellationRequested();
                 if (function.Depth == 0)
                     continue;
 
@@ -338,6 +354,8 @@ internal static class SearchOutput {
         var matchedFields = new List<int>();
 
         for (int i = 0; i < extraction.Fields.FieldTypes.Count; ++i) {
+            if ((i & 255) == 0)
+                cancellationToken.ThrowIfCancellationRequested();
             ref readonly var field = ref CollectionsMarshal.AsSpan(extraction.Fields.FieldTypes)[i];
             ref readonly var item = ref CollectionsMarshal.AsSpan(extraction.Maps.Fields)[field.MapIndex];
             int owner = field.Owner - 1;
@@ -355,6 +373,7 @@ internal static class SearchOutput {
                 fieldReferences.Add(index, 0);
 
             foreach (int field in CollectionsMarshal.AsSpan(code.FieldBindings)) {
+                cancellationToken.ThrowIfCancellationRequested();
                 ref int count = ref CollectionsMarshal.GetValueRefOrNullRef(fieldReferences, field);
 
                 if (!System.Runtime.CompilerServices.Unsafe.IsNullRef(ref count))
@@ -363,6 +382,7 @@ internal static class SearchOutput {
         }
 
         foreach (int i in matchedFields) {
+            cancellationToken.ThrowIfCancellationRequested();
             ref readonly var field = ref CollectionsMarshal.AsSpan(extraction.Fields.FieldTypes)[i];
             ref readonly var item = ref CollectionsMarshal.AsSpan(extraction.Maps.Fields)[field.MapIndex];
             int owner = field.Owner - 1;
@@ -391,6 +411,8 @@ internal static class SearchOutput {
         var matchedFrozen = new List<int>();
 
         for (int i = 0; i < frozen.Objects.Count; ++i) {
+            if ((i & 255) == 0)
+                cancellationToken.ThrowIfCancellationRequested();
             ref readonly var item = ref CollectionsMarshal.AsSpan(frozen.Objects)[i];
             if (item.Kind != FrozenKind.String)
                 continue;
@@ -405,6 +427,8 @@ internal static class SearchOutput {
         var matchedNative = new List<int>();
 
         for (int i = 0; i < strings.Items.Count; ++i) {
+            if ((i & 255) == 0)
+                cancellationToken.ThrowIfCancellationRequested();
             ref readonly var item = ref CollectionsMarshal.AsSpan(strings.Items)[i];
             var bytes = image.FileData.AsSpan(item.Data.Start, item.Data.Count);
             ReadOnlySpan<char> text;
@@ -435,6 +459,7 @@ internal static class SearchOutput {
                 references.TryAdd(image.ImageBase + strings.Items[i].Rva, 0);
 
             foreach (ref readonly var edge in CollectionsMarshal.AsSpan(code.Addresses)) {
+                cancellationToken.ThrowIfCancellationRequested();
                 ref int count = ref CollectionsMarshal.GetValueRefOrNullRef(references, edge.Target);
 
                 if (!System.Runtime.CompilerServices.Unsafe.IsNullRef(ref count))
@@ -443,6 +468,7 @@ internal static class SearchOutput {
         }
 
         foreach (int i in matchedFrozen) {
+            cancellationToken.ThrowIfCancellationRequested();
             ref readonly var item = ref CollectionsMarshal.AsSpan(frozen.Objects)[i];
             var data = frozen.Data.Span.Slice(item.Data.Start, item.Data.Count);
             var text = MemoryMarshal.Cast<byte, char>(data);
@@ -468,6 +494,7 @@ internal static class SearchOutput {
         }
 
         foreach (int i in matchedNative) {
+            cancellationToken.ThrowIfCancellationRequested();
             ref readonly var item = ref CollectionsMarshal.AsSpan(strings.Items)[i];
             var bytes = image.FileData.AsSpan(item.Data.Start, item.Data.Count);
 
@@ -511,6 +538,7 @@ internal static class SearchOutput {
 
         void SearchTypeMap(InteropTypeMap map, string groupKind, string mappingKind) {
             foreach (ref readonly var group in map.Groups) {
+                cancellationToken.ThrowIfCancellationRequested();
                 string groupName = names.Values[extraction.Types.Index[group.GroupType]];
                 bool groupMatches = groupName.Contains(query, StringComparison.OrdinalIgnoreCase);
                 if (groupMatches) {
@@ -526,6 +554,7 @@ internal static class SearchOutput {
                 }
 
                 foreach (ref readonly var entry in map.Entries.Slice(group.Entries.Start, group.Entries.Count)) {
+                    cancellationToken.ThrowIfCancellationRequested();
                     string source = entry.Name ?? names.Values[extraction.Types.Index[entry.SourceType]];
                     string target = names.Values[extraction.Types.Index[entry.TargetType]];
                     if (!groupMatches && !source.Contains(query, StringComparison.OrdinalIgnoreCase)

@@ -5,7 +5,9 @@ using Atlas;
 
 internal static class HeaderOutput {
     internal static (int Types, int Fields, int References, int Unknown) Write(
-        StreamWriter writer, string inputSha256, Extraction extraction) {
+        StreamWriter writer, string inputSha256, Extraction extraction,
+        CancellationToken cancellationToken = default) {
+        cancellationToken.ThrowIfCancellationRequested();
         var tables = CollectionsMarshal.AsSpan(extraction.Types.Types);
         var fields = CollectionsMarshal.AsSpan(extraction.Fields.FieldTypes);
         var maps = CollectionsMarshal.AsSpan(extraction.Maps.Fields);
@@ -16,12 +18,17 @@ internal static class HeaderOutput {
         var typeNames = new IndexRange[tables.Length];
         var fieldNames = new IndexRange[fields.Length];
 
-        for (int i = 0; i < tables.Length; ++i)
+        for (int i = 0; i < tables.Length; ++i) {
+            if ((i & 255) == 0)
+                cancellationToken.ThrowIfCancellationRequested();
             typeNames[i] = Identifier(
                 names, "atlas_", extraction.Names.Values[i],
                 checked((uint)(tables[i].Address - extraction.Image.ImageBase)), -1);
+        }
 
         for (int i = 0; i < fields.Length; ++i) {
+            if ((i & 255) == 0)
+                cancellationToken.ThrowIfCancellationRequested();
             ref readonly var field = ref fields[i];
             ref readonly var map = ref maps[field.MapIndex];
 
@@ -59,6 +66,7 @@ internal static class HeaderOutput {
         writer.WriteLine("struct atlas_method_table;\n");
 
         foreach (ref readonly var name in typeNames.AsSpan()) {
+            cancellationToken.ThrowIfCancellationRequested();
             writer.Write("struct ");
             writer.Write(identifiers.Slice(name.Start, name.Count));
             writer.WriteLine(';');
@@ -69,6 +77,8 @@ internal static class HeaderOutput {
         int unknown = 0;
 
         for (int i = 0; i < fields.Length; ++i) {
+            if ((i & 255) == 0)
+                cancellationToken.ThrowIfCancellationRequested();
             ref readonly var map = ref maps[fields[i].MapIndex];
 
             if (fields[i].Size != 0 || map.Storage != 0 || map.Location != FieldLocation.Offset)
@@ -89,6 +99,7 @@ internal static class HeaderOutput {
         var gc = new IndexRange[tables.Length];
 
         foreach (ref readonly var layout in CollectionsMarshal.AsSpan(extraction.Gc.Layouts)) {
+            cancellationToken.ThrowIfCancellationRequested();
             if (layout.RepeatStride == 0)
                 gc[layout.TypeIndex] = layout.Runs;
         }
@@ -101,6 +112,7 @@ internal static class HeaderOutput {
         "_ref_".CopyTo(referenceName);
 
         for (int i = 0; i < layouts.Length; ++i) {
+            cancellationToken.ThrowIfCancellationRequested();
             uint width = layouts[i].Length;
 
             if (width == 0)
@@ -129,9 +141,11 @@ internal static class HeaderOutput {
             }
 
             for (int owner = i; owner >= 0; owner = layouts[owner].BaseType - 1) {
+                cancellationToken.ThrowIfCancellationRequested();
                 ref readonly var layout = ref layouts[owner];
 
                 foreach (ref readonly var location in locations.Slice(layout.Fields.Start, layout.Fields.Count)) {
+                    cancellationToken.ThrowIfCancellationRequested();
                     if (location.Offset >= width)
                         break;
 
@@ -185,9 +199,12 @@ internal static class HeaderOutput {
 
             foreach (ref readonly var run in CollectionsMarshal.AsSpan(extraction.Gc.Runs)
                 .Slice(gc[i].Start, gc[i].Count)) {
+                cancellationToken.ThrowIfCancellationRequested();
                 uint first = run.Offset - (tables[i].IsValueType ? 8U : 0);
 
                 for (uint slot = 0; slot < run.Count; ++slot) {
+                    if ((slot & 255) == 0)
+                        cancellationToken.ThrowIfCancellationRequested();
                     uint offset = first + slot * 8;
 
                     if (offset > width || width - offset < 8)

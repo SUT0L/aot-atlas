@@ -9,10 +9,13 @@ public readonly struct RuntimeFunction(uint begin, uint end, uint unwind) {
 }
 
 public static class RuntimeTables {
-    public static ReadOnlySpan<ulong> ReadFixups(PeImage image, RtrSection section) => Fixups(image, section);
+    public static ReadOnlySpan<ulong> ReadFixups(PeImage image, RtrSection section,
+        CancellationToken cancellationToken = default) => Fixups(image, section, cancellationToken);
     public static ReadOnlySpan<RuntimeFunction> ReadFunctions(PeImage image) => Functions(image);
 
-    internal static ulong[] Fixups(PeImage image, RtrSection section) {
+    internal static ulong[] Fixups(PeImage image, RtrSection section,
+        CancellationToken cancellationToken = default) {
+        cancellationToken.ThrowIfCancellationRequested();
         if (section.Length == 0)
             return [];
 
@@ -23,8 +26,11 @@ public static class RuntimeTables {
         ulong[] result = new ulong[source.Length / 4];
         long address = checked((long)section.Start);
 
-        for (int i = 0, offset = 0; i < result.Length; ++i, offset += 4)
+        for (int i = 0, offset = 0; i < result.Length; ++i, offset += 4) {
+            if ((i & 1023) == 0)
+                cancellationToken.ThrowIfCancellationRequested();
             result[i] = checked((ulong)(address + offset + BinaryPrimitives.ReadInt32LittleEndian(source[offset..])));
+        }
 
         return result;
     }

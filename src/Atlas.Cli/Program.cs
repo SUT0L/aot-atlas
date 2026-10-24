@@ -84,7 +84,7 @@ try {
     }
 
     if (args[0] == "linkage") {
-        var linkage = new PeLinkage(image);
+        var linkage = new PeLinkage(image, cancellationToken);
 
         using (var stream = new OutputFileStream(temporaryOutput))
         using (var json = JsonOutput.CreateWriter(stream, cancellationToken))
@@ -233,7 +233,7 @@ try {
 
     if (args[0] == "resources") {
         long resourceStart = Stopwatch.GetTimestamp();
-        var resources = new ResourceMap(image, rtr);
+        var resources = new ResourceMap(image, rtr, cancellationToken);
         double seconds = Stopwatch.GetElapsedTime(resourceStart).TotalSeconds;
 
         using (var stream = new OutputFileStream(temporaryOutput))
@@ -254,7 +254,7 @@ try {
         long metadataEnd = Stopwatch.GetTimestamp();
 
         if (plan.NeedsMaps) {
-            var fixups = RuntimeTables.Fixups(image, rtr.Find(RtrSectionId.CommonFixupsTable));
+            var fixups = RuntimeTables.Fixups(image, rtr.Find(RtrSectionId.CommonFixupsTable), cancellationToken);
             var maps = new ReflectionMaps();
 
             maps.Read(image, rtr, metadataBuilder, fixups, requestedFormat, cancellationToken);
@@ -285,7 +285,7 @@ try {
                         stream, new System.Text.UTF8Encoding(false), 64 * 1024, leaveOpen: true)) {
                         writer.NewLine = "\n";
 
-                        counts = HeaderOutput.Write(writer, inputSha256, extraction);
+                        counts = HeaderOutput.Write(writer, inputSha256, extraction, cancellationToken);
                     }
 
                     PublishOutput();
@@ -300,8 +300,8 @@ try {
                     using (var stream = new OutputFileStream(temporaryOutput))
                     using (var json = JsonOutput.CreateWriter(stream, cancellationToken))
                         hits = typesOnly
-                            ? SearchOutput.WriteTypes(json, inputSha256, extraction, args[3])
-                            : SearchOutput.Write(json, inputSha256, products!, args[3]);
+                            ? SearchOutput.WriteTypes(json, inputSha256, extraction, args[3], cancellationToken)
+                            : SearchOutput.Write(json, inputSha256, products!, args[3], cancellationToken);
 
                     PublishOutput();
                     Console.WriteLine($"{hits} search results.");
@@ -464,9 +464,9 @@ try {
 
     var functions = RuntimeTables.Functions(image);
 
-    var commonFixups = RuntimeTables.Fixups(image, rtr.Find(RtrSectionId.CommonFixupsTable));
-    var nativeReferences = RuntimeTables.Fixups(image, rtr.Find(RtrSectionId.NativeReferences));
-    var nativeStatics = RuntimeTables.Fixups(image, rtr.Find(RtrSectionId.NativeStatics));
+    var commonFixups = RuntimeTables.Fixups(image, rtr.Find(RtrSectionId.CommonFixupsTable), cancellationToken);
+    var nativeReferences = RuntimeTables.Fixups(image, rtr.Find(RtrSectionId.NativeReferences), cancellationToken);
+    var nativeStatics = RuntimeTables.Fixups(image, rtr.Find(RtrSectionId.NativeStatics), cancellationToken);
 
     long finished = Stopwatch.GetTimestamp();
 
@@ -537,7 +537,7 @@ void Cancel(object? sender, ConsoleCancelEventArgs eventArgs) {
         metadataBuilder.ReadDefinitions(cancellationToken);
 
         var traces = new TraceMaps(image, rtr, metadataBuilder,
-            RuntimeTables.Fixups(image, rtr.Find(RtrSectionId.CommonFixupsTable)), cancellationToken);
+            RuntimeTables.Fixups(image, rtr.Find(RtrSectionId.CommonFixupsTable), cancellationToken), cancellationToken);
         var metadata = metadataBuilder.Publish(cancellationToken);
         traces.Publish(metadata.PublishedSignatures, cancellationToken);
         var consumers = ManagedFunctionPointerConsumers.Read(

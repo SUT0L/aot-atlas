@@ -78,7 +78,8 @@ public sealed class PeLinkage {
     public ReadOnlySpan<PeExportName> ExportNameEntries => ExportNames;
     public readonly IndexRange ExportModule;
 
-    public PeLinkage(PeImage image) {
+    public PeLinkage(PeImage image, CancellationToken cancellationToken = default) {
+        cancellationToken.ThrowIfCancellationRequested();
         // Eager and delayed descriptors use different pointer and name encodings.
         foreach (int directoryIndex in new[] { 1, 13 }) {
             var directory = image.Directories[directoryIndex];
@@ -95,6 +96,8 @@ public sealed class PeLinkage {
             bool terminated = false;
 
             for (int position = 0; position <= data.Length - stride; position += stride) {
+                if ((position & 4095) == 0)
+                    cancellationToken.ThrowIfCancellationRequested();
                 var row = data.Slice(position, stride);
                 if (!row.ContainsAnyExcept((byte)0)) {
                     terminated = true;
@@ -156,6 +159,8 @@ public sealed class PeLinkage {
                 int offset = 0;
 
                 for (; offset <= thunks.Length - 8; offset += 8) {
+                    if ((offset & 4095) == 0)
+                        cancellationToken.ThrowIfCancellationRequested();
                     ulong value = BinaryPrimitives.ReadUInt64LittleEndian(thunks[offset..]);
                     if (value == 0)
                         break;
@@ -228,6 +233,8 @@ public sealed class PeLinkage {
         Exports = new PeExport[count];
 
         for (int i = 0; i < count; ++i) {
+            if ((i & 1023) == 0)
+                cancellationToken.ThrowIfCancellationRequested();
             uint rva = BinaryPrimitives.ReadUInt32LittleEndian(addressData[(i * 4)..]);
             ref var entry = ref Exports[i];
             entry.Rva = rva;
@@ -253,6 +260,8 @@ public sealed class PeLinkage {
         int[] counts = new int[count];
 
         for (int i = 0; i < nameCount; ++i) {
+            if ((i & 1023) == 0)
+                cancellationToken.ThrowIfCancellationRequested();
             int index = BinaryPrimitives.ReadUInt16LittleEndian(ordinalData[(i * 2)..]);
 
             if (index >= count)
@@ -264,6 +273,8 @@ public sealed class PeLinkage {
         int cursor = 0;
 
         for (int i = 0; i < count; ++i) {
+            if ((i & 1023) == 0)
+                cancellationToken.ThrowIfCancellationRequested();
             Exports[i].Names = new IndexRange(cursor, counts[i]);
             cursor += counts[i];
             counts[i] = 0;
@@ -273,6 +284,8 @@ public sealed class PeLinkage {
         ReadOnlySpan<byte> previousName = default;
 
         for (int i = 0; i < nameCount; ++i) {
+            if ((i & 1023) == 0)
+                cancellationToken.ThrowIfCancellationRequested();
             int index = BinaryPrimitives.ReadUInt16LittleEndian(ordinalData[(i * 2)..]);
             var name = Ascii(image, image.ImageBase + BinaryPrimitives.ReadUInt32LittleEndian(nameData[(i * 4)..]));
             var bytes = image.FileData.AsSpan(name.Start, name.Count);

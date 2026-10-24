@@ -95,7 +95,7 @@ public sealed class CodeFlow {
         if (!abi.IsFrom(extraction))
             throw new ArgumentException("The ABI belongs to a different extraction.", nameof(abi));
 
-        Runtime = new RuntimeCode(extraction);
+        Runtime = new RuntimeCode(extraction, cancellationToken);
 
         var entries = new List<ulong>(
             extraction.Unwind.DirectoryCount

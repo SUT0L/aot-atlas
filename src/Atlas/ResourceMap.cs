@@ -23,7 +23,8 @@ public sealed class ResourceMap {
     public ReadOnlySpan<byte> Bytes => Data.Span;
     public ReadOnlySpan<ResourceEntry> ResourceEntries => System.Runtime.InteropServices.CollectionsMarshal.AsSpan(Entries);
 
-    public ResourceMap(PeImage image, ReadyToRun rtr) {
+    public ResourceMap(PeImage image, ReadyToRun rtr, CancellationToken cancellationToken = default) {
+        cancellationToken.ThrowIfCancellationRequested();
         rtr = rtr.ValidateSource(image);
 
         var indexSection = rtr.Find(RtrSectionId.ResourceIndex);
@@ -48,6 +49,8 @@ public sealed class ResourceMap {
         Span<uint> hashes = stackalloc uint[2];
 
         while (table.MoveNext()) {
+            if ((Entries.Count & 255) == 0)
+                cancellationToken.ThrowIfCancellationRequested();
             var reader = new NativeReader(bytes, table.Vertex);
             int length = checked((int)reader.Unsigned());
             var assembly = new IndexRange(reader.Position, length);
@@ -60,6 +63,8 @@ public sealed class ResourceMap {
             int codeUnit = 0;
 
             while (!assemblyName.IsEmpty) {
+                if ((codeUnit & 1023) == 0)
+                    cancellationToken.ThrowIfCancellationRequested();
                 if (Rune.DecodeFromUtf8(assemblyName, out var rune, out int consumed) != OperationStatus.Done)
                     throw new InvalidDataException("Invalid UTF-8 resource assembly name.");
 

@@ -19,7 +19,7 @@ internal static class ExtractCommand {
 
         start = Stopwatch.GetTimestamp();
 
-        var fixups = RuntimeTables.Fixups(image, rtr.Find(RtrSectionId.CommonFixupsTable));
+        var fixups = RuntimeTables.Fixups(image, rtr.Find(RtrSectionId.CommonFixupsTable), cancellationToken);
         var maps = new ReflectionMaps();
 
         maps.Read(image, rtr, metadataBuilder, fixups, format, cancellationToken);

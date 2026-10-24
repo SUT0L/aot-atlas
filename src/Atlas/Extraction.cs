@@ -149,7 +149,7 @@ public sealed partial class Extraction {
         var header = ReadyToRun.Read(image);
         var metadata = MetadataBuilder.FromImage(image, header, cancellationToken);
         metadata.ReadDefinitions(cancellationToken);
-        var fixups = RuntimeTables.Fixups(image, header.Find(RtrSectionId.CommonFixupsTable));
+        var fixups = RuntimeTables.Fixups(image, header.Find(RtrSectionId.CommonFixupsTable), cancellationToken);
         var maps = ReflectionMaps.Decode(image, header, metadata, fixups, mapFormat, cancellationToken);
         return (header, metadata, maps, fixups);
     }
@@ -206,8 +206,8 @@ public sealed partial class Extraction {
                     memory = new RuntimeMemory(image, Hydrated);
                     unwindAnalysis = new UnwindAnalysis(image, rtr, Memory, cancellationToken);
 
-                    nativeReferences = RuntimeTables.Fixups(image, rtr.Find(RtrSectionId.NativeReferences));
-                    nativeStatics = RuntimeTables.Fixups(image, rtr.Find(RtrSectionId.NativeStatics));
+                    nativeReferences = RuntimeTables.Fixups(image, rtr.Find(RtrSectionId.NativeReferences), cancellationToken);
+                    nativeStatics = RuntimeTables.Fixups(image, rtr.Find(RtrSectionId.NativeStatics), cancellationToken);
                     var section = rtr.Find(RtrSectionId.NativeLayoutInfo);
                     layout = new NativeLayout(
                         section.Length == 0
@@ -398,11 +398,11 @@ public sealed partial class Extraction {
                     break;
 
                 case ExtractionPhase.Resources:
-                    resources = new ResourceMap(image, rtr);
+                    resources = new ResourceMap(image, rtr, cancellationToken);
                     break;
 
                 case ExtractionPhase.Linkage:
-                    linkage = new PeLinkage(image);
+                    linkage = new PeLinkage(image, cancellationToken);
                     break;
 
                 case ExtractionPhase.PInvokes:

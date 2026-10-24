@@ -158,7 +158,7 @@ public sealed class FatFunctionPointers {
         ConstructorMapStatus = "complete";
 
         try {
-            var common = RuntimeTables.Fixups(image, header.Find(RtrSectionId.CommonFixupsTable));
+            var common = RuntimeTables.Fixups(image, header.Find(RtrSectionId.CommonFixupsTable), cancellationToken);
             var data = image.FileSpan(section.Start, checked((int)section.Length));
             var table = new NativeTable(data);
 

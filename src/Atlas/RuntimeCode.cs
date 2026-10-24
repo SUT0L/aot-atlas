@@ -51,7 +51,8 @@ public sealed class RuntimeCode {
     public RuntimeCode() {
     }
 
-    public RuntimeCode(Extraction extraction) {
+    public RuntimeCode(Extraction extraction, CancellationToken cancellationToken = default) {
+        cancellationToken.ThrowIfCancellationRequested();
         this.extraction = extraction;
         var image = extraction.Image;
 
@@ -154,7 +155,7 @@ public sealed class RuntimeCode {
 
         foreach (var sectionId in initializerSections) {
             var section = extraction.Header.Find(sectionId);
-            var entries = RuntimeTables.Fixups(image, section);
+            var entries = RuntimeTables.Fixups(image, section, cancellationToken);
             var kind = sectionId == RtrSectionId.EagerCctor
                 ? RuntimeCodeKind.EagerConstructor
                 : RuntimeCodeKind.ModuleInitializer;
