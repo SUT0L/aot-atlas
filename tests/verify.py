@@ -66,6 +66,7 @@ def main():
     run(sys.executable, "tests/command_contract_checks.py", cli,
         root / "tests" / "Atlas.Tests" / "bin" / "Release" / "net10.0" / "Atlas.Tests.dll",
         dictionary)
+    run(sys.executable, "tests/search_cost_checks.py", cli, dictionary)
     run(sys.executable, "tests/analysis_status_checks.py", cli, property_probe, dictionary)
     run(sys.executable, "tests/property_rejection_checks.py", cli, property_probe)
     run(sys.executable, "tests/reference_setter_checks.py", cli, canonical_probe)
