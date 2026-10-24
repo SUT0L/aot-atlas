@@ -11,6 +11,8 @@ def main():
     parser.add_argument("--dictionary-map", type=Path)
     parser.add_argument("--property", type=Path)
     parser.add_argument("--canonical", type=Path)
+    parser.add_argument("--string", type=Path)
+    parser.add_argument("--string-oracle", type=Path)
     arguments = parser.parse_args()
 
     root = Path(__file__).resolve().parents[1]
@@ -38,8 +40,12 @@ def main():
     dictionary_map = arguments.dictionary_map.resolve() if arguments.dictionary_map is not None else None
     property_probe = arguments.property.resolve() if arguments.property is not None else None
     canonical_probe = arguments.canonical.resolve() if arguments.canonical is not None else None
+    string_probe = arguments.string.resolve() if arguments.string is not None else None
+    string_oracle = arguments.string_oracle.resolve() if arguments.string_oracle is not None else None
     if windows and dictionary is not None and dictionary_map is None:
         parser.error("--dictionary-map is required with --dictionary on Windows")
+    if (string_probe is None) != (string_oracle is None):
+        parser.error("--string and --string-oracle must be supplied together")
 
     if windows:
         if dictionary is None:
@@ -64,6 +70,15 @@ def main():
         run("dotnet", "publish", "tests/PropertyGcProbe/PropertyGcProbe.csproj",
             "-c", "Release", "-r", rid, "--self-contained",
             "--output", output / "property-gc")
+        if string_probe is None:
+            run("dotnet", "publish", "tests/StringProbe/StringProbe.csproj",
+                "-c", "Release", "-r", rid, "--self-contained",
+                "--output", output / "string")
+            string_probe = output / "string" / "StringProbe.exe"
+            string_oracle = output / "string" / "StringProbe.oracle"
+            probe = subprocess.run([str(string_probe)], cwd=root, check=True,
+                                   capture_output=True, text=True)
+            string_oracle.write_text(probe.stdout, encoding="utf-8")
     else:
         dictionary = dictionary or root / "artifacts" / "DictionaryProbe.exe"
         property_probe = property_probe or root / "artifacts" / "PropertyDispatchProbe.exe"
@@ -75,6 +90,8 @@ def main():
             parser.error(f"{label} PE fixture is missing: {binary}")
     if dictionary_map is not None and not dictionary_map.is_file():
         parser.error(f"dictionary linker map is missing: {dictionary_map}")
+    if string_probe is not None and (not string_probe.is_file() or not string_oracle.is_file()):
+        parser.error("string probe or its source oracle is missing")
 
     test_assembly = root / "tests" / "Atlas.Tests" / "bin" / "Release" / "net10.0" / "Atlas.Tests.dll"
     required_fixture_modes = [
@@ -108,6 +125,9 @@ def main():
     run(sys.executable, "tests/property_rejection_checks.py", cli, property_probe)
     run(sys.executable, "tests/reference_setter_checks.py", cli, canonical_probe)
     run(sys.executable, "tests/metadata_name_checks.py", cli, dictionary)
+    if string_probe is not None:
+        run(sys.executable, "tests/string_precision_checks.py", cli, string_probe, string_oracle,
+            output / "string-precision.json")
     if windows:
         run(sys.executable, "tests/cli_checks.py", "publication", cli, dictionary,
             "--query", "Dictionary")
