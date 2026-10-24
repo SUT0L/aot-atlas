@@ -97,6 +97,42 @@ def main():
     else:
         run(sys.executable, "tests/output_failure_checks.py", cli, dictionary)
 
+    runtime_source = root / "artifacts" / "runtime-checks" / "repository"
+    native_reader = (runtime_source / "src" / "coreclr" / "tools" / "Common" / "Internal"
+                     / "Metadata" / "NativeFormat" / "NativeMetadataReader.cs")
+    if not native_reader.is_file():
+        if not runtime_source.exists():
+            runtime_source.parent.mkdir(parents=True, exist_ok=True)
+            run("git", "clone", "--filter=blob:none", "--single-branch", "--depth=1",
+                "--branch", "v10.0.0", "--no-checkout",
+                "https://github.com/dotnet/runtime.git", runtime_source)
+        elif not (runtime_source / ".git").exists():
+            parser.error(f"Microsoft runtime source is not a Git checkout: {runtime_source}")
+        run("git", "-C", runtime_source, "sparse-checkout", "set",
+            "src/coreclr/tools/Common/Internal/NativeFormat",
+            "src/coreclr/tools/Common/Internal/Metadata/NativeFormat")
+        run("git", "-C", runtime_source, "checkout", "--force", "v10.0.0")
+
+    revision = subprocess.check_output(
+        ["git", "-C", str(runtime_source), "rev-parse", "HEAD"], cwd=root, text=True).strip()
+    if revision != "60629d14374c56f1cb51819049ad1fa529307f8d":
+        parser.error(f"Microsoft runtime source must be v10.0.0, found {revision}")
+
+    runtime_project = "tests/RuntimeChecks/RuntimeChecks.csproj"
+    if windows:
+        run("dotnet", "build", runtime_project, "-c", "Release", "-t:RuntimeChecks",
+            f"-p:RuntimeSourceRoot={runtime_source}")
+        runtime_reader = (root / "artifacts" / "runtime-checks" / "reader-net10.0" / "bin"
+                          / "RuntimeChecks" / "release" / "RuntimeChecks.dll")
+    else:
+        runtime_output = output / "runtime-reader"
+        run("dotnet", "build", runtime_project, "-c", "Release",
+            f"-p:RuntimeSourceRoot={runtime_source}", "-p:ReaderSchema=Current",
+            f"-p:ArtifactsPath={runtime_output}")
+        runtime_reader = runtime_output / "bin" / "RuntimeChecks" / "release" / "RuntimeChecks.dll"
+
+    run("dotnet", runtime_reader, dictionary, property_probe, canonical_probe)
+
 
 if __name__ == "__main__":
     main()
