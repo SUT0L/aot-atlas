@@ -5,4 +5,13 @@
     <PublishAot>true</PublishAot>
     <IlcDehydrate>true</IlcDehydrate>
   </PropertyGroup>
+  <Target Name="WriteDictionaryProbeLinkerMap" BeforeTargets="LinkNative" Condition="'$(_targetOS)' == 'win'">
+    <ItemGroup>
+      <LinkerArg Include="/MAP:&quot;$(NativeIntermediateOutputPath)DictionaryProbe.map&quot;" />
+    </ItemGroup>
+  </Target>
+  <Target Name="StageDictionaryProbeLinkerMap" AfterTargets="LinkNative" Condition="'$(_targetOS)' == 'win'">
+    <Copy SourceFiles="$(NativeIntermediateOutputPath)DictionaryProbe.map"
+          DestinationFiles="$(PublishDir)DictionaryProbe.map" />
+  </Target>
 </Project>

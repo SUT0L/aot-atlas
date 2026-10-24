@@ -8,6 +8,7 @@ from pathlib import Path
 def main():
     parser = argparse.ArgumentParser(description="Run parser and published CLI checks")
     parser.add_argument("--dictionary", type=Path)
+    parser.add_argument("--dictionary-map", type=Path)
     parser.add_argument("--property", type=Path)
     parser.add_argument("--canonical", type=Path)
     arguments = parser.parse_args()
@@ -34,8 +35,11 @@ def main():
     run(sys.executable, "tests/optimised_assertion_checks.py")
 
     dictionary = arguments.dictionary.resolve() if arguments.dictionary is not None else None
+    dictionary_map = arguments.dictionary_map.resolve() if arguments.dictionary_map is not None else None
     property_probe = arguments.property.resolve() if arguments.property is not None else None
     canonical_probe = arguments.canonical.resolve() if arguments.canonical is not None else None
+    if windows and dictionary is not None and dictionary_map is None:
+        parser.error("--dictionary-map is required with --dictionary on Windows")
 
     if windows:
         if dictionary is None:
@@ -43,6 +47,7 @@ def main():
                 "-c", "Release", "-r", rid, "--self-contained",
                 "--output", output / "dictionary")
             dictionary = output / "dictionary" / "DictionaryProbe.exe"
+            dictionary_map = output / "dictionary" / "DictionaryProbe.map"
         if property_probe is None:
             run("dotnet", "publish", "tests/PropertyDispatchProbe/PropertyDispatchProbe.csproj",
                 "-c", "Release", "-r", rid, "--self-contained",
@@ -68,6 +73,8 @@ def main():
                           ("canonical", canonical_probe)):
         if not binary.is_file():
             parser.error(f"{label} PE fixture is missing: {binary}")
+    if dictionary_map is not None and not dictionary_map.is_file():
+        parser.error(f"dictionary linker map is missing: {dictionary_map}")
 
     test_assembly = root / "tests" / "Atlas.Tests" / "bin" / "Release" / "net10.0" / "Atlas.Tests.dll"
     required_fixture_modes = [
@@ -83,6 +90,8 @@ def main():
         required_fixture_modes.append((
             "--properties", (output / "property-shared" / "PropertySharedProbe.exe",
                              output / "property-gc" / "PropertyGcProbe.exe")))
+    if dictionary_map is not None:
+        required_fixture_modes.append(("--generic-context", (dictionary, dictionary_map)))
 
     for mode, fixtures in required_fixture_modes:
         run("dotnet", test_assembly, mode, *fixtures)

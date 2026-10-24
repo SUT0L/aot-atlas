@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Text.RegularExpressions;
 using Atlas;
+using Iced.Intel;
 
 internal static class GenericContextReferenceChecks {
     internal static void Benchmark(string imagePath) {
@@ -48,9 +49,13 @@ internal static class GenericContextReferenceChecks {
         var extraction = new Extraction(image, header, metadata, maps, fixups);
         var gc = new MethodGcMap(image, header, extraction.Unwind, extraction.Managed);
         var references = new GenericContextReferences(image, extraction.Unwind, gc);
+        Assert(references.Parameters.Length == references.DeclaredMethodContexts
+            && references.UnresolvedControlFlowOwners.Count == 0,
+            "The healthy fixture has an unproven GC context method.");
 
+        string objectName = Regex.Escape(Path.GetFileNameWithoutExtension(imagePath) + ".obj");
         var symbols = File.ReadLines(mapPath).Select(line => Regex.Match(line,
-            @"^\s+\d{4}:[0-9a-fA-F]+\s+(\S+)\s+([0-9a-fA-F]{16})\s+Probe.obj"))
+            $@"^\s+\d{{4}}:[0-9a-fA-F]+\s+(\S+)\s+([0-9a-fA-F]{{16}})\s+{objectName}$"))
             .Where(match => match.Success)
             .Select(match => (Name: match.Groups[1].Value, Address: Convert.ToUInt64(match.Groups[2].Value, 16)))
             .ToArray();
@@ -62,9 +67,18 @@ internal static class GenericContextReferenceChecks {
         // their independent EEType symbol; the remaining names identify methods.
         var oracle = symbols.Where(symbol => symbol.Name.StartsWith("__GenericDict_", StringComparison.Ordinal)
             && !typeNames.Contains(symbol.Name[14..])).Select(symbol => symbol.Address).ToHashSet();
+        Assert(oracle.Count == 158, "The pinned fixture linker map changed its method dictionaries.");
         Assert(references.Values.Count > 20, "Expected useful method dictionary references.");
         Assert(references.Values.All(reference => oracle.Contains(reference.Context)),
             "Context inference introduced a non-dictionary address.");
+
+        var directCalls = DirectLiteralCalls(image, oracle, references.Parameters);
+        var inferredCalls = references.Values.Select(reference =>
+            (reference.Instruction, reference.Target, reference.Context)).ToHashSet();
+        Assert(directCalls.Expected.Count == 26 && directCalls.Literals == 48,
+            "The pinned fixture changed its direct linker dictionary call witnesses.");
+        Assert(directCalls.Expected.IsSubsetOf(inferredCalls),
+            "A direct call with a linker-named dictionary and proven GC context parameter was missed.");
 
         foreach (var use in references.Values) {
             var parameter = references.Parameters[use.ParameterIndex];
@@ -312,7 +326,64 @@ internal static class GenericContextReferenceChecks {
 
         gc.Methods[methodIndex] = method;
         gc.Methods[logicalIndex] = logical;
-        Console.WriteLine($"Generic context references: {references.Parameters.Length}/{references.DeclaredMethodContexts} prologue arguments, {references.Values.Count} uses, {references.Values.Select(reference => reference.Context).Distinct().Count()}/{oracle.Count} method dictionaries, zero oracle false positives; {cases} adverse cases passed.");
+        Console.WriteLine($"Generic context references: {references.Parameters.Length}/{references.DeclaredMethodContexts} prologue arguments, {references.Values.Count} uses, {directCalls.Expected.Count} proven-scope calls among {directCalls.Literals} linker dictionary literals, {references.Values.Select(reference => reference.Context).Distinct().Count()}/{oracle.Count} method dictionaries, zero oracle false positives; {cases} adverse cases passed.");
+    }
+
+    private static (HashSet<(ulong Instruction, ulong Target, ulong Context)> Expected, int Literals)
+        DirectLiteralCalls(PeImage image, HashSet<ulong> dictionaries, GenericContextParameter[] parameters) {
+        var parameterByTarget = parameters.ToDictionary(parameter => parameter.Target);
+        var expected = new HashSet<(ulong Instruction, ulong Target, ulong Context)>();
+        int literals = 0;
+
+        foreach (ref readonly var section in image.Sections.AsSpan()) {
+            if (!section.Executable)
+                continue;
+
+            ReadOnlySpan<byte> bytes = image.FileData.AsSpan(section.FileOffset, section.FileSize);
+            for (int offset = 0; offset <= bytes.Length - 7; ++offset) {
+                if (bytes[offset] is not (0x48 or 0x4C)
+                    || bytes[offset + 1] != 0x8D
+                    || (bytes[offset + 2] & 0xC7) != 0x05)
+                    continue;
+
+                ulong address = image.ImageBase + section.Rva + (uint)offset;
+                long displacement = BinaryPrimitives.ReadInt32LittleEndian(bytes.Slice(offset + 3, 4));
+                ulong dictionary = checked((ulong)((long)address + 7 + displacement));
+                if (!dictionaries.Contains(dictionary))
+                    continue;
+
+                var reader = new ByteArrayCodeReader(image.FileData,
+                    section.FileOffset + offset, Math.Min(section.FileSize - offset, 48));
+                var decoder = Decoder.Create(64, reader);
+                decoder.IP = address;
+                decoder.Decode(out var load);
+                if (load.Mnemonic != Mnemonic.Lea
+                    || load.IPRelativeMemoryAddress != dictionary)
+                    continue;
+
+                ++literals;
+                int register = load.Op0Register - Register.RAX;
+                for (int step = 0; step < 4 && reader.CanReadByte; ++step) {
+                    decoder.Decode(out var instruction);
+                    if (instruction.IsInvalid)
+                        break;
+
+                    if (instruction.FlowControl is FlowControl.Call or FlowControl.UnconditionalBranch) {
+                        ulong target = instruction.NearBranchTarget;
+                        if (instruction.Op0Kind == OpKind.NearBranch64
+                            && parameterByTarget.TryGetValue(target, out var parameter)
+                            && parameter.Register == register)
+                            expected.Add((instruction.IP, target, dictionary));
+                        break;
+                    }
+
+                    if (instruction.FlowControl != FlowControl.Next)
+                        break;
+                }
+            }
+        }
+
+        return (expected, literals);
     }
 
     private static void Assert(bool condition, string message) {
