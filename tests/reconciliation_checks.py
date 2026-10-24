@@ -3,6 +3,9 @@ from pathlib import Path
 import subprocess
 import tempfile
 
+if not __debug__:
+    raise RuntimeError("Tests require Python assertions; disable optimisation.")
+
 
 def main():
     parser = argparse.ArgumentParser()

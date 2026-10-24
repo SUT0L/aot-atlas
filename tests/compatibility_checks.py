@@ -4,6 +4,9 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+if not __debug__:
+    raise RuntimeError("Tests require Python assertions; disable optimisation.")
+
 
 COMMANDS = (
     "types", "fields", "methods", "dispatch", "gvm", "templates", "dictionaries", "frozen",

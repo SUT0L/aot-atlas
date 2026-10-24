@@ -31,6 +31,7 @@ def main():
     run("dotnet", root / "tests" / "Atlas.Tests" / "bin" / "Release" / "net10.0" / "Atlas.Tests.dll",
         "--timed-cancellation")
     run(sys.executable, "tests/compatibility_filter_checks.py")
+    run(sys.executable, "tests/optimised_assertion_checks.py")
 
     dictionary = arguments.dictionary.resolve() if arguments.dictionary is not None else None
     property_probe = arguments.property.resolve() if arguments.property is not None else None

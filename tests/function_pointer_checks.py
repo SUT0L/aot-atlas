@@ -5,6 +5,9 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+if not __debug__:
+    raise RuntimeError("Tests require Python assertions; disable optimisation.")
+
 
 def check(cli, binary, directory):
     prefix = ["dotnet", str(cli)] if cli.suffix == ".dll" else [str(cli)]

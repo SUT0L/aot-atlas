@@ -5,6 +5,9 @@ import struct
 import subprocess
 import tempfile
 
+if not __debug__:
+    raise RuntimeError("Tests require Python assertions; disable optimisation.")
+
 
 def run(command):
     return subprocess.run(command, capture_output=True, text=True, encoding="utf-8", check=True)

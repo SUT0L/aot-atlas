@@ -5,6 +5,9 @@ import subprocess
 import sys
 import tempfile
 
+if not __debug__:
+    raise RuntimeError("Tests require Python assertions; disable optimisation.")
+
 
 def facts(value):
     if isinstance(value, dict):
