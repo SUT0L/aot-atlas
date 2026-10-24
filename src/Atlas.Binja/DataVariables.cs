@@ -2,26 +2,34 @@ namespace Atlas.Binja;
 
 internal sealed unsafe class DataVariables {
     private readonly nint view;
+    private readonly AnnotationReconciliation reconciliation;
     private readonly HashSet<ulong> preserved;
 
-    internal DataVariables(nint view) {
+    internal DataVariables(nint view, AnnotationReconciliation reconciliation) {
         this.view = view;
+        this.reconciliation = reconciliation;
 
         nuint count = 0;
         DataVariable* variables = Core.BNGetDataVariables(view, &count);
+        var initialUser = new HashSet<ulong>(checked((int)count));
 
         try {
             preserved = new HashSet<ulong>(checked((int)count));
 
             for (nuint i = 0; i < count; ++i) {
-                if (variables[i].AutoDiscovered == 0
-                    && !(AnnotationReconciliation.Current?.OwnsVariable(
-                        variables[i].Address, variables[i].Type, variables[i].Confidence) ?? false))
+                if (variables[i].AutoDiscovered != 0)
+                    continue;
+
+                initialUser.Add(variables[i].Address);
+                if (!reconciliation.OwnsVariable(
+                    variables[i].Address, variables[i].Type, variables[i].Confidence))
                     preserved.Add(variables[i].Address);
             }
         } finally {
             Core.BNFreeDataVariables(variables, count);
         }
+
+        reconciliation.RememberInitialUserVariables(initialUser);
     }
 
     internal bool Preserves(ulong address) => preserved.Contains(address);
@@ -29,7 +37,7 @@ internal sealed unsafe class DataVariables {
     internal void Define(ulong address, nint type) {
         // Freeze the preexisting user edits before our references can trigger new analysis definitions at addresses we have yet to annotate
         if (preserved.Contains(address)) {
-            AnnotationReconciliation.Current?.ExcludeVariable(address);
+            reconciliation.ExcludeVariable(address);
             return;
         }
 

@@ -76,6 +76,7 @@ internal sealed unsafe class AnnotationReconciliation : IDisposable {
     private readonly HashSet<string> retiredTags = [];
     private readonly List<nint> registeredTags = [];
     private readonly string temporary;
+    private HashSet<ulong>? initialUserVariables;
     private readonly bool fieldsOnly;
     private readonly CancellationToken cancellationToken;
     private bool complete;
@@ -973,6 +974,8 @@ internal sealed unsafe class AnnotationReconciliation : IDisposable {
             && Core.BNTypesEqual(type, fact.Type) != 0;
     }
 
+    internal void RememberInitialUserVariables(HashSet<ulong> addresses) => initialUserVariables = addresses;
+
     internal void ExcludeSymbol(ulong address) =>
         Exclude(new Key(Kind.Symbol, address - imageBase));
 
@@ -1543,10 +1546,48 @@ internal sealed unsafe class AnnotationReconciliation : IDisposable {
             }
         }
         cancellationToken.ThrowIfCancellationRequested();
+        RemoveGeneratedVoidVariables(validateOwned: true);
         OwnedCounts owned = Save();
         complete = true;
         CleanRetiredTags();
         return owned;
+    }
+
+    private void RemoveGeneratedVoidVariables(bool validateOwned) {
+        if (initialUserVariables is null || changes.Count == 0)
+            return;
+
+        var touched = new HashSet<ulong>();
+        foreach (var change in changes) {
+            if (change.After.Key.Kind == Kind.Reference)
+                touched.Add(imageBase + change.After.Key.Target);
+            else if (change.After.Key.Kind == Kind.Symbol)
+                touched.Add(imageBase + change.After.Key.Address);
+        }
+        if (touched.Count == 0)
+            return;
+
+        var remove = new List<ulong>();
+        nuint count = 0;
+        DataVariable* variables = Core.BNGetDataVariables(View, &count);
+        try {
+            for (nuint i = 0; i < count; ++i) {
+                ref readonly var variable = ref variables[i];
+                if (variable.AutoDiscovered != 0 || initialUserVariables.Contains(variable.Address)
+                    || !touched.Contains(variable.Address) || Core.BNGetTypeClass(variable.Type) != 0)
+                    continue;
+
+                var key = new Key(Kind.Variable, variable.Address - imageBase);
+                if (validateOwned && facts.TryGetValue(key, out var fact) && !fact.Excluded)
+                    throw new InvalidDataException($"An owned data variable became void at 0x{variable.Address:X}.");
+                remove.Add(variable.Address);
+            }
+        } finally {
+            Core.BNFreeDataVariables(variables, count);
+        }
+
+        foreach (ulong address in remove)
+            Core.BNUndefineUserDataVariable(View, address);
     }
 
     private void CleanRetiredTags() {
@@ -1808,6 +1849,7 @@ internal sealed unsafe class AnnotationReconciliation : IDisposable {
                         Restore(change.Before, change.After, retract: false);
                 }
                 CleanRetiredTags();
+                RemoveGeneratedVoidVariables(validateOwned: false);
             }
         } finally {
             disposed = true;

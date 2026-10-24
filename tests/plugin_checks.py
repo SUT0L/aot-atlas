@@ -694,6 +694,118 @@ def check_dictionary_workflow(plugin, binary, extraction, view=None):
     }
 
 
+def damage_dictionary_method_name(binary, output):
+    data = bytearray(binary.read_bytes())
+    witness = b"\x0aInner\x00\x02"
+    require(data.count(witness) == 1, "dictionary method name witness changed")
+    data[data.index(witness) + 2] = 0
+    output.write_bytes(data)
+
+
+def damage_trace_method_name(binary, output):
+    data = bytearray(binary.read_bytes())
+    witness = b"\x0aPrint\x00\x00"
+    require(data.count(witness) == 1, "trace method name witness changed")
+    data[data.index(witness) + 3] = 0
+    output.write_bytes(data)
+
+
+def check_failed_apply_rollback(plugin, binary, extraction, fault_kind, view=None):
+    recipes = extraction["dictionaries"]["recipes"]
+    verified = [slot for instance in extraction["dictionaries"]["instances"]
+                for slot in instance["slots"] if slot["status"] == "Verified"]
+    if fault_kind == "dictionary":
+        require(any("\0" in slot.get("target_method_name", "") for slot in verified
+                    if recipes[slot["recipe"]]["kind_name"] == "MethodDictionary"),
+                "damaged dictionary fixture did not retain a verified NUL name")
+    elif fault_kind == "trace":
+        require(any("\0" in entry["method_name"] for entry in extraction["methods"]["stack_trace"]),
+                "damaged trace fixture did not retain a NUL method name")
+        require(all("\0" not in slot.get("target_method_name", "") for slot in verified),
+                "trace fixture also damaged a dictionary method name")
+    else:
+        raise ValueError(f"unknown rollback fault kind: {fault_kind}")
+
+    addresses = {slot["address"] for slot in verified}
+    void_address = next(slot["value"] for slot in verified if slot["value"] in addresses)
+    user_address = min(address for address in addresses if address != void_address)
+    image_base = preferred_image_base(binary)
+
+    class MutationEvents(bn.BinaryDataNotification):
+        def __init__(self):
+            super().__init__(bn.NotificationType.TypeDefined |
+                             bn.NotificationType.DataVariableAdded |
+                             bn.NotificationType.TagAdded)
+            self.types = 0
+            self.variables = 0
+            self.tags = 0
+
+        def type_defined(self, view, name, type):
+            self.types += 1
+
+        def data_var_added(self, view, variable):
+            self.variables += 1
+
+        def tag_added(self, *args):
+            self.tags += 1
+
+    source = (bn.load(str(binary), update_analysis=False,
+                      options={"analysis.debugInfo.internal": False})
+              if view is None else nullcontext(view))
+    with source as view:
+        delta = view.start - image_base
+        view.define_user_data_var(void_address + delta, "void")
+        view.define_user_data_var(user_address + delta, "uint32_t", name="analyst_dictionary")
+        view.store_metadata("analyst:proof", b"kept")
+        view.update_analysis_and_wait()
+
+        def metadata(key):
+            try:
+                return view.query_metadata(key)
+            except KeyError:
+                return None
+
+        def snapshot():
+            return {
+                "symbols": {(symbol.address, symbol.raw_name) for symbol in view.get_symbols()
+                            if not symbol.auto},
+                "variables": {(address, str(variable.type)) for address, variable in view.data_vars.items()
+                              if not variable.auto_discovered},
+                "atlas_types": {str(name) for name in view.type_names
+                                if str(name).startswith("atlas::")},
+                "atlas_tags": {(address, tag.type.name, tag.data)
+                               for address, tag in view.get_tags(auto=False)
+                               if tag.type.name.startswith("AOT Atlas")},
+                "input_stamp": metadata("aot-atlas:apply-input"),
+                "receipt": metadata("aot-atlas:owned-annotations"),
+                "analyst_metadata": metadata("analyst:proof"),
+            }
+
+        before = snapshot()
+        require(before["analyst_metadata"] == b"kept", "analyst metadata was not created")
+        events = MutationEvents()
+        view.register_notification(events)
+        try:
+            for attempt in range(2):
+                view.set_analysis_hold(True)
+                try:
+                    plugin.apply(view, expected_status=1)
+                finally:
+                    view.set_analysis_hold(False)
+                view.update_analysis_and_wait()
+                require(snapshot() == before,
+                        f"failed plugin attempt {attempt + 1} changed analyst or Atlas annotations")
+        finally:
+            view.unregister_notification(events)
+
+        require(events.types > 0 and events.variables > 0 and events.tags > 0,
+                "failed plugin did not reach the late annotation stage")
+
+    return {"fault_kind": fault_kind, "rolled_back": True, "attempts": 2,
+            "observed_types": events.types, "observed_variables": events.variables,
+            "observed_tags": events.tags}
+
+
 def location_name(view, location, expected):
     require(location is not None and len(location.components) == 1,
             f"{expected}: value has no single physical location")
@@ -842,6 +954,12 @@ def main(argv=None):
             name: extract(paths["cli"], paths[name], temporary_directory)
             for name in ("property", "dictionary", "trace")
         }
+        damaged_dictionary = temporary_directory / "DictionaryNulMethod.exe"
+        damage_dictionary_method_name(paths["dictionary"], damaged_dictionary)
+        damaged_extraction = extract(paths["cli"], damaged_dictionary, temporary_directory)
+        damaged_trace = temporary_directory / "DictionaryNulTrace.exe"
+        damage_trace_method_name(paths["dictionary"], damaged_trace)
+        damaged_trace_extraction = extract(paths["cli"], damaged_trace, temporary_directory)
 
         result = {
             "plugin_sha256": plugin.digest,
@@ -850,6 +968,10 @@ def main(argv=None):
                 plugin, paths["property"], extractions["property"], temporary_directory),
             "dictionary": check_dictionary_workflow(
                 plugin, paths["dictionary"], extractions["dictionary"]),
+            "rollback": [
+                check_failed_apply_rollback(plugin, damaged_dictionary, damaged_extraction, "dictionary"),
+                check_failed_apply_rollback(plugin, damaged_trace, damaged_trace_extraction, "trace"),
+            ],
             "trace": check_trace_workflow(
                 plugin, paths["trace"], extractions["trace"], temporary_directory),
         }

@@ -410,7 +410,7 @@ internal static unsafe class NativeApply {
         reconciliation.RememberInputFormat(format);
 
         var ownership = new TagOwnership(view);
-        var variables = new DataVariables(view);
+        var variables = new DataVariables(view, reconciliation);
 
         var types = CollectionsMarshal.AsSpan(extraction.Types.Types);
         var pointers = CollectionsMarshal.AsSpan(extraction.Types.Pointers);
