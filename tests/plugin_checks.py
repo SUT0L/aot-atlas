@@ -158,7 +158,7 @@ def owned_annotation_facts(view):
         offset += size
         require(offset <= len(receipt), "Atlas ownership string is truncated")
 
-    facts = {1: set(), 2: set(), 3: set()}
+    facts = {1: set(), 2: set(), 3: set(), 5: set()}
     fact_count = read("<i")
     require(fact_count >= 0, "Atlas ownership fact count is invalid")
     for _ in range(fact_count):
@@ -610,6 +610,8 @@ def check_dictionary_workflow(plugin, binary, extraction, view=None):
         view.update_analysis_and_wait()
         delta = view.start - image_base
         verify_work_counts(view, stats)
+        owned_abi = owned_annotation_facts(view)[5]
+        require(len(owned_abi) >= 20, "dictionary fixture did not exercise owned ABI signatures")
 
         for instance, slot, recipe in verified_slots:
             kind = recipe["kind_name"]
@@ -663,6 +665,8 @@ def check_dictionary_workflow(plugin, binary, extraction, view=None):
         repeat_stats = plugin.apply(view)
         view.update_analysis_and_wait()
         verify_work_counts(view, repeat_stats)
+        require(owned_annotation_facts(view)[5] == owned_abi,
+                "repeat apply lost unchanged ABI ownership")
         for address, expected_type in slot_types.items():
             variable = view.get_data_var_at(address)
             require(variable is not None and variable.type == expected_type,
@@ -683,6 +687,40 @@ def check_dictionary_workflow(plugin, binary, extraction, view=None):
                 "repeat apply replaced the user dictionary type")
         require(view.get_data_var_at(edited_cell).type == user_type,
                 "repeat apply replaced the user dispatch cell type")
+        require(owned_annotation_facts(view)[5] == owned_abi,
+                "data variable edits changed unrelated ABI ownership")
+
+        abi_address = min(owned_abi) + view.start
+        abi_function = view.get_function_at(abi_address)
+        require(abi_function is not None, "owned ABI function is absent")
+        abi_function.set_user_type(bn.Type.function(bn.Type.int(2, False), []))
+        view.update_analysis_and_wait()
+        require(abi_function.has_user_type, "analyst ABI edit was not recorded by Binary Ninja")
+        analyst_abi = str(abi_function.type)
+        plugin.apply(view)
+        view.update_analysis_and_wait()
+        require(view.get_function_at(abi_address).has_user_type,
+                "repeat apply removed the analyst ABI override")
+        require(str(view.get_function_at(abi_address).type) == analyst_abi,
+                "repeat apply replaced the analyst ABI")
+        require(owned_annotation_facts(view)[5] == owned_abi - {min(owned_abi)},
+                "analyst ABI edit did not exclude only its own signature")
+
+        changed_rva = sorted(owned_abi)[1]
+        changed_function = view.get_function_at(changed_rva + view.start)
+        require(changed_function is not None, "second owned ABI function is absent")
+        prior_auto_type = str(changed_function.type)
+        changed_function.set_auto_type(bn.Type.function(bn.Type.int(2, False), []))
+        view.update_analysis_and_wait()
+        changed_auto_type = str(changed_function.type)
+        require(changed_auto_type != prior_auto_type,
+                "automatic ABI mutation did not change the host signature")
+        plugin.apply(view)
+        view.update_analysis_and_wait()
+        require(str(view.get_function_at(changed_rva + view.start).type) == changed_auto_type,
+                "plugin replaced a changed automatic ABI")
+        require(owned_annotation_facts(view)[5] == owned_abi - {min(owned_abi), changed_rva},
+                "changed automatic ABI was not excluded independently")
 
     return {
         "dictionary_kinds": len(required_kinds),
@@ -691,6 +729,7 @@ def check_dictionary_workflow(plugin, binary, extraction, view=None):
         "dispatch_cells": len(cells),
         "repeat_stable": True,
         "user_type_preserved": True,
+        "abi_ownership_preserved": True,
     }
 
 

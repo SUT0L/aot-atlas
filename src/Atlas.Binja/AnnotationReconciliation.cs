@@ -891,14 +891,66 @@ internal sealed unsafe class AnnotationReconciliation : IDisposable {
         writer.Write(variable.Storage);
     }
 
+    private static bool SameType(nint first, nint second) => first == second
+        || (first != 0 && second != 0 && Core.BNTypesEqual(first, second) != 0);
+
+    private static bool SameAbiSignature(nint first, nint second) {
+        if (Core.BNGetTypeClass(first) != Core.BNGetTypeClass(second))
+            return false;
+
+        ReturnValue firstReturn = Core.BNGetTypeReturnValue(first);
+        ReturnValue secondReturn = Core.BNGetTypeReturnValue(second);
+        try {
+            if (!SameType(firstReturn.Type, secondReturn.Type))
+                return false;
+        } finally {
+            Core.BNFreeType(firstReturn.Type);
+            Core.BNFreeType(secondReturn.Type);
+            Core.BNFreeValueLocation(&firstReturn.Location);
+            Core.BNFreeValueLocation(&secondReturn.Location);
+        }
+
+        nuint firstCount = 0;
+        nuint secondCount = 0;
+        FunctionParameter* firstParameters = Core.BNGetTypeParameters(first, &firstCount);
+        FunctionParameter* secondParameters = Core.BNGetTypeParameters(second, &secondCount);
+        try {
+            if (firstCount != secondCount)
+                return false;
+            for (nuint i = 0; i < firstCount; ++i) {
+                if (!SameType(firstParameters[i].Type, secondParameters[i].Type))
+                    return false;
+            }
+            return true;
+        } finally {
+            Core.BNFreeTypeParameterList(firstParameters, firstCount);
+            Core.BNFreeTypeParameterList(secondParameters, secondCount);
+        }
+    }
+
+    private static bool SameAbiMetadata(Fact current, Fact expected) {
+        if (current.Bytes.AsSpan().SequenceEqual(expected.Bytes))
+            return true;
+
+        // Binary Ninja can raise the automatic can-return confidence after analysis.
+        // The can-return value and every other ABI property must still match.
+        ReadOnlySpan<byte> observed = current.Bytes;
+        ReadOnlySpan<byte> saved = expected.Bytes;
+        return current.Automatic && observed.Length == saved.Length && observed.Length >= 3
+            && observed[..^3].SequenceEqual(saved[..^3])
+            && observed[^2..].SequenceEqual(saved[^2..]);
+    }
+
     private static bool Equal(Fact? current, Fact expected) => current != null
         && current.Automatic == expected.Automatic
         && current.Confidence == expected.Confidence
         && EqualSymbol(current.Symbol, expected.Symbol)
         && current.Text.AsSpan().SequenceEqual(expected.Text)
-        && current.Bytes.AsSpan().SequenceEqual(expected.Bytes)
+        && (expected.Key.Kind == Kind.Abi ? SameAbiMetadata(current, expected)
+            : current.Bytes.AsSpan().SequenceEqual(expected.Bytes))
         && current.Size == expected.Size
-        && (current.Type == expected.Type || (current.Type != 0 && expected.Type != 0 && Core.BNTypesEqual(current.Type, expected.Type) != 0));
+        && (SameType(current.Type, expected.Type)
+            || expected.Key.Kind == Kind.Abi && SameAbiSignature(current.Type, expected.Type));
 
     private static bool EqualSymbol(SymbolSnapshot? current, SymbolSnapshot? expected) => current == expected
         || (current != null && expected != null
