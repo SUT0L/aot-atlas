@@ -1,6 +1,7 @@
 """Run check_live_strings inside the connected Binary Ninja MCP host on a fresh DictionaryProbe view."""
 
 import ctypes
+import struct
 
 
 class ApplyStats(ctypes.Structure):
@@ -61,13 +62,26 @@ def check_live_strings(view, plugin_path, wait_for_analysis):
                         for tag in view.get_tags_at(address)),
                     f"Unreferenced candidate lost its low impact tag at 0x{address:X}")
 
+    def check_receipt():
+        receipt = view.query_metadata("aot-atlas:owned-annotations")
+        require(isinstance(receipt, bytes) and receipt[:8] == b"ATOWN001",
+                "The Atlas ownership receipt is missing or has the wrong format")
+        snapshot_bytes = struct.unpack_from("<I", receipt, 8)[0]
+        require(12 + snapshot_bytes + 4 <= len(receipt),
+                "The Atlas ownership receipt has an incomplete type snapshot or record count")
+        fact_count = struct.unpack_from("<I", receipt, 12 + snapshot_bytes)[0]
+        require(fact_count > 0, "The Atlas ownership receipt lost its annotation facts")
+        return fact_count
+
     first = apply()
     check_arrays()
     check_unreferenced()
+    first_facts = check_receipt()
     wait_for_analysis()
     second = apply()
     check_arrays()
     check_unreferenced()
+    require(check_receipt() == first_facts, "Repeat application changed the ownership fact count")
     require(second.data_variables == first.data_variables,
             "Repeat application changed the number of defined variables")
 
@@ -75,6 +89,7 @@ def check_live_strings(view, plugin_path, wait_for_analysis):
     view.define_user_data_var(edited_address, "uint32_t")
     third = apply()
     check_unreferenced()
+    require(check_receipt() == first_facts, "User type preservation changed the ownership fact count")
     edited = view.get_data_var_at(edited_address)
     require(edited is not None and not edited.auto_discovered and str(edited.type) == "uint32_t",
             "Repeat application replaced an analyst's string type")

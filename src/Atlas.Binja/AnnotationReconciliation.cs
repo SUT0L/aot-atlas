@@ -466,15 +466,18 @@ internal sealed unsafe class AnnotationReconciliation : IDisposable {
                 if (Core.BNFinalizeTypeLibrary(library) == 0 || Core.BNWriteTypeLibraryToFile(library, value) == 0)
                     throw new IOException("Binary Ninja could not save the Atlas annotation type snapshot.");
             }
-            byte[] snapshot = File.ReadAllBytes(temporary);
-            using var output = new MemoryStream(checked(12 + snapshot.Length + (int)records.Length));
-            output.Write("ATOWN001"u8);
-            using var header = new BinaryWriter(output, Encoding.UTF8, leaveOpen: true);
-            header.Write(snapshot.Length);
-            output.Write(snapshot);
+            int recordLength = checked((int)records.Length);
+            byte[] bytes;
+            int snapshotLength;
+            using (var snapshot = File.OpenRead(temporary)) {
+                snapshotLength = checked((int)snapshot.Length);
+                bytes = new byte[checked(12 + snapshotLength + recordLength)];
+                "ATOWN001"u8.CopyTo(bytes);
+                BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(8), snapshotLength);
+                snapshot.ReadExactly(bytes.AsSpan(12, snapshotLength));
+            }
             records.Position = 0;
-            records.CopyTo(output);
-            byte[] bytes = output.ToArray();
+            records.ReadExactly(bytes.AsSpan(12 + snapshotLength, recordLength));
             cancellationToken.ThrowIfCancellationRequested();
 
             var keyValue = new Key(Kind.Metadata, Id: "aot-atlas:owned-annotations");
