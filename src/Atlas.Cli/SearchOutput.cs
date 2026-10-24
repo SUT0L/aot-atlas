@@ -4,6 +4,47 @@ using System.Text.Json;
 using Atlas;
 
 internal static class SearchOutput {
+    internal static int WriteTypes(Utf8JsonWriter json, string inputSha256,
+        Extraction extraction, string query) {
+        var names = extraction.Names;
+        var types = CollectionsMarshal.AsSpan(extraction.Types.Types);
+
+        json.WriteStartObject();
+        json.WriteString("operation", "search");
+        json.WriteNumber("schema_version", 1);
+        json.WriteString("scope", "types");
+        json.WriteString("input_sha256", inputSha256);
+        ExtractionStatusOutput.Write(json, extraction);
+        json.WriteString("map_format", extraction.Maps.Format switch {
+            MapFormat.Legacy => "legacy",
+            MapFormat.Metadata => "metadata",
+            _ => "unknown"
+        });
+        JsonOutput.WriteString(json, "query", query);
+        json.WriteString("comparison", "ordinal_ignore_case");
+        json.WriteStartArray("matches");
+
+        int hits = 0;
+
+        for (int i = 0; i < types.Length; ++i) {
+            if (!names.Values[i].Contains(query, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            json.WriteStartObject();
+            json.WriteString("kind", "type");
+            json.WriteNumber("address", types[i].Address);
+            JsonOutput.WriteString(json, "name", names.Values[i]);
+            json.WriteBoolean("name_complete", names.Complete[i]);
+            json.WriteEndObject();
+            ++hits;
+        }
+
+        json.WriteEndArray();
+        json.WriteNumber("match_count", hits);
+        MetadataIdentityOutput.EndObject(json, extraction.Metadata, extraction.Signatures);
+        return hits;
+    }
+
     internal static int Write(Utf8JsonWriter json, string inputSha256, AnalysisProducts products, string query) {
         var extraction = products.Extraction;
         var image = extraction.Image;

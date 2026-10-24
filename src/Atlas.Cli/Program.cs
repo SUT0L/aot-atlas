@@ -7,6 +7,7 @@ long invocationAllocated = GC.GetAllocatedBytesForCurrentThread();
 long invocationProcessAllocated = GC.GetTotalAllocatedBytes(precise: true);
 MapFormat requestedFormat = MapFormat.Auto;
 bool requireComplete = false;
+bool typesOnly = false;
 
 string command = args.Length == 0 ? "" : args[0];
 var plan = CommandPlan.For(command);
@@ -21,6 +22,9 @@ bool mapFormatSpecified = false;
 for (int index = positionalCount; validArguments && index < args.Length;) {
     if (args[index] == "--require-complete" && command == "extract" && !requireComplete) {
         requireComplete = true;
+        ++index;
+    } else if (args[index] == "--types-only" && search && !typesOnly) {
+        typesOnly = true;
         ++index;
     } else if (args[index] == "--map-format" && plan.AcceptsMapFormat
         && !mapFormatSpecified && index + 1 < args.Length) {
@@ -257,10 +261,11 @@ try {
 
             long mapsEnd = Stopwatch.GetTimestamp();
 
-            if (plan.Stages is { } stages) {
-                var products = plan.Products == AnalysisProduct.None ? null
+            if ((typesOnly ? ExtractionStage.RuntimeTypes : plan.Stages) is { } stages) {
+                var requestedProducts = typesOnly ? AnalysisProduct.None : plan.Products;
+                var products = requestedProducts == AnalysisProduct.None ? null
                     : new AnalysisProducts(image, rtr, metadataBuilder, maps, fixups,
-                        requested: plan.Products, stages: stages, cancellationToken: cancellationToken);
+                        requested: requestedProducts, stages: stages, cancellationToken: cancellationToken);
                 var extraction = products?.Extraction
                     ?? new Extraction(image, rtr, metadataBuilder, maps, fixups, stages, cancellationToken);
                 var metadata = extraction.Metadata;
@@ -294,7 +299,9 @@ try {
 
                     using (var stream = new OutputFileStream(temporaryOutput))
                     using (var json = JsonOutput.CreateWriter(stream, cancellationToken))
-                        hits = SearchOutput.Write(json, inputSha256, products!, args[3]);
+                        hits = typesOnly
+                            ? SearchOutput.WriteTypes(json, inputSha256, extraction, args[3])
+                            : SearchOutput.Write(json, inputSha256, products!, args[3]);
 
                     PublishOutput();
                     Console.WriteLine($"{hits} search results.");
@@ -504,7 +511,7 @@ try {
 int Usage() {
     Console.Error.WriteLine("Usage: aot-atlas extract <binary> <output.json> [--map-format legacy|metadata] [--require-complete]");
     Console.Error.WriteLine("       aot-atlas <inspect|sections|metadata|maps|types|methods|dispatch|dictionaries|runtime-helpers|properties|templates|statics|fields|frozen|enums|gvm|marshalling|typemaps|pinvoke|code|strings|resources|linkage|unwind|exceptions|gcinfo|generic-context|fat-function-pointers> <binary> <output.json> [--map-format legacy|metadata]");
-    Console.Error.WriteLine("       aot-atlas search <binary> <output.json> <query> [--map-format legacy|metadata]");
+    Console.Error.WriteLine("       aot-atlas search <binary> <output.json> <query> [--types-only] [--map-format legacy|metadata]");
     Console.Error.WriteLine("       aot-atlas header <binary> <output.h> [--map-format legacy|metadata]");
     Console.Error.WriteLine("       aot-atlas dispatch-cells <binary> <output.json> [--map-format legacy|metadata]");
     Console.Error.WriteLine("       aot-atlas resolve-dispatch <binary> <output.json> <receiver-VA-hex> <interface-VA-hex> <slot-decimal> [--map-format legacy|metadata]");
