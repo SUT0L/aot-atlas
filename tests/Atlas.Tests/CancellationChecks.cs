@@ -2,6 +2,37 @@ using System.Diagnostics;
 using Atlas;
 
 internal static class CancellationChecks {
+    internal static void RunTimedFixups() {
+        const int bytes = 64 * 1024 * 1024;
+        var image = PeFixture.Create(new byte[bytes], ".rdata", 0x40000040);
+        var section = new RtrSection(308, 0, image.ImageBase + 0x1000, bytes);
+
+        using var cancellation = new CancellationTokenSource();
+        long allocated = GC.GetAllocatedBytesForCurrentThread();
+        long start = Stopwatch.GetTimestamp();
+        cancellation.CancelAfter(10);
+        Assert(!cancellation.IsCancellationRequested,
+            "The fixup cancellation test started with an already cancelled token.");
+
+        Cancel(() => RuntimeTables.Fixups(image, section, cancellation.Token));
+
+        long elapsedBytes = GC.GetAllocatedBytesForCurrentThread() - allocated;
+        Assert(elapsedBytes >= bytes * 2L,
+            "Fixup cancellation happened before the full table destination was allocated.");
+        Assert(Stopwatch.GetElapsedTime(start).TotalMilliseconds >= 10,
+            "Fixup cancellation happened before the scheduled timer elapsed.");
+        Assert(Stopwatch.GetElapsedTime(start).TotalSeconds < 5,
+            "Fixup cancellation did not bound the long table read.");
+
+        var small = PeFixture.Create(new byte[16], ".rdata", 0x40000040);
+        var retry = RuntimeTables.Fixups(small,
+            new RtrSection(308, 0, small.ImageBase + 0x1000, 16));
+        Assert(retry.Length == 4 && retry[0] == small.ImageBase + 0x1000
+            && retry[3] == small.ImageBase + 0x100C,
+            "Fixup table reading could not retry after timed cancellation.");
+        Console.WriteLine("Cancellation: timed fixup traversal stopped after destination allocation and retry passed.");
+    }
+
     internal static void Run(ReadOnlySpan<string> binaries) {
         CheckLongBatches();
 

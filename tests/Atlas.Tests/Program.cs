@@ -294,6 +294,11 @@ if (args.Length > 1 && args[0] == "--cancellation") {
     return;
 }
 
+if (args.Length == 1 && args[0] == "--timed-cancellation") {
+    CancellationChecks.RunTimedFixups();
+    return;
+}
+
 if (args.Length == 3 && args[0] == "--frozen-runtime-types") {
     FrozenRuntimeTypeChecks.Run(args[1], args[2]);
     return;
