@@ -135,7 +135,7 @@ if (args.Length > 1 && args[0] == "--prepared-analysis") {
     return;
 }
 
-if (args.Length is 3 or 4 && args[0] == "--metadata-producers") {
+if (args.Length > 1 && args[0] == "--metadata-producers") {
     MetadataProducerChecks.Run(args.AsSpan(1));
     return;
 }

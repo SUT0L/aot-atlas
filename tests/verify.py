@@ -173,6 +173,9 @@ def main():
     if windows:
         run("dotnet", "build", runtime_project, "-c", "Release", "-t:RuntimeChecks",
             f"-p:RuntimeSourceRoot={runtime_source}")
+        run("dotnet", test_assembly, "--metadata-producers",
+            *(root / "artifacts" / "runtime-checks" / "probes" / framework
+              / "MetadataMembersProbe.exe" for framework in ("net8.0", "net9.0", "net10.0")))
         runtime_reader = (root / "artifacts" / "runtime-checks" / "reader-net10.0" / "bin"
                           / "RuntimeChecks" / "release" / "RuntimeChecks.dll")
     else:

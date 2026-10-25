@@ -1,24 +1,23 @@
 using Atlas;
 
 internal static class MetadataProducerChecks {
-    internal static void Run(ReadOnlySpan<string> blobs) {
-        if (blobs.Length is < 2 or > 3)
-            throw new ArgumentException("Expected rich-attribute and type-specification metadata blobs, with an optional defaults blob.");
+    internal static void Run(ReadOnlySpan<string> binaries) {
+        if (binaries.IsEmpty)
+            throw new ArgumentException("Expected at least one compiled metadata producer.");
 
-        var rich = Read(blobs[0]);
-        CheckRichArguments(rich);
-        CheckDefaults(rich);
+        foreach (string binary in binaries) {
+            var metadata = Read(binary);
+            CheckRichArguments(metadata);
+            CheckTypeSpecifications(metadata);
+            CheckDefaults(metadata);
+        }
 
-        CheckTypeSpecifications(Read(blobs[1]));
-
-        if (blobs.Length == 3)
-            CheckDefaults(Read(blobs[2]));
-
-        Console.WriteLine("Compiler metadata producers: ten typed attribute arguments, six typeof shapes and source-declared field/parameter defaults matched.");
+        Console.WriteLine($"Compiler metadata producers: {binaries.Length} artifacts each matched ten typed attribute arguments, six typeof shapes and source-declared field/parameter defaults.");
     }
 
     private static MetadataBuilder Read(string path) {
-        var metadata = new MetadataBuilder(File.ReadAllBytes(path), 7);
+        var image = PeImage.ReadFile(path);
+        var metadata = MetadataBuilder.FromImage(image, ReadyToRun.Read(image));
         metadata.ReadDefinitions();
 
         return metadata;

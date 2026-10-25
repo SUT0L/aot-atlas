@@ -3,5 +3,6 @@
     <TargetFramework Condition="'$(ProbeFramework)' != ''">$(ProbeFramework)</TargetFramework>
     <OutputType>Exe</OutputType>
     <PublishAot>true</PublishAot>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 </Project>
