@@ -73,6 +73,9 @@ def main():
         run("dotnet", "publish", "tests/GcArrayShapeProbe/GcArrayShapeProbe.csproj",
             "-c", "Release", "-r", rid, "--self-contained",
             "--output", output / "gc-array")
+        run("dotnet", "publish", "tests/ResourceProbe/ResourceProbe.csproj",
+            "-c", "Release", "-r", rid, "--self-contained",
+            "--output", output / "resource")
         if string_probe is None:
             run("dotnet", "publish", "tests/StringProbe/StringProbe.csproj",
                 "-c", "Release", "-r", rid, "--self-contained",
@@ -139,6 +142,10 @@ def main():
             output / "gc-array" / "GcArrayShapeProbe.exe",
             output / "gc-array" / "GcArrayShapeProbe.map",
             output / "gc-array" / "types.json")
+        run(sys.executable, "tests/resource_oracle_checks.py", cli,
+            output / "resource" / "ResourceProbe.exe",
+            root / "tests" / "golden" / "ResourceProbe.resources.json",
+            output / "resource" / "resources.json")
     if string_probe is not None:
         run(sys.executable, "tests/string_precision_checks.py", cli, string_probe, string_oracle,
             output / "string-precision.json")
