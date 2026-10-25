@@ -252,6 +252,7 @@ public static unsafe class Plugin {
                 + $"read/copy {measurement.Read.Seconds * 1000:F1} ms, hash {measurement.Hash.Seconds * 1000:F1} ms, "
                 + $"preparation {measurement.Preparation.Seconds * 1000:F1} ms, evidence {measurement.Evidence.Seconds * 1000:F1} ms, "
                 + $"preparation attempts {measurement.PreparationAttempts}, input revalidation {measurement.InputRevalidation.Seconds * 1000:F1} ms, "
+                + $"input settling {measurement.InputSettling.Seconds * 1000:F1} ms, "
                 + $"publication wait {measurement.PublicationWait.Seconds * 1000:F1} ms, "
                 + $"application {measurement.Application.Seconds * 1000:F1} ms, ownership cleanup {measurement.OwnershipCleanup.Seconds * 1000:F1} ms, "
                 + $"host wait {waitSeconds * 1000:F1} ms, "

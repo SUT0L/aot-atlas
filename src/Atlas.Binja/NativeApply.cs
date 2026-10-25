@@ -16,13 +16,15 @@ internal readonly record struct NativeApplyMeasurement(
     AnalysisMeasurement Application,
     AnalysisMeasurement OwnershipCleanup,
     AnalysisMeasurement InputRevalidation,
+    AnalysisMeasurement InputSettling,
     AnalysisMeasurement PublicationWait,
     int PreparationAttempts) {
     internal NativeApplyMeasurement Add(NativeApplyMeasurement other) => new(
         Add(ValidationAndOwnership, other.ValidationAndOwnership), Add(Read, other.Read), Add(Hash, other.Hash),
         Add(Preparation, other.Preparation), Add(Evidence, other.Evidence), Add(Application, other.Application),
         Add(OwnershipCleanup, other.OwnershipCleanup), Add(InputRevalidation, other.InputRevalidation),
-        Add(PublicationWait, other.PublicationWait), PreparationAttempts + other.PreparationAttempts);
+        Add(InputSettling, other.InputSettling), Add(PublicationWait, other.PublicationWait),
+        PreparationAttempts + other.PreparationAttempts);
 
     private static AnalysisMeasurement Add(AnalysisMeasurement first, AnalysisMeasurement second) =>
         new(first.Seconds + second.Seconds, first.AllocatedBytes + second.AllocatedBytes);
@@ -100,7 +102,13 @@ internal static unsafe class NativeApply {
                     return stats;
                 }
 
-                cancellationToken.ThrowIfCancellationRequested();
+                long settleStart = Stopwatch.GetTimestamp();
+                long settleAllocated = GC.GetAllocatedBytesForCurrentThread();
+                WaitForStableInput(currentView.Handle, cancellationToken);
+                var settling = AnalysisMeasurement.Since(settleStart, settleAllocated);
+                measurement = measurement with { InputSettling = new(
+                    measurement.InputSettling.Seconds + settling.Seconds,
+                    measurement.InputSettling.AllocatedBytes + settling.AllocatedBytes) };
             }
         } finally {
             long cleanupStart = Stopwatch.GetTimestamp();
@@ -249,7 +257,7 @@ internal static unsafe class NativeApply {
         published = applied;
         artifacts = publishedArtifacts;
         measurement = new(ownershipMeasurement, readMeasurement, hashMeasurement, preparationMeasurement,
-            evidenceMeasurement, applyMeasurement, cleanupMeasurement, revalidationMeasurement,
+            evidenceMeasurement, applyMeasurement, cleanupMeasurement, revalidationMeasurement, default,
             new(publication.WaitSeconds, publication.WaitAllocatedBytes), 1);
 
         return stats;
@@ -264,25 +272,53 @@ internal static unsafe class NativeApply {
             if (length != stats.InputBytes)
                 return false;
 
-            cancellationToken.ThrowIfCancellationRequested();
-            nint buffer = Core.BNReadViewBuffer(raw, 0, length);
-            if (buffer == 0)
-                throw new IOException("Binary Ninja could not read the raw view.");
+            Span<byte> hash = stackalloc byte[32];
+            HashRaw(raw, length, hash, cancellationToken);
+            return hash.SequenceEqual(new ReadOnlySpan<byte>(stats.InputSha256, 32));
+        } finally {
+            Core.BNFreeBinaryView(raw);
+        }
+    }
 
-            try {
-                cancellationToken.ThrowIfCancellationRequested();
-                if (Core.BNGetDataBufferLength(buffer) != length)
-                    throw new IOException("Binary Ninja returned an incomplete raw view.");
+    private static void WaitForStableInput(nint view, CancellationToken cancellationToken) {
+        nint raw = RetainRawView(view);
+        try {
+            Span<byte> previous = stackalloc byte[32];
+            Span<byte> current = stackalloc byte[32];
+            ulong length = Core.BNGetViewLength(raw);
+            HashRaw(raw, length, previous, cancellationToken);
 
-                Span<byte> hash = stackalloc byte[32];
-                Hash(new ReadOnlySpan<byte>(Core.BNGetDataBufferContents(buffer), checked((int)length)), hash,
-                    cancellationToken);
-                return hash.SequenceEqual(new ReadOnlySpan<byte>(stats.InputSha256, 32));
-            } finally {
-                Core.BNFreeDataBuffer(buffer);
+            while (true) {
+                Task.Delay(100, cancellationToken).GetAwaiter().GetResult();
+                ulong currentLength = Core.BNGetViewLength(raw);
+                HashRaw(raw, currentLength, current, cancellationToken);
+                if (currentLength == length && current.SequenceEqual(previous))
+                    return;
+
+                length = currentLength;
+                current.CopyTo(previous);
             }
         } finally {
             Core.BNFreeBinaryView(raw);
+        }
+    }
+
+    private static void HashRaw(nint raw, ulong length, Span<byte> destination,
+        CancellationToken cancellationToken) {
+        cancellationToken.ThrowIfCancellationRequested();
+        nint buffer = Core.BNReadViewBuffer(raw, 0, length);
+        if (buffer == 0)
+            throw new IOException("Binary Ninja could not read the raw view.");
+
+        try {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (Core.BNGetDataBufferLength(buffer) != length)
+                throw new IOException("Binary Ninja returned an incomplete raw view.");
+
+            Hash(new ReadOnlySpan<byte>(Core.BNGetDataBufferContents(buffer), checked((int)length)),
+                destination, cancellationToken);
+        } finally {
+            Core.BNFreeDataBuffer(buffer);
         }
     }
 
