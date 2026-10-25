@@ -386,9 +386,31 @@ def property_tag(view, address):
     return matches
 
 
-def verify_property_projection(view, extraction, image_base, delta):
+def source_property_layouts(binary):
+    lines = run([str(binary)]).splitlines()
+    require(lines and lines[-1] == "interface-projections-executed",
+            "property fixture did not complete its live observations")
+
+    layouts = {}
+    for line in lines:
+        if not line.startswith("layout|"):
+            continue
+
+        fields = line.split("|")
+        require(len(fields) == 5, f"invalid property fixture observation: {line}")
+        key = (fields[1], fields[2])
+        require(key not in layouts, f"duplicate property fixture observation: {key}")
+        layouts[key] = (int(fields[3]), int(fields[4]))
+
+    require(len(layouts) == 10,
+            f"property fixture produced {len(layouts)} live layouts instead of 10")
+    return layouts
+
+
+def verify_property_projection(view, extraction, image_base, delta, source_layouts):
     expected = extraction["properties"]
     projections_by_owner = {}
+    source_matches = set()
 
     for projection in expected["projections"]:
         projections_by_owner.setdefault(projection["owner"], []).append(projection)
@@ -419,6 +441,22 @@ def verify_property_projection(view, extraction, image_base, delta):
 
         require(actual_members == expected_members, f"{property_id}: projected members differ")
 
+        for projection in projections:
+            source_key = (projection["owner_name"], projection["property_name"])
+            if source_key not in source_layouts:
+                continue
+
+            source_matches.add(source_key)
+            member_name = property_member_name(projection)
+            members = [member for member in property_type.members
+                       if member.name == member_name]
+            require(len(members) == 1,
+                    f"{property_id}: missing live observed member {member_name}")
+            observed = (members[0].offset, members[0].type.width)
+            require(observed == source_layouts[source_key],
+                    f"{property_id}: {member_name} differs from the live field layout: "
+                    f"host={observed}, source={source_layouts[source_key]}")
+
         property_tag(view, owner + delta)
 
         method_table = view.get_data_var_at(owner + delta)
@@ -436,6 +474,8 @@ def verify_property_projection(view, extraction, image_base, delta):
         require(function.type.calling_convention.name == "win64",
                 f"0x{address:X}: property accessor has the wrong calling convention")
 
+    require(len(source_matches) == 8,
+            f"only {len(source_matches)} live observed property fields reached Binary Ninja")
     return projections_by_owner, expected["accessor_functions"]
 
 
@@ -475,6 +515,7 @@ def verify_property_annotation_bounds(view, extraction, image_base, delta):
 def check_property_workflow(plugin, binary, extraction, temporary_directory,
                             view=None, open_database=None, open_rebased=None):
     image_base = preferred_image_base(binary)
+    source_layouts = source_property_layouts(binary)
     database = temporary_directory / "property-check.bndb"
 
     source = (bn.load(str(binary), update_analysis=False,
@@ -497,7 +538,7 @@ def check_property_workflow(plugin, binary, extraction, temporary_directory,
         verify_work_counts(view, stats)
 
         owners, accessors = verify_property_projection(
-            view, extraction, image_base, view.start - image_base)
+            view, extraction, image_base, view.start - image_base, source_layouts)
         verify_property_accessor_symbols(view, extraction, view.start - image_base)
         verify_property_annotation_bounds(view, extraction, image_base, view.start - image_base)
 
@@ -507,7 +548,8 @@ def check_property_workflow(plugin, binary, extraction, temporary_directory,
         view.update_analysis_and_wait()
         verify_work_counts(view, repeat_stats)
 
-        verify_property_projection(view, extraction, image_base, view.start - image_base)
+        verify_property_projection(view, extraction, image_base, view.start - image_base,
+                                   source_layouts)
         verify_property_accessor_symbols(view, extraction, view.start - image_base)
         verify_property_annotation_bounds(view, extraction, image_base, view.start - image_base)
 
@@ -540,7 +582,8 @@ def check_property_workflow(plugin, binary, extraction, temporary_directory,
         plugin.apply(view)
         view.update_analysis_and_wait()
 
-        verify_property_projection(view, extraction, image_base, view.start - image_base)
+        verify_property_projection(view, extraction, image_base, view.start - image_base,
+                                   source_layouts)
         require(view.get_function_at(address).name == "atlas_fixture_user_property",
                 "repeat apply replaced the user function name")
         require(str(view.get_function_at(address).type) == user_type,
@@ -592,7 +635,8 @@ def check_property_workflow(plugin, binary, extraction, temporary_directory,
         restored.update_analysis_and_wait()
         verify_persisted_annotations(restored, saved_annotations)
 
-        verify_property_projection(restored, extraction, image_base, restored.start - image_base)
+        verify_property_projection(restored, extraction, image_base, restored.start - image_base,
+                                   source_layouts)
         require(restored.get_function_at(address).name == "atlas_fixture_user_property",
                 "saved database lost the user function name")
         require(str(restored.get_function_at(address).type) == user_type,
@@ -627,7 +671,8 @@ def check_property_workflow(plugin, binary, extraction, temporary_directory,
 
         rebased.update_analysis_and_wait()
 
-        verify_property_projection(rebased, extraction, image_base, rebased.start - image_base)
+        verify_property_projection(rebased, extraction, image_base, rebased.start - image_base,
+                                   source_layouts)
         verify_property_accessor_symbols(rebased, extraction, rebased.start - image_base)
 
     return {
