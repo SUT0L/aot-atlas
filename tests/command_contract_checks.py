@@ -107,6 +107,10 @@ def main():
                 f"{command} omitted its declared {field} output")
 
     embedded = documents["extract"]
+    require(documents["code"].get("method_dictionary_metadata_references_scope")
+            == "parsed_method_records", "Code omitted its method dictionary classification scope")
+    require(documents["generic-context"].get("references_scope")
+            == "gc_header_declared_direct_calls", "Generic context omitted its reference scope")
     for command, document in documents.items():
         key = command.replace("-", "_")
         if key in embedded:

@@ -69,6 +69,8 @@ def check(cli, binary, directory):
     healthy = run(binary)
     aggregate = run(binary, "extract")
     assert aggregate["fat_function_pointers"] == healthy, "Full extraction changed standalone pointer facts."
+    assert aggregate["generic_context"]["references_scope"] == "gc_header_declared_direct_calls"
+    assert aggregate["code"]["method_dictionary_metadata_references_scope"] == "parsed_method_records"
 
     for command, section in (("gcinfo", "gcinfo"), ("generic-context", "generic_context")):
         assert run(binary, command) == aggregate[section], (command, "Full/standalone evidence differs.")

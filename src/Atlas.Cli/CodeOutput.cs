@@ -100,6 +100,7 @@ internal static class CodeOutput {
             json.WriteEndArray();
         }
 
+        json.WriteString("method_dictionary_metadata_references_scope", "parsed_method_records");
         json.WriteStartArray("metadata_references");
 
         foreach (ref readonly var reference in CollectionsMarshal.AsSpan(code.MetadataReferences)) {

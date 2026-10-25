@@ -77,8 +77,8 @@ internal static class GenericContextReferenceChecks {
             (reference.Instruction, reference.Target, reference.Context)).ToHashSet();
         Assert(directCalls.Expected.Count == 26 && directCalls.Literals == 48,
             "The pinned fixture changed its direct linker dictionary call witnesses.");
-        Assert(directCalls.Expected.IsSubsetOf(inferredCalls),
-            "A direct call with a linker-named dictionary and proven GC context parameter was missed.");
+        Assert(directCalls.Expected.SetEquals(inferredCalls),
+            "Proven context calls differ from the linker-named direct dictionary calls in scope.");
 
         foreach (var use in references.Values) {
             var parameter = references.Parameters[use.ParameterIndex];

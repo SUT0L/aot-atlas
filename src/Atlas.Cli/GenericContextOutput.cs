@@ -30,6 +30,7 @@ internal static class GenericContextOutput {
 
         json.WriteNumber("declared_method_contexts", references.DeclaredMethodContexts);
         json.WriteNumber("proven_context_parameters", references.Parameters.Length);
+        json.WriteString("references_scope", "gc_header_declared_direct_calls");
 
         json.WriteStartArray("parameters");
 
