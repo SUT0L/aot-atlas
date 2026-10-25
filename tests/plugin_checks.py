@@ -236,6 +236,10 @@ def verify_work_counts(view, stats, exact_tags=False):
         actual = Counter((address, tag.id, tag.data, tag.type.name)
                          for address, tag in view.get_tags(auto=False)
                          if tag.type.name.startswith("AOT Atlas"))
+        actual.update((function.start, tag.id, tag.data, tag.type.name)
+                      for function in view.functions
+                      for tag in function.get_function_tags(auto=False)
+                      if tag.type.name.startswith("AOT Atlas"))
         require(actual == expected,
                 f"Atlas tags differ from owned facts: "
                 f"missing={list((expected - actual).items())[:3]!r}, "
