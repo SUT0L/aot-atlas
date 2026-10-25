@@ -69,7 +69,8 @@
     <Exec Condition="!Exists('$(RuntimeChecksRoot)\source-%(RuntimeReader.Identity)\src\coreclr\tools\Common\Internal\Metadata\NativeFormat\NativeMetadataReader.cs')"
           Command="git -C &quot;$(RuntimeSourceRepository)&quot; archive --format=tar --output=&quot;$(RuntimeChecksRoot)\%(RuntimeReader.Identity).tar&quot; &quot;%(RuntimeReader.Identity)&quot; src/coreclr/tools/Common/Internal/NativeFormat src/coreclr/tools/Common/Internal/Metadata/NativeFormat" />
     <Exec Condition="!Exists('$(RuntimeChecksRoot)\source-%(RuntimeReader.Identity)\src\coreclr\tools\Common\Internal\Metadata\NativeFormat\NativeMetadataReader.cs')"
-          Command="tar -xf &quot;$(RuntimeChecksRoot)\%(RuntimeReader.Identity).tar&quot; -C &quot;$(RuntimeChecksRoot)\source-%(RuntimeReader.Identity)&quot;" />
+          WorkingDirectory="$(RuntimeChecksRoot)"
+          Command="tar -xf &quot;%(RuntimeReader.Identity).tar&quot; -C &quot;source-%(RuntimeReader.Identity)&quot;" />
 
     <Exec Command="dotnet publish &quot;$(RuntimeProbeProject)&quot; -c &quot;$(Configuration)&quot; -r win-x64 --self-contained -p:ProbeFramework=%(RuntimeReader.Framework) -p:PublishDir=&quot;$(RuntimeChecksRoot)\probes\%(RuntimeReader.Framework)&quot;" />
 
