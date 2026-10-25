@@ -162,6 +162,9 @@ def main():
     if windows:
         run(sys.executable, "tests/cli_checks.py", "publication", cli, dictionary,
             "--query", "Dictionary")
+        run("cmd", "/c", "tests\\PeLinkageProbe\\build.cmd")
+        run(sys.executable, "tests/live_runtime_checks.py", "linkage", cli,
+            root / "artifacts" / "pe-linkage-probe")
     else:
         run(sys.executable, "tests/output_failure_checks.py", cli, dictionary)
 
