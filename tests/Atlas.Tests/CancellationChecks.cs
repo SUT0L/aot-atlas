@@ -19,8 +19,8 @@ internal static class CancellationChecks {
         long elapsedBytes = GC.GetAllocatedBytesForCurrentThread() - allocated;
         Assert(elapsedBytes >= bytes * 2L,
             "Fixup cancellation happened before the full table destination was allocated.");
-        Assert(Stopwatch.GetElapsedTime(start).TotalMilliseconds >= 10,
-            "Fixup cancellation happened before the scheduled timer elapsed.");
+        Assert(cancellation.IsCancellationRequested,
+            "Fixup reading stopped without the scheduled cancellation request.");
         Assert(Stopwatch.GetElapsedTime(start).TotalSeconds < 5,
             "Fixup cancellation did not bound the long table read.");
 
