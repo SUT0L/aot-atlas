@@ -138,7 +138,7 @@ class Plugin:
                 f"field reference apply returned {status}, expected {expected_status}")
 
 
-def owned_annotation_facts(view):
+def owned_annotation_facts(view, include_tags=False):
     receipt = memoryview(view.query_metadata("aot-atlas:owned-annotations"))
     require(receipt[:8] == b"ATOWN001", "Atlas ownership receipt has the wrong format")
     snapshot_size = struct.unpack_from("<I", receipt, 8)[0]
@@ -151,7 +151,7 @@ def owned_annotation_facts(view):
         offset += struct.calcsize(format_code)
         return value
 
-    def skip_string():
+    def read_string(capture=False):
         nonlocal offset
         size = 0
         shift = 0
@@ -162,23 +162,32 @@ def owned_annotation_facts(view):
                 break
             shift += 7
             require(shift <= 28, "Atlas ownership string length is invalid")
+        start = offset
         offset += size
         require(offset <= len(receipt), "Atlas ownership string is truncated")
+        if capture:
+            return receipt[start:offset].tobytes().decode("utf-8")
 
     facts = {1: set(), 2: set(), 3: set(), 5: set()}
+    if include_tags:
+        facts[6] = set()
     fact_count = read("<i")
     require(fact_count >= 0, "Atlas ownership fact count is invalid")
     for _ in range(fact_count):
         kind = read("<B")
         address = read("<Q")
         target = read("<Q")
-        skip_string()
+        capture_tag = include_tags and kind == 6
+        identity = read_string(capture_tag)
         excluded = read("<B")
         read("<B")
         text_count = read("<i")
         require(text_count >= 0, "Atlas ownership text count is invalid")
+        tag_text = [] if capture_tag and not excluded else None
         for _ in range(text_count):
-            skip_string()
+            value = read_string(tag_text is not None)
+            if tag_text is not None:
+                tag_text.append(value)
         read("<i")
         read("<i")
         read("<Q")
@@ -186,20 +195,27 @@ def owned_annotation_facts(view):
         if read("<B"):
             read("<B")
             for _ in range(3):
-                skip_string()
+                read_string()
             read("<B")
             read("<Q")
-            skip_string()
+            read_string()
             namespace_count = read("<i")
             require(namespace_count >= 0, "Atlas ownership namespace count is invalid")
             for _ in range(namespace_count):
-                skip_string()
+                read_string()
         size = read("<i")
         require(size >= 0, "Atlas ownership value size is invalid")
         offset += size
         require(offset <= len(receipt), "Atlas ownership value is truncated")
         if not excluded and kind in facts:
-            fact = (address, target) if kind == 3 else address
+            if kind == 3:
+                fact = (address, target)
+            elif kind == 6:
+                require(tag_text is not None and len(tag_text) == 4,
+                        "Atlas owned tag is missing its identity")
+                fact = (address, target, identity, tag_text[0], tag_text[1])
+            else:
+                fact = address
             require(fact not in facts[kind], "Atlas ownership fact is duplicated")
             facts[kind].add(fact)
 
@@ -207,13 +223,23 @@ def owned_annotation_facts(view):
     return facts
 
 
-def verify_work_counts(view, stats):
-    facts = owned_annotation_facts(view)
+def verify_work_counts(view, stats, exact_tags=False):
+    facts = owned_annotation_facts(view, include_tags=exact_tags)
     require(stats.symbols == len(facts[1]), "plugin symbol count differs from owned host facts")
     require(stats.data_variables == len(facts[2]), "plugin data variable count differs from owned host facts")
     require(stats.data_references == len(facts[3]), "plugin reference count differs from owned host facts")
 
     verify_owned_host_facts(view, facts)
+    if exact_tags:
+        expected = Counter((view.start + address, identity, data, category)
+                           for address, _, identity, data, category in facts[6])
+        actual = Counter((address, tag.id, tag.data, tag.type.name)
+                         for address, tag in view.get_tags(auto=False)
+                         if tag.type.name.startswith("AOT Atlas"))
+        require(actual == expected,
+                f"Atlas tags differ from owned facts: "
+                f"missing={list((expected - actual).items())[:3]!r}, "
+                f"extra={list((actual - expected).items())[:3]!r}")
 
 
 def verify_owned_host_facts(view, facts):
@@ -535,7 +561,7 @@ def check_property_workflow(plugin, binary, extraction, temporary_directory,
                 "plugin stats contain the wrong input hash")
         require(stats.method_tables == len(extraction["types"]["types"]),
                 "plugin stats contain the wrong MethodTable count")
-        verify_work_counts(view, stats)
+        verify_work_counts(view, stats, exact_tags=True)
 
         owners, accessors = verify_property_projection(
             view, extraction, image_base, view.start - image_base, source_layouts)
@@ -546,7 +572,7 @@ def check_property_workflow(plugin, binary, extraction, temporary_directory,
         # A second application reconciles those stronger host symbols
         repeat_stats = plugin.apply(view)
         view.update_analysis_and_wait()
-        verify_work_counts(view, repeat_stats)
+        verify_work_counts(view, repeat_stats, exact_tags=True)
 
         verify_property_projection(view, extraction, image_base, view.start - image_base,
                                    source_layouts)
@@ -824,7 +850,7 @@ def check_dictionary_workflow(plugin, binary, extraction, view=None,
 
         view.update_analysis_and_wait()
         delta = view.start - image_base
-        verify_work_counts(view, stats)
+        verify_work_counts(view, stats, exact_tags=True)
         require(len(owned_abi) >= 20, "dictionary fixture did not exercise owned ABI signatures")
         require(owned_annotation_facts(view)[5] == owned_abi,
                 "analysis changed ABI ownership without a plugin application")
@@ -895,7 +921,7 @@ def check_dictionary_workflow(plugin, binary, extraction, view=None,
         repeat_stats = plugin.apply(view)
         check_resolved_flags(owned_abi - refined_abi)
         view.update_analysis_and_wait()
-        verify_work_counts(view, repeat_stats)
+        verify_work_counts(view, repeat_stats, exact_tags=True)
         repeat_abi = owned_annotation_facts(view)[5]
         require(repeat_abi == owned_abi - refined_abi,
                 "repeat apply lost unchanged ABI ownership or reclaimed a refined signature: "
