@@ -116,6 +116,7 @@ def main():
         ("--prepared-analysis", (dictionary,)),
     ]
     if windows:
+        required_fixture_modes.append(("--properties", (property_probe, canonical_probe)))
         required_fixture_modes.append((
             "--properties", (output / "property-shared" / "PropertySharedProbe.exe",
                              output / "property-gc" / "PropertyGcProbe.exe")))
