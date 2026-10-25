@@ -5,4 +5,13 @@
     <PublishAot>true</PublishAot>
     <IlcDehydrate>true</IlcDehydrate>
   </PropertyGroup>
+  <Target Name="WriteMarshallingProbeLinkerMap" BeforeTargets="LinkNative" Condition="'$(_targetOS)' == 'win'">
+    <ItemGroup>
+      <LinkerArg Include="/MAP:&quot;$(NativeIntermediateOutputPath)MarshallingProbe.map&quot;" />
+    </ItemGroup>
+  </Target>
+  <Target Name="StageMarshallingProbeLinkerMap" AfterTargets="LinkNative" Condition="'$(_targetOS)' == 'win'">
+    <Copy SourceFiles="$(NativeIntermediateOutputPath)MarshallingProbe.map"
+          DestinationFiles="$(PublishDir)MarshallingProbe.map" />
+  </Target>
 </Project>

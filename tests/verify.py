@@ -76,6 +76,9 @@ def main():
         run("dotnet", "publish", "tests/ResourceProbe/ResourceProbe.csproj",
             "-c", "Release", "-r", rid, "--self-contained",
             "--output", output / "resource")
+        run("dotnet", "publish", "tests/MarshallingProbe/MarshallingProbe.csproj",
+            "-c", "Release", "-r", rid, "--self-contained",
+            "--output", output / "marshalling")
         if string_probe is None:
             run("dotnet", "publish", "tests/StringProbe/StringProbe.csproj",
                 "-c", "Release", "-r", rid, "--self-contained",
@@ -119,6 +122,9 @@ def main():
         required_fixture_modes.append((
             "--gc-array-elements", (output / "gc-array" / "GcArrayShapeProbe.exe",
                                     output / "gc-array" / "GcArrayShapeProbe.map")))
+        required_fixture_modes.append((
+            "--marshalling-positive", (output / "marshalling" / "MarshallingProbe.exe",
+                                       output / "marshalling" / "MarshallingProbe.map")))
     if dictionary_map is not None:
         required_fixture_modes.append(("--generic-context", (dictionary, dictionary_map)))
 
@@ -146,6 +152,10 @@ def main():
             output / "resource" / "ResourceProbe.exe",
             root / "tests" / "golden" / "ResourceProbe.resources.json",
             output / "resource" / "resources.json")
+        run(sys.executable, "tests/marshalling_oracle_checks.py", cli,
+            output / "marshalling" / "MarshallingProbe.exe",
+            root / "tests" / "golden" / "MarshallingProbe.layouts.json",
+            output / "marshalling" / "marshalling.json")
     if string_probe is not None:
         run(sys.executable, "tests/string_precision_checks.py", cli, string_probe, string_oracle,
             output / "string-precision.json")
