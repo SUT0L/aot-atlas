@@ -250,7 +250,7 @@ internal static class MetadataOutput {
             FactState(json, record.Status, record.Source);
             var source = record.Source;
             if (source.IsAvailable)
-                JsonOutput.WriteHexString(json, "bytes", facts.Bytes.Slice(source.Offset, source.Length));
+                DiagnosticBytes(json, "bytes", facts.Bytes.Slice(source.Offset, source.Length));
             else
                 json.WriteNull("bytes");
 
@@ -279,6 +279,15 @@ internal static class MetadataOutput {
             json.WriteEndObject();
         }
         json.WriteEndArray();
+    }
+
+    private static void DiagnosticBytes(Utf8JsonWriter json, string propertyName, ReadOnlySpan<byte> bytes) {
+        // Corrupt lengths can make many diagnostic ranges span the rest of the metadata blob.
+        const int maxBytes = 256;
+        JsonOutput.WriteHexString(json, propertyName, bytes[..Math.Min(bytes.Length, maxBytes)]);
+        if (bytes.Length > maxBytes) {
+            json.WriteBoolean(propertyName + "_truncated", true);
+        }
     }
 
     private static void RawFields(Utf8JsonWriter json, MetadataFacts facts, MetadataRecordId id,
@@ -310,7 +319,7 @@ internal static class MetadataOutput {
         if (reference.Value.Value != 0)
             json.WriteNumber("reference_handle", facts.RawHandle(reference.Value));
         if (field.PayloadSource.IsAvailable && field.PayloadSource.Length != 0)
-            JsonOutput.WriteHexString(json, "payload", field.Payload);
+            DiagnosticBytes(json, "payload", field.Payload);
     }
 
     private static bool ReferenceAffected(MetadataFacts facts, MetadataFact<MetadataRecordId> reference,
@@ -336,7 +345,7 @@ internal static class MetadataOutput {
         else
             json.WriteNull("value");
         FactState(json, name.Text.Status, name.Source);
-        JsonOutput.WriteHexString(json, "bytes", name.Bytes);
+        DiagnosticBytes(json, "bytes", name.Bytes);
         json.WriteEndObject();
     }
 
