@@ -195,6 +195,8 @@ public sealed class GcLayouts {
 
                 ulong start = BinaryPrimitives.ReadUInt64LittleEndian(bytes[^16..]);
                 ulong position = start;
+                ulong componentStart = type.BaseSize - 8;
+                ulong componentEnd = componentStart + (uint)type.ComponentSize;
                 Runs.EnsureCapacity(checked(Runs.Count + count));
 
                 for (int i = 0; i < count; ++i) {
@@ -203,7 +205,10 @@ public sealed class GcLayouts {
                     uint skip = BinaryPrimitives.ReadUInt32LittleEndian(item[4..]);
                     if (pointers == 0
                         || (position & 7) != 0
-                        || (skip & 7) != 0)
+                        || (skip & 7) != 0
+                        || position < componentStart
+                        || position > componentEnd
+                        || pointers > (componentEnd - position) / 8)
                         throw new InvalidDataException("Invalid pointer run in repeating GCDesc.");
 
                     Runs.Add(new GcRun(checked((uint)position), pointers, skip));
