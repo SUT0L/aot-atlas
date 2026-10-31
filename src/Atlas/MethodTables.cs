@@ -67,7 +67,7 @@ public struct MethodTable {
     public bool IsGeneric => (Flags & 0x02000000) != 0;
 
     public bool IsValueType => Kind == 0 && ElementType is >= 1 and <= 0x12 and not 0x11;
-    public uint ValueSize => IsValueType ? BaseSize - 16 - ValuePadding : 0;
+    public uint ValueSize => IsValueType ? checked(BaseSize - 16 - ValuePadding) : 0;
 }
 
 public sealed class MethodTables {
@@ -233,7 +233,7 @@ public sealed class MethodTables {
 
                 if (type.Kind == 0
                     && type.ElementType != 0x15
-                    && !type.HasComponentSize
+                    && (type.IsValueType || !type.HasComponentSize)
                     && (type.BaseSize < 24 || (type.BaseSize & 7) != 0))
                     throw new InvalidDataException($"Invalid allocation size at MethodTable 0x{type.Address:X}.");
 
