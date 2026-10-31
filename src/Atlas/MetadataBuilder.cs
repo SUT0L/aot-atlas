@@ -110,6 +110,9 @@ internal sealed partial class MetadataBuilder {
 
     internal void AddRoot(MetadataRecordId id) {
         EnsureMutable();
+        if (id.Offset > Encoding.MaxRecordOffset)
+            throw new InvalidDataException($"Metadata record offset 0x{id.Offset:X} exceeds its encoded range.");
+
         facts.AddRoot(id);
         facts.ReadRoots();
     }
@@ -129,7 +132,9 @@ internal sealed partial class MetadataBuilder {
             return "";
         if (Strings.TryGetValue(offset, out string? name))
             return name;
-        if (offset > 0x01FFFFFF || offset >= Data.Length)
+        if (offset > Encoding.MaxRecordOffset)
+            throw new InvalidDataException($"Metadata string offset 0x{offset:X} exceeds its encoded range.");
+        if (offset >= Data.Length)
             throw new InvalidDataException($"Metadata string offset 0x{offset:X} is outside the blob.");
         var value = RecordName(new(offset));
         if (!value.IsAvailable)
@@ -141,7 +146,7 @@ internal sealed partial class MetadataBuilder {
     internal IEnumerable<MetadataRecordId> ReadRecordIds() => facts.ReadRecordIds();
 
     private MetadataRecordId Id(MetadataRecordKind kind, uint offset) {
-        if (offset > 0x01FFFFFF)
+        if (offset > Encoding.MaxRecordOffset)
             throw new InvalidDataException($"Metadata record offset 0x{offset:X} exceeds its encoded range.");
         return new(kind, offset);
     }

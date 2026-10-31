@@ -63,6 +63,8 @@ public readonly record struct MetadataNameId(uint Offset) {
 }
 
 public readonly record struct MetadataEncoding(int HandleBits, bool LegacyConstants = false, bool CombinedTypeOwnership = false) {
+    internal uint MaxRecordOffset => uint.MaxValue >> HandleBits;
+
     internal MetadataRecordKind CanonicalKind(byte sourceKind) {
         if (LegacyConstants && sourceKind is >= 5 and <= 12) {
             sourceKind = sourceKind == 5 ? (byte)12 : (byte)(sourceKind - 1);
@@ -87,7 +89,7 @@ public readonly record struct MetadataEncoding(int HandleBits, bool LegacyConsta
         if (LegacyConstants && kind is >= 5 and <= 12) {
             kind = kind == 12 ? 5 : kind + 1;
         }
-        if (id.Offset > uint.MaxValue >> HandleBits) {
+        if (id.Offset > MaxRecordOffset) {
             throw new ArgumentOutOfRangeException(nameof(id));
         }
         return id.Offset << HandleBits | kind;

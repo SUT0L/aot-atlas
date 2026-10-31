@@ -40,7 +40,7 @@ public sealed partial class MetadataFacts {
             if (id.Offset == 0 || _index.ContainsKey(id.Value)) {
                 return;
             }
-            if ((byte)id.Kind > 63 || id.Kind == MetadataRecordKind.Root) {
+            if ((byte)id.Kind > 63 || id.Kind == MetadataRecordKind.Root || id.Offset > _encoding.MaxRecordOffset) {
                 throw new ArgumentOutOfRangeException(nameof(id));
             }
             if (_records.Count - 1 >= _limits.MaxRecords) {
@@ -312,7 +312,7 @@ public sealed partial class MetadataFacts {
                 ? spec.TargetKind
                 : (byte)_encoding.CanonicalKind((byte)(raw & ((1U << _encoding.HandleBits) - 1)));
             uint offset = spec.Wire == WireKind.TypedHandle ? raw : raw >> _encoding.HandleBits;
-            if (offset > 0x01FFFFFF || kind > 63 || kind == 0 && offset != 0 ||
+            if (offset > _encoding.MaxRecordOffset || kind > 63 || kind == 0 && offset != 0 ||
                 offset != 0 && spec.AllowedKinds != 0 && (spec.AllowedKinds & 1UL << kind) == 0) {
                 atom.Status |= MetadataFactStatus.InvalidHandle;
                 return;
