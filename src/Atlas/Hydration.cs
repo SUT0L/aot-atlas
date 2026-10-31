@@ -26,7 +26,12 @@ public readonly struct HydratedRegion {
 }
 
 public static class Hydration {
-    public static HydratedRegion Read(PeImage image, ReadyToRun rtr, CancellationToken cancellationToken = default) {
+    // Resource policy for the single owned output buffer, independent of the format's virtual extent.
+    public const int DefaultMaxOutputBytes = 256 * 1024 * 1024;
+
+    public static HydratedRegion Read(PeImage image, ReadyToRun rtr,
+        CancellationToken cancellationToken = default, int maxOutputBytes = DefaultMaxOutputBytes) {
+        ArgumentOutOfRangeException.ThrowIfNegative(maxOutputBytes);
         cancellationToken.ThrowIfCancellationRequested();
         rtr = rtr.ValidateSource(image);
 
@@ -71,6 +76,10 @@ public static class Hydration {
         int length = Process(
             commands, position, fixups, section.Start, fixupBase, destination,
             default, capacity, write: false, cancellationToken);
+
+        if (length > maxOutputBytes)
+            throw new InvalidDataException(
+                $"Hydrated data requires {length:N0} bytes; the output budget is {maxOutputBytes:N0} bytes.");
 
         // The decoder writes every byte, including the zero-fill commands.
         byte[] storage = GC.AllocateUninitializedArray<byte>(length);
