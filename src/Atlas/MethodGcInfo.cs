@@ -219,7 +219,7 @@ public sealed class MethodGcInfo {
                     stackOffset = bits.Signed(6);
                     slotFlags = (byte)bits.Read(2);
                 } else {
-                    stackOffset = checked(stackOffset + bits.Signed(4));
+                    stackOffset = checked(stackOffset + (int)bits.Unsigned(4));
                 }
 
                 result.Slots[cursor++] = new MethodGcSlot(
@@ -231,8 +231,11 @@ public sealed class MethodGcInfo {
         result.HeaderBytes = (bits.Position + 7) / 8;
         int trackedCount = registers + tracked;
 
-        if (trackedCount == 0)
+        if (trackedCount == 0) {
+            result.LiveSlotRuns = new IndexRange[safeCount][];
+            Array.Fill(result.LiveSlotRuns, Array.Empty<IndexRange>());
             return result;
+        }
 
         if (safeCount == 0) {
             if (rangeCount == 0)
