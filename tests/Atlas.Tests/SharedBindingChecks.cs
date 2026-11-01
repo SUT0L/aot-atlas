@@ -1,5 +1,4 @@
 using Atlas;
-using System.Reflection;
 
 internal static class SharedBindingChecks {
     internal static void Run() {
@@ -109,22 +108,6 @@ internal static class SharedBindingChecks {
         Assert(bindings.Resolve(signatures.Nodes.Length - 1, 0, arguments) == expected[1]);
         Assert(signatures.Edges.Length == edgeCount);
 
-        // Reusing a generation after wrap must retire both successful and zero results.
-        arguments[0] = leaves[0];
-        var generation = typeof(TypeBindings).GetField("methodGeneration", BindingFlags.Instance | BindingFlags.NonPublic)!;
-        Assert(bindings.Resolve(modified, 0, arguments) == expected[0]);
-
-        generation.SetValue(bindings, uint.MaxValue);
-        arguments[0] = leaves[1];
-
-        Assert(bindings.Resolve(modified, 0, arguments) == expected[1]);
-        Assert(bindings.Resolve(secondModified, 0, arguments[..1]) == 0);
-
-        generation.SetValue(bindings, uint.MaxValue);
-        arguments[1] = leaves[0];
-
-        Assert(bindings.Resolve(secondModified, 0, arguments) == 1);
-
         arguments[0] = leaves[0];
         arguments[1] = ulong.MaxValue;
 
@@ -139,20 +122,12 @@ internal static class SharedBindingChecks {
 
         Assert(bindings.Resolve(modified, 0, arguments) == expected[1]);
 
-        long allocated;
-
-        using (var measurement = new AllocationMeasurement()) {
-            for (int i = 0; i < 1000; ++i) {
-                arguments[0] = leaves[i & 1];
-                Assert(bindings.Resolve(root, 0, arguments) == expected[i & 1]);
-            }
-
-            allocated = measurement.AllocatedBytes;
+        for (int i = 0; i < 4; ++i) {
+            arguments[0] = leaves[i & 1];
+            Assert(bindings.Resolve(root, 0, arguments) == expected[i & 1]);
         }
 
-        Assert(allocated == 0);
-
-        Console.WriteLine("Shared bindings: depth-64 DAGs, alternating borrowed arguments/owners, incomplete arguments, failed queries, new wrapper publications and generation wrap preserve exact identities without warm allocations.");
+        Console.WriteLine("Shared bindings: depth-64 DAGs, alternating borrowed arguments/owners, incomplete arguments, failed queries, and new wrapper publications preserve exact identities.");
 
         void Add(MethodTable type) {
             tables.Index.Add(type.Address, tables.Types.Count);

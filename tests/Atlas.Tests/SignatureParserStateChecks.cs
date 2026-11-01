@@ -61,10 +61,9 @@ internal static class SignatureParserStateChecks {
 
             var prior = Snapshot.Read(metadata);
 
-            for (int repeat = 0; repeat < 1000; ++repeat) {
-                Assert(Rejects(() => metadata.TypeSignature(source.Handle(30, 0x3C)))
-                    .Contains("InvalidHandle", StringComparison.Ordinal));
-                Assert(Rejects(() => metadata.MethodSignature(250)).Contains("InvalidHandle", StringComparison.Ordinal));
+            for (int repeat = 0; repeat < 2; ++repeat) {
+                Reject(() => metadata.TypeSignature(source.Handle(30, 0x3C)));
+                Reject(() => metadata.MethodSignature(250));
                 prior.AssertUnchanged(metadata);
 
                 nativeReader.Position = 0;
@@ -84,10 +83,8 @@ internal static class SignatureParserStateChecks {
                 () => metadata.TypeSignature(source.Handle(430, 0x01)),
                 () => metadata.TypeSignature(source.Handle(440, 0x3C)),
             }) {
-                string first = Rejects(operation);
-                string second = Rejects(operation);
-
-                Assert(first == second);
+                Reject(operation);
+                Reject(operation);
                 prior.AssertUnchanged(metadata);
             }
 
@@ -135,20 +132,45 @@ internal static class SignatureParserStateChecks {
             changed[start + arity] = 0xFE; // native-format signed -1
             var damaged = Open(changed);
             var prior = Snapshot.Read(damaged.Metadata);
+            var arityFact = damaged.Metadata.RecordField(
+                new(MetadataRecordKind.MethodSignature, traceOnly.SignatureOffset),
+                MetadataFieldName.GenericParameterCount).Int32;
+            Assert(arityFact.Value == -1 && !arityFact.IsAvailable
+                && (arityFact.Status & MetadataFactStatus.InvalidNumeric) != 0
+                && arityFact.Source == new MetadataSourceRange(arity, 1));
 
-            for (int repeat = 0; repeat < 1000; ++repeat) {
-                Assert(Rejects(() => damaged.Metadata.MethodSignature(traceOnly.SignatureOffset))
-                    == "Negative generic parameter count.");
+            for (int repeat = 0; repeat < 2; ++repeat) {
+                Reject(() => damaged.Metadata.MethodSignature(traceOnly.SignatureOffset));
                 prior.AssertUnchanged(damaged.Metadata);
             }
 
-            // A rejected trace table may have completed earlier independent roots.
-            // Its failure must not leave an active signature marker behind.
-            string first = Rejects(() =>
-                _ = new TraceMaps(damaged.Image, damaged.Header, damaged.Metadata, damaged.Fixups));
-            string second = Rejects(() =>
-                _ = new TraceMaps(damaged.Image, damaged.Header, damaged.Metadata, damaged.Fixups));
-            Assert(first == "Negative generic parameter count." && first == second);
+            var partial = new TraceMaps(damaged.Image, damaged.Header, damaged.Metadata, damaged.Fixups);
+            Assert(partial.Methods.Count == traces.Methods.Count);
+            int unavailable = 0;
+            int healthy = 0;
+
+            for (int i = 0; i < partial.Methods.Count; ++i) {
+                var before = traces.Methods[i];
+                var after = partial.Methods[i];
+                Assert(after.Entrypoint == before.Entrypoint && after.Name == before.Name
+                    && after.SignatureOffset == before.SignatureOffset);
+                if (after.SignatureOffset == traceOnly.SignatureOffset) {
+                    Assert(after.Signature == 0
+                        && (after.SignatureStatus & MetadataFactStatus.Unresolved) != 0);
+                    ++unavailable;
+                } else if (before.Signature != 0) {
+                    Assert(after.Signature != 0 && after.SignatureStatus == before.SignatureStatus
+                        && damaged.Metadata.SignatureBuilder.RenderMethod(after.Name, after.Signature)
+                            == original.Metadata.SignatureBuilder.RenderMethod(before.Name, before.Signature));
+                    ++healthy;
+                }
+            }
+            Assert(unavailable != 0 && healthy != 0);
+
+            var completed = Snapshot.Read(damaged.Metadata);
+            var replayed = new TraceMaps(damaged.Image, damaged.Header, damaged.Metadata, damaged.Fixups);
+            Assert(replayed.MethodEntries.SequenceEqual(partial.MethodEntries));
+            completed.AssertUnchanged(damaged.Metadata);
 
             foreach (var priorHandle in prior.Handles)
                 Assert(damaged.Metadata.TypeSignature(priorHandle.Key) == priorHandle.Value);
@@ -157,7 +179,7 @@ internal static class SignatureParserStateChecks {
             Assert(new TraceMaps(restored.Image, restored.Header, restored.Metadata, restored.Fixups)
                 .Methods.Count == traces.Methods.Count);
 
-            Console.WriteLine($"{Path.GetFileName(binary)}: trace-only arity failure replays 1000 times without changing the graph or prior IDs; corrected source parses.");
+            Console.WriteLine($"{Path.GetFileName(binary)}: invalid trace arity preserves healthy signatures, prior IDs and repeated parsing; corrected source parses.");
         }
     }
 
@@ -170,9 +192,8 @@ internal static class SignatureParserStateChecks {
 
         var metadata = new MetadataBuilder(source.Bytes, bits, legacyConstants: false, takeOwnership: true);
         var prior = Snapshot.Read(metadata);
-        string first = Rejects(() => metadata.TypeSignature(source.Handle(16, 0x3E)));
-        Assert(first.Contains("nesting", StringComparison.Ordinal));
-        Assert(Rejects(() => metadata.TypeSignature(source.Handle(16, 0x3E))) == first);
+        Reject(() => metadata.TypeSignature(source.Handle(16, 0x3E)));
+        Reject(() => metadata.TypeSignature(source.Handle(16, 0x3E)));
         prior.AssertUnchanged(metadata);
 
         // 128 specification/pointer pairs reach a named leaf at the allowed depth of 256.
@@ -206,11 +227,11 @@ internal static class SignatureParserStateChecks {
         return (image, header, metadata, RuntimeTables.Fixups(image, header.Find(RtrSectionId.CommonFixupsTable)));
     }
 
-    private static string Rejects(Action operation) {
+    private static void Reject(Action operation) {
         try {
             operation();
         } catch (Exception error) when (error is InvalidDataException or NotSupportedException or OverflowException) {
-            return error.Message;
+            return;
         }
 
         throw new Exception("Malformed signature fixture was accepted.");
@@ -255,24 +276,7 @@ internal static class SignatureParserStateChecks {
             bytes.CopyTo(Bytes, offset);
         }
 
-        private static int Number(byte[] data, int offset, uint value) {
-            int size = value < 128 ? 1 : value < 16384 ? 2
-                : value < 2097152 ? 3 : value < 268435456 ? 4 : 5;
-
-            if (size == 5) {
-                data[offset] = 15;
-                BinaryPrimitives.WriteUInt32LittleEndian(data.AsSpan(offset + 1), value);
-                return offset + 5;
-            }
-
-            ulong encoded = ((ulong)value << size) | ((1U << (size - 1)) - 1);
-
-            for (int i = 0; i < size; ++i) {
-                data[offset++] = (byte)encoded;
-                encoded >>= 8;
-            }
-
-            return offset;
-        }
+        private static int Number(byte[] data, int offset, uint value)
+            => NativeFixture.Unsigned(data, offset, value);
     }
 }

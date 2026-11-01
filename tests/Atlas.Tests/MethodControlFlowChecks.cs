@@ -1,21 +1,8 @@
 using System.Buffers.Binary;
-using System.Reflection;
-using System.Diagnostics.CodeAnalysis;
 using Atlas;
 using Iced.Intel;
 
 internal static class MethodControlFlowChecks {
-    private const BindingFlags Hidden = BindingFlags.Instance | BindingFlags.NonPublic;
-
-    [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.NonPublicMethods | DynamicallyAccessedMemberTypes.NonPublicConstructors)]
-    private static readonly Type ReaderType = Type.GetType("Atlas.MethodControlFlows, Atlas", throwOnError: true)!;
-
-    [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.NonPublicProperties | DynamicallyAccessedMemberTypes.NonPublicMethods)]
-    private static readonly Type GraphType = Type.GetType("Atlas.MethodControlFlow, Atlas", throwOnError: true)!;
-
-    private static readonly MethodInfo Read = ReaderType.GetMethod(
-        "Read", Hidden, null, [typeof(MethodGcEntry).MakeByRefType()], null)!;
-
     private const ulong Owner = 0x140001000;
 
     internal static void Run() {
@@ -46,38 +33,38 @@ internal static class MethodControlFlowChecks {
         Check([0xC3], true, [false], [1]);
 
         var (reader, method) = Reader([0xC3, 0x90, 0x90, 0x90, 0xC3], [0, 4]);
-        var first = Read.Invoke(reader, [method])!;
-        Assert(ReferenceEquals(first, Read.Invoke(reader, [method])), "Owner/span cache did not retain its graph.");
+        var first = reader.Read(method)!;
+        Assert(ReferenceEquals(first, reader.Read(method)), "Owner/span cache did not retain its graph.");
 
         var other = method with { Begin = 0x1004, Info = new MethodGcInfo { CodeLength = 1 } };
-        var second = Read.Invoke(reader, [other])!;
+        var second = reader.Read(other)!;
         Assert(!ReferenceEquals(first, second) && Code(first).Count == 5 && Code(second).Count == 1,
             "Another owner borrowed or overwrote the first decode.");
 
         var contradictory = method with { End = method.Begin + 1 };
-        Assert(Read.Invoke(reader, [contradictory]) is null && ReferenceEquals(first, Read.Invoke(reader, [method])),
+        Assert(reader.Read(contradictory) is null && ReferenceEquals(first, reader.Read(method)),
             "A contradictory owner extent reused or poisoned the validated span cache.");
 
         var shorter = method with { Info = new MethodGcInfo { CodeLength = 1 } };
-        Assert(Code(Read.Invoke(reader, [shorter])!).Count == 1 && Code(first).Count == 5,
+        Assert(Code(reader.Read(shorter)!).Count == 1 && Code(first).Count == 5,
             "Distinct declared spans shared the wrong graph.");
 
         var invalid = Reader([0x0F], [0]);
-        Assert(Read.Invoke(invalid.Reader, [invalid.Method]) is null, "Truncated decode was accepted.");
+        Assert(invalid.Reader.Read(invalid.Method) is null, "Truncated decode was accepted.");
 
         var oversized = method with { Info = new MethodGcInfo { CodeLength = uint.MaxValue } };
-        Assert(Read.Invoke(reader, [oversized]) is null, "Unbounded allocation from an invalid code extent.");
+        Assert(reader.Read(oversized) is null, "Unbounded allocation from an invalid code extent.");
 
         RandomModel();
         Console.WriteLine($"Method control flow: {cases} hand-derived graphs, predecessor masks, independent roots, bounded decode, owner/span cache and retained graph lifetime passed.");
 
-        object Check(byte[] bytes, bool unknown, bool[] reachable, int[]? roots = null) {
+        MethodControlFlow Check(byte[] bytes, bool unknown, bool[] reachable, int[]? roots = null) {
             var input = Reader(bytes, roots ?? [0]);
-            var graph = Read.Invoke(input.Reader, [input.Method])!;
+            var graph = input.Reader.Read(input.Method)!;
 
-            Assert(graph is not null && (bool)Property(graph, "Unknown") == unknown,
+            Assert(graph is not null && graph.Unknown == unknown,
                 $"Unexpected control-flow status in case {cases}.");
-            Assert(((IReadOnlyList<bool>)Property(graph!, "Reachability")).SequenceEqual(reachable),
+            Assert(graph!.Reachability.SequenceEqual(reachable),
                 $"Unexpected reachable instructions in case {cases}.");
 
             ++cases;
@@ -175,10 +162,10 @@ internal static class MethodControlFlowChecks {
 
             bool unknown = Enumerable.Range(0, count).Any(index => expected[index] && kinds[index] is 4 or 8);
             var source = Reader(bytes, roots.Select(index => offsets[index]).ToArray());
-            var graph = Read.Invoke(source.Reader, [source.Method])!;
+            var graph = source.Reader.Read(source.Method)!;
 
-            Assert((bool)Property(graph, "Unknown") == unknown
-                && ((IReadOnlyList<bool>)Property(graph, "Reachability")).SequenceEqual(expected),
+            Assert(graph.Unknown == unknown
+                && graph.Reachability.SequenceEqual(expected),
                 $"Specification graph differs in random sample {sample}.");
 
             var joins = roots.Select(index => Owner + (uint)offsets[index]).ToHashSet();
@@ -187,7 +174,7 @@ internal static class MethodControlFlowChecks {
                 if (expected[index] && branchAddresses[index] != 0)
                     joins.Add(branchAddresses[index]);
 
-            Assert(((IReadOnlySet<ulong>)Property(graph, "Joins")).SetEquals(joins),
+            Assert(graph.Joins.SetEquals(joins),
                 "Root/branch join set differs from independent labels.");
 
             if (unknown)
@@ -217,82 +204,18 @@ internal static class MethodControlFlowChecks {
         Console.WriteLine("Method control flow: 256 specification-generated rooted graphs agree on reachable edges, joins, unknown targets and predecessor closure.");
     }
 
-    internal static void Binary(string path) {
-        var image = new PeImage(File.ReadAllBytes(path));
-        var header = ReadyToRun.Read(image);
-        var memory = new RuntimeMemory(image, Hydration.Read(image, header));
-        var analysis = new UnwindAnalysis(image, header, memory);
-        var unwind = analysis.RequireUnwind();
-        var map = new MethodGcMap(image, header, unwind, analysis.RequireManaged());
+    private static IReadOnlyList<Instruction> Code(MethodControlFlow graph) => graph.Instructions;
 
-        var direct = new GenericContextReferences(image, unwind, map);
-        var seed = direct.Values.First();
-        int index = Array.FindIndex(map.Methods, method => method.Info is { } info
-            && seed.Instruction >= image.ImageBase + method.Begin
-            && seed.Instruction - image.ImageBase - method.Begin < info.CodeLength);
-        var prior = map.Methods[index];
-        ulong owner = image.ImageBase + prior.Begin;
+    private static IReadOnlyList<bool> Before(MethodControlFlow graph, ulong instruction) => graph.Before(instruction);
 
-        byte[] bytes = (byte[])image.FileData.Clone();
-        var code = bytes.AsSpan(image.FileRange(owner).Start, 128);
-        code.Fill(0x90);
-        int register = direct.Parameters[seed.ParameterIndex].Register;
-        code[0] = (byte)(register >= 8 ? 0x49 : 0x48);
-        code[1] = (byte)(0xB8 + (register & 7));
-        BinaryPrimitives.WriteUInt64LittleEndian(code[2..], seed.Context);
-        code[10] = 0xE8;
-        BinaryPrimitives.WriteInt32LittleEndian(code[11..],
-            checked((int)((long)seed.Target - (long)owner - 15)));
-        code[15] = 0xFF;
-        code[16] = 0xE0;
-        map.Methods[index] = prior with { Info = new MethodGcInfo { CodeLength = 128 } };
-
-        var changed = new PeImage(bytes);
-        var literal = new GenericContextReferences(changed, unwind, map);
-        var dictionaries = new DictionarySlotConsumers(changed,
-            new RuntimeMemory(changed, Hydration.Read(changed, header)), unwind, map, []);
-
-        Assert(literal.UnresolvedControlFlowOwners.Contains(owner)
-            && !literal.Values.Any(value => value.Instruction >= owner && value.Instruction < owner + 128),
-            "Reachable unknown branch did not withhold the direct seed owner.");
-        Assert(dictionaries.UnresolvedOwners.Contains(owner),
-            "Excluded seed discovery disappeared from dictionary availability.");
-
-        code[15] = 0xC3;
-        code[16] = 0x90;
-        code[^1] = 0x0F;
-        var undecodable = new PeImage(bytes);
-        var failedLiteral = new GenericContextReferences(undecodable, unwind, map);
-        var failedDictionaries = new DictionarySlotConsumers(undecodable,
-            new RuntimeMemory(undecodable, Hydration.Read(undecodable, header)), unwind, map, []);
-
-        Assert(failedLiteral.UnresolvedControlFlowOwners.Contains(owner)
-            && failedDictionaries.UnresolvedOwners.Contains(owner),
-            "A failed bounded decode disappeared from source or dependent availability.");
-
-        map.Methods[index] = prior;
-        Console.WriteLine("Method control-flow publication: a withheld NativeAOT seed remains visible in dependent dictionary analysis.");
+    internal static MethodControlFlow Decode(byte[] code, int[]? roots = null) {
+        var input = Reader(code, roots ?? [0]);
+        return input.Reader.Read(input.Method)!;
     }
 
-    private static object Property(object graph, string name)
-        => GraphType.GetProperty(name, Hidden)!.GetValue(graph)!;
+    internal static IReadOnlyList<bool> Reachability(MethodControlFlow graph) => graph.Reachability;
 
-    private static IReadOnlyList<Instruction> Code(object graph)
-        => (IReadOnlyList<Instruction>)Property(graph, "Instructions");
-
-    private static IReadOnlyList<bool> Before(object graph, ulong instruction)
-        => (IReadOnlyList<bool>)GraphType.GetMethod("Before", Hidden)!.Invoke(graph, [instruction])!;
-
-    internal static object Decode(byte[] code, int[]? roots = null) {
-        (object Reader, MethodGcEntry Method) input = Reader(code, roots ?? [0]);
-
-        return Read.Invoke(input.Reader, [input.Method])!;
-    }
-
-    internal static IReadOnlyList<bool> Reachability(object graph)
-        => (IReadOnlyList<bool>)Property(graph, "Reachability");
-
-    private static (object Reader, MethodGcEntry Method) Reader(byte[] code, int[] roots) {
+    private static (MethodControlFlows Reader, MethodGcEntry Method) Reader(byte[] code, int[] roots) {
         const int fileDelta = 512 - 0x1000;
         byte[] bytes = new byte[0x3000];
         "MZ"u8.CopyTo(bytes);
@@ -327,7 +250,7 @@ internal static class MethodControlFlowChecks {
         bytes[0x2400 + fileDelta] = 1;
         var image = new PeImage(bytes);
         var unwind = new UnwindTables(image);
-        object reader = Activator.CreateInstance(ReaderType, Hidden, null, [image, unwind, CancellationToken.None], null)!;
+        var reader = new MethodControlFlows(image, unwind);
 
         return (reader, new(0x1000, 0x1040, 0, new MethodGcInfo { CodeLength = (uint)code.Length }, null));
     }

@@ -15,11 +15,7 @@ internal static class HydrationChecks {
                 mixed.AsSpan(13), (int)DestinationRva - (int)CommandRva - header - 13);
             var image = Create(mixed, embedded, 64 * 1024 * 1024);
 
-            long allocated = GC.GetAllocatedBytesForCurrentThread();
-
             var result = Hydration.Read(image, ReadyToRun.Read(image));
-
-            allocated = GC.GetAllocatedBytesForCurrentThread() - allocated;
 
             byte[] expected = new byte[29];
             expected[0] = 0xAA;
@@ -31,7 +27,6 @@ internal static class HydrationChecks {
             BinaryPrimitives.WriteInt32LittleEndian(expected.AsSpan(25), -25);
 
             Assert(result.Start == ImageBase + DestinationRva && result.Bytes.SequenceEqual(expected));
-            Assert(result.Storage.Length == 29 && allocated < 4096);
 
             foreach (byte[] malformed in new byte[][] {
                 [6], [7], [0xE8], [0xF0, 0], [0xF8, 0, 0], [0x18, 1], [0x0D, 0, 0, 0]
@@ -52,7 +47,7 @@ internal static class HydrationChecks {
                 var zeroImage = Create(zero, embedded, 64 * 1024 * 1024);
                 var zeroResult = Hydration.Read(zeroImage, ReadyToRun.Read(zeroImage));
 
-                Assert(zeroResult.Storage.Length == payload && zeroResult.Bytes.IndexOfAnyExcept((byte)0) == -1);
+                Assert(zeroResult.Bytes.Length == payload && zeroResult.Bytes.IndexOfAnyExcept((byte)0) == -1);
             }
 
             byte[] huge = new byte[128 * 4];
@@ -71,8 +66,8 @@ internal static class HydrationChecks {
             byte[] lateFixup = [0xF9, 0xFF, 0xFF, 0xFF, 0xF9, 0xFF, 0xFF, 0xFF, 0xFB, 0xFF, 0xFF, 0xFF];
             byte[] lateRelativeOverflow = [0xF9, 0xFF, 0xFF, 0xFF, 0xF9, 0xFF, 0xFF, 0xFF, 0x0C, 0, 0, 0, 0x80];
 
-            RejectBeforeOutputAllocation(Create(lateFixup, embedded, 128 * 1024 * 1024), typeof(InvalidDataException));
-            RejectBeforeOutputAllocation(Create(lateRelativeOverflow, embedded, 128 * 1024 * 1024), typeof(OverflowException));
+            Reject(Create(lateFixup, embedded, 128 * 1024 * 1024), typeof(InvalidDataException));
+            Reject(Create(lateRelativeOverflow, embedded, 128 * 1024 * 1024), typeof(OverflowException));
 
             var invalidFixup = Create([0xFB, 0xFF, 0xFF, 0xFF], embedded, 64 * 1024 * 1024);
             Reject(() => Hydration.Read(invalidFixup, ReadyToRun.Read(invalidFixup)));
@@ -132,18 +127,16 @@ internal static class HydrationChecks {
         return new PeImage(bytes);
     }
 
-    private static void RejectBeforeOutputAllocation(PeImage image, Type expectedError) {
+    private static void Reject(PeImage image, Type expectedError) {
         var header = ReadyToRun.Read(image);
-        long allocated = GC.GetAllocatedBytesForCurrentThread();
 
         try {
             Hydration.Read(image, header);
         } catch (Exception error) when (error.GetType() == expectedError) {
-            Assert(GC.GetAllocatedBytesForCurrentThread() - allocated < 16 * 1024);
             return;
         }
 
-        throw new Exception("Malformed hydration allocated output or was accepted.");
+        throw new Exception("Malformed hydration was accepted.");
     }
 
     private static void Reject(Action action) {

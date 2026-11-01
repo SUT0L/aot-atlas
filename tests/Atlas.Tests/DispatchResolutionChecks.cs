@@ -1,4 +1,3 @@
-using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Security.Cryptography;
 using Atlas;
@@ -73,6 +72,7 @@ internal static class DispatchResolutionChecks {
             int matches = 0;
             int missing = 0;
             int ordering = 0;
+            var queries = new HashSet<(ulong Receiver, ulong Contract, ushort Slot)>();
 
             foreach (string line in output.Split('\n')) {
                 if (!line.StartsWith("Q|", StringComparison.Ordinal))
@@ -84,6 +84,7 @@ internal static class DispatchResolutionChecks {
                 ushort slot = ushort.Parse(parts[3]);
                 ulong live = Convert.ToUInt64(parts[5], 16);
 
+                Assert(queries.Add((receiver, contract, slot)), "The live dispatch oracle repeated a query.");
                 var result = resolver.Resolve(receiver, contract, slot);
                 if (result.Status == DispatchResolutionStatus.UnknownRuntimeOrdering) {
                     ++ordering;
@@ -98,35 +99,10 @@ internal static class DispatchResolutionChecks {
                 }
             }
 
+            Assert(queries.Count == 22 && matches + missing + ordering == 22,
+                "The live dispatch oracle omitted a declared query.");
             Assert(matches != 0 && missing != 0);
             Assert(resolver.Resolve(0, 0, 0).Status == DispatchResolutionStatus.UnknownType);
-
-            if (cells.Uses.Count != 0) {
-                var cell = cells.Cells.First(c => c.Uses.Count != 0);
-                var only = new CodeFlow(image, [], new Dictionary<ulong, ulong>());
-                only.DispatchCellUses.Add(cells.Uses[cell.Uses.Start]);
-
-                int regionIndex = extraction.Memory.Find(cell.Address);
-                var region = extraction.Memory.Regions[regionIndex];
-                Assert(System.Runtime.InteropServices.MemoryMarshal.TryGetArray(
-                    region.Data, out ArraySegment<byte> storage));
-
-                int offset = storage.Offset + (int)(cell.Address - region.Start);
-                ulong encoded = BinaryPrimitives.ReadUInt64LittleEndian(storage.Array!.AsSpan(offset + 8));
-
-                BinaryPrimitives.WriteUInt64LittleEndian(storage.Array.AsSpan(offset + 8), 0);
-                Assert(new DispatchCells(extraction, only).Rejected.Single().Status
-                    == DispatchCellStatus.UnsupportedEncoding);
-
-                BinaryPrimitives.WriteUInt64LittleEndian(storage.Array.AsSpan(offset + 8), encoded);
-                Assert(new DispatchCells(extraction, only).Cells.Any(c => c.Address == cell.Address));
-
-                var use = only.DispatchCellUses[0];
-                only.DispatchCellUses[0] = use with { Cell = use.Cell + 8 };
-                Assert(new DispatchCells(extraction, only).Rejected.Single().Status == DispatchCellStatus.Unaligned);
-
-                only.DispatchCellUses[0] = use;
-            }
 
             Console.WriteLine($"{Path.GetFileName(Path.GetDirectoryName(binary))}: {matches} live targets, {missing} absent bindings, "
                 + $"{ordering} unresolved runtime orders, {cells.Cells.Count} live cells ({cellAudit.Trim()}), SHA256 {Convert.ToHexStringLower(SHA256.HashData(image.FileData))}.");

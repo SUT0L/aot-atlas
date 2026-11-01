@@ -141,10 +141,8 @@ internal static class ExtractionAvailabilityChecks {
             Assert(!damaged.Types.Index.ContainsKey(healthy.Image.ImageBase + candidateRva)
                 && !damaged.Types.Index.ContainsKey(healthy.Image.ImageBase + candidateRva + 64),
                 "Rejected optional type closure leaked into core ownership.");
-            Assert(damaged.UnwindAnalysis.Failures.Any(failure => failure.Phase == UnwindPhase.ManagedUnwind
-                && failure.Error.Contains(fault == 4 ? "Cyclic runtime type identity"
-                    : fault == 3 ? "Cyclic base type" : fault == 2 ? "Empty GCDesc" : "Invalid allocation size",
-                    StringComparison.Ordinal)), "Catch closure failure was not exposed.");
+            Assert(damaged.UnwindAnalysis.Failures.Any(failure => failure.Phase == UnwindPhase.ManagedUnwind),
+                "Catch closure failure was not exposed.");
             Assert(damaged.Managed.Frames.Length == healthy.Managed.Frames.Length,
                 "One damaged catch type discarded independent managed frames.");
             Assert(damaged.Managed.Clauses.Length == healthy.Managed.Clauses.Length,

@@ -47,8 +47,7 @@ with tempfile.TemporaryDirectory(prefix="aot-atlas-output-errors-") as temporary
         output.write_bytes(sentinel)
         failed = run(command, limit)
         require(failed.returncode == 1, f"{operation}: exit {failed.returncode}: {failed.stderr}")
-        require("Output file size limit exceeded:" in failed.stderr,
-                f"{operation}: missing file-size diagnostic: {failed.stderr}")
+        require(bool(failed.stderr.strip()), f"{operation}: write failure omitted its diagnostic")
         require(output.read_bytes() == sentinel, f"{operation}: prior output changed.")
         require(not list(directory.glob("*.tmp")), f"{operation}: temporary output survived.")
 

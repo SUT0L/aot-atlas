@@ -1,0 +1,186 @@
+<Project DefaultTargets="Verify">
+  <PropertyGroup>
+    <Root>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..'))</Root>
+    <VerificationRoot Condition="'$(VerificationRoot)' == ''">$(Root)/artifacts/verification</VerificationRoot>
+    <BuildRoot>$(VerificationRoot)/build</BuildRoot>
+    <FixtureRoot Condition="'$(FixtureRoot)' == ''">$(Root)/artifacts</FixtureRoot>
+    <RuntimeSourceRoot Condition="'$(RuntimeSourceRoot)' == ''">$(Root)/artifacts/runtime-checks/repository</RuntimeSourceRoot>
+    <GcReferenceRoot Condition="'$(GcReferenceRoot)' == ''">$(Root)/artifacts/gc-reference</GcReferenceRoot>
+    <DictionaryFixture Condition="'$(DictionaryFixture)' == '' And '$(OS)' == 'Windows_NT'">$(VerificationRoot)/fixtures/DictionaryProbe/DictionaryProbe.exe</DictionaryFixture>
+    <DictionaryFixture Condition="'$(DictionaryFixture)' == ''">$(FixtureRoot)/DictionaryProbe.exe</DictionaryFixture>
+    <PropertyFixture Condition="'$(PropertyFixture)' == '' And '$(OS)' == 'Windows_NT'">$(VerificationRoot)/fixtures/PropertyDispatchProbe/PropertyDispatchProbe.exe</PropertyFixture>
+    <PropertyFixture Condition="'$(PropertyFixture)' == ''">$(FixtureRoot)/PropertyDispatchProbe.exe</PropertyFixture>
+    <CanonicalFixture Condition="'$(CanonicalFixture)' == '' And '$(OS)' == 'Windows_NT'">$(VerificationRoot)/fixtures/PropertyCanonicalProbe/PropertyCanonicalProbe.exe</CanonicalFixture>
+    <CanonicalFixture Condition="'$(CanonicalFixture)' == ''">$(FixtureRoot)/PropertyCanonicalProbe.exe</CanonicalFixture>
+    <StringFixture Condition="'$(StringFixture)' == '' And '$(OS)' == 'Windows_NT'">$(VerificationRoot)/fixtures/StringProbe/StringProbe.exe</StringFixture>
+    <StringFixture Condition="'$(StringFixture)' == '' And Exists('$(FixtureRoot)/StringProbe.exe')">$(FixtureRoot)/StringProbe.exe</StringFixture>
+    <StringOracle Condition="'$(StringOracle)' == '' And '$(OS)' == 'Windows_NT'">$(VerificationRoot)/fixtures/StringProbe/StringProbe.oracle</StringOracle>
+    <StringOracle Condition="'$(StringOracle)' == '' And '$(StringFixture)' != ''">$(FixtureRoot)/StringProbe.oracle</StringOracle>
+    <MetadataFixture Condition="'$(MetadataFixture)' == '' And '$(OS)' == 'Windows_NT'">$(VerificationRoot)/fixtures/MetadataMembersProbe/MetadataMembersProbe.exe</MetadataFixture>
+    <MetadataFixture Condition="'$(MetadataFixture)' == ''">$(FixtureRoot)/sizoscope-research/MetadataMembersProbe/MetadataMembersProbe.exe</MetadataFixture>
+    <Python Condition="'$(Python)' == '' And '$(OS)' == 'Windows_NT'">python</Python>
+    <Python Condition="'$(Python)' == ''">python3</Python>
+    <TestAssembly>$(BuildRoot)/bin/Atlas.Tests/release/Atlas.Tests.dll</TestAssembly>
+    <WindowsFixtures>$(VerificationRoot)/fixtures</WindowsFixtures>
+    <CommonProperties>Configuration=Release;ArtifactsPath=$(BuildRoot)</CommonProperties>
+    <CheckEnvironment>TMPDIR=$(VerificationRoot)/temporary;TEMP=$(VerificationRoot)/temporary;TMP=$(VerificationRoot)/temporary</CheckEnvironment>
+    <NativeRid Condition="'$(NativeRid)' == '' And '$(OS)' == 'Windows_NT'">win-x64</NativeRid>
+    <NativeRid Condition="'$(NativeRid)' == ''">linux-x64</NativeRid>
+    <NativeCli>$(VerificationRoot)/native/aot-atlas</NativeCli>
+    <NativeCli Condition="'$(OS)' == 'Windows_NT'">$(NativeCli).exe</NativeCli>
+    <PublicationFixture>$(DictionaryFixture)</PublicationFixture>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Managed Include="$(Root)/tests/Atlas.Tests/Atlas.Tests.csproj;$(Root)/tests/GcReferenceChecks/GcReferenceChecks.csproj" />
+    <Corpus Include="$(DictionaryFixture);$(PropertyFixture);$(CanonicalFixture);$(MetadataFixture)" />
+    <Corpus Include="$(FixtureRoot)/sizoscope-research/DictionaryProbe-net8.0/DictionaryProbe-net8.0.exe;$(FixtureRoot)/sizoscope-research/DictionaryProbe-net9.0/DictionaryProbe-net9.0.exe" Condition="'$(OS)' != 'Windows_NT'" />
+    <RequiredMap Include="$(FixtureRoot)/sizoscope-research/DictionaryProbe-net9.0/DictionaryProbe-net9.0.map" Condition="'$(OS)' != 'Windows_NT'" />
+    <WindowsProbe Include="SharedGenericProbe;TraceAbiProbe;DispatchResolutionProbe;TypeMapsProbe;PropertySharedProbe;PropertyGcProbe;GcArrayShapeProbe;MarshallingProbe;MarshallingSizeProbe;ResourceProbe;ManagedAbiProbe;MethodSignatureProbe;TypePrefixProbe;PInvokeProbe" />
+    <WindowsProbe Include="RuntimeProbe">
+      <PublishProperties>-p:ProbeFramework=net10.0</PublishProperties>
+    </WindowsProbe>
+    <WindowsProbe Include="MetadataMembersProbe" Condition="'$(MetadataFixture)' == '$(WindowsFixtures)/MetadataMembersProbe/MetadataMembersProbe.exe'" />
+    <WindowsProbe Include="DictionaryProbe" Condition="'$(DictionaryFixture)' == '$(WindowsFixtures)/DictionaryProbe/DictionaryProbe.exe'" />
+    <WindowsProbe Include="PropertyDispatchProbe" Condition="'$(PropertyFixture)' == '$(WindowsFixtures)/PropertyDispatchProbe/PropertyDispatchProbe.exe'" />
+    <WindowsProbe Include="PropertyCanonicalProbe" Condition="'$(CanonicalFixture)' == '$(WindowsFixtures)/PropertyCanonicalProbe/PropertyCanonicalProbe.exe'" />
+    <WindowsProbe Include="StringProbe" Condition="'$(StringFixture)' == '$(WindowsFixtures)/StringProbe/StringProbe.exe'" />
+    <LegacyFramework Include="net8.0;net9.0" />
+    <BinaryCheck Include="--prepared-analysis;--metadata-transactions;--trace-stages;--extraction-stages;--dictionary-stages;--extraction-availability;--signature-parser-state;--type-graphs">
+      <Fixture>$(DictionaryFixture)</Fixture>
+    </BinaryCheck>
+    <BinaryCheck Include="--prepared-analysis">
+      <Fixture>$(PropertyFixture)</Fixture>
+    </BinaryCheck>
+    <BinaryCheck Include="--analysis-products;--cancellation">
+      <Fixture>$(PropertyFixture)</Fixture>
+    </BinaryCheck>
+    <BinaryCheck Include="--metadata-producers">
+      <Fixture>$(MetadataFixture)</Fixture>
+    </BinaryCheck>
+    <Reader Include="Net8;Net9">
+      <SourceRoot>$(VerificationRoot)/readers/%(Identity)</SourceRoot>
+    </Reader>
+    <Reader Include="Current">
+      <SourceRoot>$(RuntimeSourceRoot)</SourceRoot>
+    </Reader>
+    <ReaderPart Include="Internal/NativeFormat/NativeFormatReader.cs;Internal/NativeFormat/NativeFormatReader.Primitives.cs;Internal/NativeFormat/NativeFormatReader.String.cs;Internal/NativeFormat/NativeFormatWriter.Primitives.cs;Internal/Metadata/NativeFormat/NativeMetadataReader.cs;Internal/Metadata/NativeFormat/NativeFormatReaderCommonGen.cs;Internal/Metadata/NativeFormat/NativeFormatReaderGen.cs;Internal/Metadata/NativeFormat/MdBinaryReader.cs;Internal/Metadata/NativeFormat/MdBinaryReaderGen.cs" />
+  </ItemGroup>
+
+  <Target Name="ValidateWindowsToolchain" Condition="'$(OS)' == 'Windows_NT'">
+    <Error Condition="'$(VSCMD_ARG_TGT_ARCH)' != 'x64' Or '$(INCLUDE)' == '' Or '$(LIB)' == ''"
+           Text="Run verification from an x64 Visual Studio developer shell (VsDevCmd.bat -arch=x64). NativeAOT and the upstream C++ GC decoder require initialized INCLUDE and LIB paths." />
+  </Target>
+
+  <Target Name="ValidateInputs" DependsOnTargets="ValidateWindowsToolchain;PublishWindowsFixtures;StringObservations">
+    <Error Condition="!Exists('%(Corpus.Identity)')" Text="Required verification PE fixture is missing: %(Corpus.Identity)." />
+    <Error Condition="!Exists('%(RequiredMap.Identity)')" Text="Required verification linker map is missing: %(RequiredMap.Identity)." />
+    <Error Condition="'$(StringFixture)' != '' And (!Exists('$(StringFixture)') Or !Exists('$(StringOracle)'))" Text="StringFixture and StringOracle must identify an existing PE and its source observations." />
+    <MakeDir Directories="$(VerificationRoot);$(VerificationRoot)/temporary" />
+    <Message Importance="High" Condition="'$(OS)' != 'Windows_NT'" Text="Windows native execution: NOT RUN (requires Windows x64). Metadata and GC reference comparisons use the supplied PE fixtures." />
+  </Target>
+
+  <Target Name="StringObservations" DependsOnTargets="PublishWindowsFixtures"
+          Condition="'$(OS)' == 'Windows_NT' And '$(StringFixture)' == '$(WindowsFixtures)/StringProbe/StringProbe.exe' And '$(StringOracle)' == '$(WindowsFixtures)/StringProbe/StringProbe.oracle'"
+          Inputs="$(StringFixture)" Outputs="$(StringOracle)">
+    <Exec Command="&quot;$(StringFixture)&quot; &gt; &quot;$(StringOracle)&quot;" />
+  </Target>
+
+  <Target Name="PublishWindowsFixtures" Condition="'$(OS)' == 'Windows_NT'">
+    <Exec Command="dotnet publish &quot;$(Root)/tests/%(WindowsProbe.Identity)/%(WindowsProbe.Identity).csproj&quot; -c Release -r win-x64 --self-contained &quot;-p:ArtifactsPath=$(BuildRoot)&quot; %(WindowsProbe.PublishProperties) --output &quot;$(WindowsFixtures)/%(WindowsProbe.Identity)&quot;" />
+    <Exec Command="dotnet publish &quot;$(Root)/tests/DictionaryProbe/DictionaryProbe.csproj&quot; -c Release -r win-x64 --self-contained &quot;-p:ArtifactsPath=$(BuildRoot)/%(LegacyFramework.Identity)&quot; -p:ProbeFramework=%(LegacyFramework.Identity) -p:CheckEolTargetFramework=false --output &quot;$(WindowsFixtures)/DictionaryProbe-%(LegacyFramework.Identity)&quot;" />
+    <ItemGroup>
+      <Corpus Include="@(WindowsProbe->'$(WindowsFixtures)/%(Identity)/%(Identity).exe')" Exclude="@(Corpus)" />
+      <Corpus Include="@(LegacyFramework->'$(WindowsFixtures)/DictionaryProbe-%(Identity)/DictionaryProbe.exe')" />
+      <RequiredMap Include="@(LegacyFramework->'$(WindowsFixtures)/DictionaryProbe-%(Identity)/DictionaryProbe.map')" />
+    </ItemGroup>
+  </Target>
+
+  <Target Name="PrepareReaders" DependsOnTargets="ValidateInputs">
+    <DownloadFile SourceUrl="https://raw.githubusercontent.com/dotnet/runtime/60629d14374c56f1cb51819049ad1fa529307f8d/src/coreclr/tools/Common/%(ReaderPart.Identity)"
+                  DestinationFolder="$(RuntimeSourceRoot)/src/coreclr/tools/Common/%(ReaderPart.RelativeDir)"
+                  Condition="!Exists('$(RuntimeSourceRoot)/src/coreclr/tools/Common/%(ReaderPart.Identity)')" />
+    <DownloadFile SourceUrl="https://raw.githubusercontent.com/dotnet/runtime/5535e31a712343a63f5d7d796cd874e563e5ac14/src/coreclr/tools/Common/%(ReaderPart.Identity)"
+                  DestinationFolder="$(VerificationRoot)/readers/Net8/src/coreclr/tools/Common/%(ReaderPart.RelativeDir)"
+                  Condition="!Exists('$(VerificationRoot)/readers/Net8/src/coreclr/tools/Common/%(ReaderPart.Identity)')" />
+    <DownloadFile SourceUrl="https://raw.githubusercontent.com/dotnet/runtime/9d5a6a9aa463d6d10b0b0ba6d5982cc82f363dc3/src/coreclr/tools/Common/%(ReaderPart.Identity)"
+                  DestinationFolder="$(VerificationRoot)/readers/Net9/src/coreclr/tools/Common/%(ReaderPart.RelativeDir)"
+                  Condition="!Exists('$(VerificationRoot)/readers/Net9/src/coreclr/tools/Common/%(ReaderPart.Identity)')" />
+  </Target>
+
+  <Target Name="BuildManaged" DependsOnTargets="PrepareReaders">
+    <MSBuild Projects="@(Managed)" Targets="Restore;Build" Properties="$(CommonProperties)" />
+    <MSBuild Projects="$(Root)/tests/RuntimeChecks/RuntimeChecks.csproj" Targets="Restore;Build"
+             Properties="$(CommonProperties);BuildProjectReferences=false;ReaderSchema=%(Reader.Identity);RuntimeSourceRoot=%(Reader.SourceRoot)" />
+  </Target>
+
+  <Target Name="StructuredChecks" DependsOnTargets="BuildManaged">
+    <Exec EnvironmentVariables="$(CheckEnvironment)" Command="dotnet test &quot;$(Root)/tests/Atlas.Tests/Atlas.Tests.csproj&quot; -c Release --no-build --no-restore &quot;-p:ArtifactsPath=$(BuildRoot)&quot;" />
+  </Target>
+
+  <Target Name="BinaryProducts" DependsOnTargets="BuildManaged">
+    <Exec EnvironmentVariables="$(CheckEnvironment)" Command="dotnet &quot;$(TestAssembly)&quot; %(BinaryCheck.Identity) &quot;%(BinaryCheck.Fixture)&quot;" />
+  </Target>
+
+  <Target Name="NativeIntegers" DependsOnTargets="BuildManaged">
+    <Exec EnvironmentVariables="$(CheckEnvironment)" Command="dotnet &quot;$(BuildRoot)/bin/RuntimeChecks-Current/release/RuntimeChecks.dll&quot; --native-integers" />
+  </Target>
+
+  <Target Name="BuildCli" DependsOnTargets="BuildManaged">
+    <Exec Command="dotnet publish &quot;$(Root)/src/Atlas.Cli/Atlas.Cli.csproj&quot; -c Release -r $(NativeRid) --self-contained &quot;-p:ArtifactsPath=$(BuildRoot)&quot; --output &quot;$(VerificationRoot)/native&quot;" />
+  </Target>
+
+  <Target Name="Metadata" DependsOnTargets="BuildCli">
+    <Exec EnvironmentVariables="$(CheckEnvironment)" Command="dotnet &quot;$(BuildRoot)/bin/RuntimeChecks-%(Reader.Identity)/release/RuntimeChecks.dll&quot; --cli &quot;$(NativeCli)&quot; @(Corpus->'&quot;%(Identity)&quot;', ' ')" />
+  </Target>
+
+  <Target Name="GcReference" DependsOnTargets="BuildCli">
+    <Exec EnvironmentVariables="$(CheckEnvironment)" Command="&quot;$(Python)&quot; &quot;$(Root)/tests/GcReferenceChecks/run.py&quot; --runtime-source &quot;$(RuntimeSourceRoot)&quot; --output &quot;$(GcReferenceRoot)&quot; --managed-assembly &quot;$(BuildRoot)/bin/GcReferenceChecks/release/GcReferenceChecks.dll&quot; --cli &quot;$(NativeCli)&quot; @(Corpus->'&quot;%(Identity)&quot;', ' ')" />
+  </Target>
+
+  <Target Name="WindowsNative" DependsOnTargets="BuildCli" Condition="'$(OS)' == 'Windows_NT'">
+    <Exec EnvironmentVariables="$(CheckEnvironment)" Command="dotnet &quot;$(TestAssembly)&quot; --methodtables-producer &quot;$(WindowsFixtures)/RuntimeProbe/RuntimeProbe.exe&quot;" />
+    <Exec EnvironmentVariables="$(CheckEnvironment)" Command="dotnet &quot;$(TestAssembly)&quot; --typemaps-producer &quot;$(WindowsFixtures)/TypeMapsProbe/TypeMapsProbe.exe&quot;" />
+    <Exec EnvironmentVariables="$(CheckEnvironment)" Command="dotnet &quot;$(TestAssembly)&quot; --shared-methods &quot;$(WindowsFixtures)/SharedGenericProbe/SharedGenericProbe.exe&quot;" />
+    <Exec EnvironmentVariables="$(CheckEnvironment)" Command="dotnet &quot;$(TestAssembly)&quot; --trace-abi &quot;$(WindowsFixtures)/TraceAbiProbe/TraceAbiProbe.exe&quot;" />
+    <Exec EnvironmentVariables="$(CheckEnvironment)" Command="dotnet &quot;$(TestAssembly)&quot; --dispatch-resolution &quot;$(WindowsFixtures)/DispatchResolutionProbe/DispatchResolutionProbe.exe&quot;" />
+    <Exec EnvironmentVariables="$(CheckEnvironment)" Command="dotnet &quot;$(TestAssembly)&quot; --dictionary-relationships &quot;$(DictionaryFixture)&quot;" />
+    <Exec EnvironmentVariables="$(CheckEnvironment)" Command="dotnet &quot;$(TestAssembly)&quot; --properties &quot;$(PropertyFixture)&quot; &quot;$(CanonicalFixture)&quot; &quot;$(WindowsFixtures)/PropertySharedProbe/PropertySharedProbe.exe&quot; &quot;$(WindowsFixtures)/PropertyGcProbe/PropertyGcProbe.exe&quot;" />
+    <Exec EnvironmentVariables="$(CheckEnvironment)" Command="dotnet &quot;$(TestAssembly)&quot; --marshalling-sizes &quot;$(WindowsFixtures)/MarshallingSizeProbe/MarshallingSizeProbe.exe&quot;" />
+    <Exec EnvironmentVariables="$(CheckEnvironment)" Command="dotnet &quot;$(TestAssembly)&quot; --marshalling-positive &quot;$(WindowsFixtures)/MarshallingProbe/MarshallingProbe.exe&quot; &quot;$(WindowsFixtures)/MarshallingProbe/MarshallingProbe.map&quot;" />
+    <Exec EnvironmentVariables="$(CheckEnvironment)" Command="&quot;$(Python)&quot; &quot;$(Root)/tests/resource_oracle_checks.py&quot; &quot;$(NativeCli)&quot; &quot;$(WindowsFixtures)/ResourceProbe/ResourceProbe.exe&quot; &quot;$(Root)/tests/golden/ResourceProbe.resources.json&quot; &quot;$(VerificationRoot)/resources.json&quot;" />
+    <Exec EnvironmentVariables="$(CheckEnvironment)" Command="&quot;$(Python)&quot; &quot;$(Root)/tests/marshalling_oracle_checks.py&quot; &quot;$(NativeCli)&quot; &quot;$(WindowsFixtures)/MarshallingProbe/MarshallingProbe.exe&quot; &quot;$(Root)/tests/golden/MarshallingProbe.layouts.json&quot; &quot;$(VerificationRoot)/marshalling.json&quot;" />
+    <Exec EnvironmentVariables="$(CheckEnvironment)" Command="&quot;$(Python)&quot; &quot;$(Root)/tests/gc_array_cli_checks.py&quot; &quot;$(NativeCli)&quot; &quot;$(WindowsFixtures)/GcArrayShapeProbe/GcArrayShapeProbe.exe&quot; &quot;$(WindowsFixtures)/GcArrayShapeProbe/GcArrayShapeProbe.map&quot; &quot;$(VerificationRoot)/gc-array.json&quot;" />
+    <Exec EnvironmentVariables="$(CheckEnvironment)" Command="&quot;$(Python)&quot; &quot;$(Root)/tests/live_runtime_checks.py&quot; managed-abi &quot;$(NativeCli)&quot; &quot;$(WindowsFixtures)/ManagedAbiProbe/ManagedAbiProbe.exe&quot;" />
+    <Exec EnvironmentVariables="$(CheckEnvironment)" Command="&quot;$(Python)&quot; &quot;$(Root)/tests/live_runtime_checks.py&quot; method-signatures &quot;$(NativeCli)&quot; &quot;$(WindowsFixtures)/MethodSignatureProbe/MethodSignatureProbe.exe&quot;" />
+    <Exec EnvironmentVariables="$(CheckEnvironment)" Command="&quot;$(Python)&quot; &quot;$(Root)/tests/live_runtime_checks.py&quot; type-prefix &quot;$(NativeCli)&quot; &quot;$(WindowsFixtures)/TypePrefixProbe/TypePrefixProbe.exe&quot;" />
+    <Exec EnvironmentVariables="$(CheckEnvironment)" Command="&quot;$(Python)&quot; &quot;$(Root)/tests/typemaps_checks.py&quot; --cli &quot;$(NativeCli)&quot; --binary &quot;$(WindowsFixtures)/TypeMapsProbe/TypeMapsProbe.exe&quot; --runtime-probe &quot;$(WindowsFixtures)/TypeMapsProbe/TypeMapsProbe.exe&quot;" />
+    <Exec WorkingDirectory="$(Root)" Command="cmd /c tests\PInvokeProbe\build.cmd" />
+    <Copy SourceFiles="$(Root)/artifacts/pinvoke-provider/AtlasPInvokeProvider.dll" DestinationFiles="$(WindowsFixtures)/PInvokeProbe/AtlasPInvokeProvider.dll" />
+    <Copy SourceFiles="$(Root)/artifacts/pinvoke-provider/AtlasPInvokeProvider.dll" DestinationFiles="$(WindowsFixtures)/PInvokeProbe/AtlasPInvoke_λ.dll" />
+    <Exec EnvironmentVariables="$(CheckEnvironment)" Command="&quot;$(NativeCli)&quot; pinvoke &quot;$(WindowsFixtures)/PInvokeProbe/PInvokeProbe.exe&quot; &quot;$(VerificationRoot)/pinvoke.json&quot;" />
+    <Exec EnvironmentVariables="$(CheckEnvironment)" Command="&quot;$(WindowsFixtures)/PInvokeProbe/PInvokeProbe.exe&quot; &quot;$(VerificationRoot)/pinvoke.json&quot;" />
+    <Exec WorkingDirectory="$(Root)" Command="cmd /c tests\PeLinkageProbe\build.cmd" />
+    <Exec EnvironmentVariables="$(CheckEnvironment)" Command="&quot;$(Python)&quot; &quot;$(Root)/tests/live_runtime_checks.py&quot; linkage &quot;$(NativeCli)&quot; &quot;$(Root)/artifacts/pe-linkage-probe&quot;" />
+  </Target>
+
+  <Target Name="NativeEvidence" DependsOnTargets="BuildCli">
+    <Exec EnvironmentVariables="$(CheckEnvironment)" Command="&quot;$(Python)&quot; &quot;$(Root)/tests/analysis_status_checks.py&quot; &quot;$(NativeCli)&quot; &quot;$(PropertyFixture)&quot; &quot;$(DictionaryFixture)&quot;" />
+    <Exec EnvironmentVariables="$(CheckEnvironment)" Command="&quot;$(Python)&quot; &quot;$(Root)/tests/function_pointer_checks.py&quot; &quot;$(NativeCli)&quot; &quot;$(DictionaryFixture)&quot;" />
+    <Exec EnvironmentVariables="$(CheckEnvironment)" Command="&quot;$(Python)&quot; &quot;$(Root)/tests/property_rejection_checks.py&quot; &quot;$(NativeCli)&quot; &quot;$(PropertyFixture)&quot;" />
+    <Exec EnvironmentVariables="$(CheckEnvironment)" Command="&quot;$(Python)&quot; &quot;$(Root)/tests/reference_setter_checks.py&quot; &quot;$(NativeCli)&quot; &quot;$(CanonicalFixture)&quot;" />
+    <Exec EnvironmentVariables="$(CheckEnvironment)" Command="&quot;$(Python)&quot; &quot;$(Root)/tests/metadata_name_checks.py&quot; &quot;$(NativeCli)&quot; &quot;$(DictionaryFixture)&quot;" />
+    <Exec EnvironmentVariables="$(CheckEnvironment)" Condition="'$(StringFixture)' != ''" Command="&quot;$(Python)&quot; &quot;$(Root)/tests/string_precision_checks.py&quot; &quot;$(NativeCli)&quot; &quot;$(StringFixture)&quot; &quot;$(StringOracle)&quot; &quot;$(VerificationRoot)/strings.json&quot;" />
+  </Target>
+
+  <Target Name="NativePublication" DependsOnTargets="BuildCli">
+    <Exec EnvironmentVariables="$(CheckEnvironment)" Command="&quot;$(Python)&quot; &quot;$(Root)/tests/command_contract_checks.py&quot; &quot;$(NativeCli)&quot; &quot;$(TestAssembly)&quot; &quot;$(PublicationFixture)&quot; --output &quot;$(VerificationRoot)/command-contracts&quot;" />
+    <Exec EnvironmentVariables="$(CheckEnvironment)" Condition="'$(OS)' != 'Windows_NT'" Command="&quot;$(Python)&quot; &quot;$(Root)/tests/output_failure_checks.py&quot; &quot;$(NativeCli)&quot; &quot;$(PublicationFixture)&quot;" />
+    <Exec EnvironmentVariables="$(CheckEnvironment)" Condition="'$(OS)' == 'Windows_NT'" Command="&quot;$(Python)&quot; &quot;$(Root)/tests/cli_checks.py&quot; publication &quot;$(NativeCli)&quot; &quot;$(PublicationFixture)&quot;" />
+    <Exec EnvironmentVariables="$(CheckEnvironment)" Condition="'$(OS)' == 'Windows_NT'" Command="&quot;$(Python)&quot; &quot;$(Root)/tests/cli_checks.py&quot; publication &quot;$(NativeCli)&quot; &quot;$(PublicationFixture)&quot; --header" />
+    <Exec EnvironmentVariables="$(CheckEnvironment)" Condition="'$(OS)' == 'Windows_NT'" Command="&quot;$(Python)&quot; &quot;$(Root)/tests/cli_checks.py&quot; publication &quot;$(NativeCli)&quot; &quot;$(PublicationFixture)&quot; --query Dictionary" />
+  </Target>
+
+  <Target Name="Verify" DependsOnTargets="StructuredChecks;BinaryProducts;NativeIntegers;Metadata;GcReference;NativePublication;NativeEvidence;WindowsNative" />
+  <Target Name="VSTest" DependsOnTargets="Verify" />
+</Project>

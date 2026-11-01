@@ -97,10 +97,7 @@ internal static class RuntimeTypeIndexChecks {
         maps.Types.Clear();
         int wrapper = builder.AddNode(new SignatureNode { Kind = SignatureKind.Modified, Element = pair });
         var later = builder.Publish();
-        var clone = typeof(TypeBindings).GetMethod("WithSignatures",
-            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
-
-        var rebound = (TypeBindings)clone.Invoke(bindings, [later])!;
+        var rebound = bindings.WithSignatures(later);
         Assert(ReferenceEquals(rebound.Signatures, later));
         Check(rebound);
         Assert(rebound.Resolve(wrapper, 0, leaves.AsSpan(0, 2)) == 6);
@@ -108,8 +105,8 @@ internal static class RuntimeTypeIndexChecks {
         bool rejected = false;
 
         try {
-            clone.Invoke(bindings, [new SignatureBuilder().Publish()]);
-        } catch (System.Reflection.TargetInvocationException error) when (error.InnerException is ArgumentException) {
+            bindings.WithSignatures(new SignatureBuilder().Publish());
+        } catch (ArgumentException) {
             rejected = true;
         }
 

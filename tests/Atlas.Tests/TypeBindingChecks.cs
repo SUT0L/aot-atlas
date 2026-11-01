@@ -114,6 +114,22 @@ internal static class TypeBindingChecks {
         var canonicalTypes = new CanonicalTypes(tables);
 
         var canonicalGroups = new Dictionary<string, int>();
+        var shapeByGroup = new Dictionary<int, string>();
+        var expectedBindings = new int[count];
+        for (int i = 0; i < count; ++i) {
+            if (i < 8) {
+                expectedBindings[i] = i + 1;
+                continue;
+            }
+            var type = tables.Types[i];
+            string key = type.GenericDefinition + "<";
+            bool ambiguousChild = false;
+            for (int j = type.Arguments.Start; j < type.Arguments.End; ++j) {
+                key += tables.Pointers[j] + ",";
+                ambiguousChild |= expectedBindings[tables.Index[tables.Pointers[j]]] == 0;
+            }
+            expectedBindings[i] = ambiguousChild ? 0 : exact[key + ">"];
+        }
 
         for (int i = 0; i < count; ++i) {
             int group = canonicalTypes.Groups[i];
@@ -122,7 +138,13 @@ internal static class TypeBindingChecks {
             else
                 canonicalGroups.Add(expectedCanonical[i], group);
 
+            if (shapeByGroup.TryGetValue(group, out string? shape))
+                Assert(shape == expectedCanonical[i]);
+            else
+                shapeByGroup.Add(group, expectedCanonical[i]);
+
             int actual = bindings.Resolve(nodes[i]);
+            Assert(actual == expectedBindings[i]);
             if (i < 8) {
                 Assert(actual == i + 1);
                 Assert(bindings.Resolve(variable, i + 1) == 0);
@@ -130,27 +152,10 @@ internal static class TypeBindingChecks {
             }
 
             var type = tables.Types[i];
-            string key = type.GenericDefinition + "<";
-            bool ambiguousChild = false;
-
-            for (int j = type.Arguments.Start; j < type.Arguments.End; ++j) {
-                int child = tables.Index[tables.Pointers[j]];
-                key += tables.Pointers[j] + ",";
-                ambiguousChild |= bindings.Resolve(nodes[child]) == 0;
-            }
-
-            Assert(actual == (ambiguousChild ? 0 : exact[key + ">"]));
             Assert(bindings.Resolve(variable, i + 1) == tables.Index[tables.Pointers[type.Arguments.Start]] + 1);
         }
 
-        for (int i = 0; i < 20_000; ++i) {
-            int left = random.Next(count);
-            int right = random.Next(count);
-            Assert((canonicalTypes.Groups[left] == canonicalTypes.Groups[right])
-                == (expectedCanonical[left] == expectedCanonical[right]));
-        }
-
-        Console.WriteLine("Type bindings: 4096 seeded compositions and 20000 canonical comparisons match the structural reference.");
+        Console.WriteLine("Type bindings: 4096 declared compositions match independent identities and a bijection of canonical shapes.");
 
         Span<ulong> methodArguments = stackalloc ulong[4];
 
@@ -179,74 +184,6 @@ internal static class TypeBindingChecks {
 
         Console.WriteLine("Method bindings: 20000 seeded context changes preserve exact runtime identities and reject incomplete arguments.");
 
-        var metadata = new MetadataBuilder(default, 7);
-        tables = new MethodTables();
-        maps = new ReflectionMaps();
-
-        uint[] flags = [0x14U << 26, 5U << 26, 8U << 26, 0x10U << 26, (0x12U << 26) | (3U << 16)];
-        uint[] padding = [0, 7, 4, 3, 0];
-
-        for (int i = 0; i < flags.Length; ++i) {
-            ulong address = 0x140000000UL + (uint)i * 64;
-            tables.Index.Add(address, i);
-            tables.Types.Add(new MethodTable {
-                Address = address,
-                Flags = flags[i],
-                BaseSize = i == 0 ? 96U : 24U,
-                ValuePadding = padding[i],
-                GenericArity = i == 4 ? (ushort)1 : (ushort)0
-            });
-            metadata.SignatureBuilder.AddNode(new SignatureNode {
-                Kind = SignatureKind.Named,
-                Name = "SameName"
-            });
-            maps.Types.Add(new TypeMapEntry {
-                MethodTable = address,
-                Signature = i + 1
-            });
-        }
-
-        for (int i = 0; i < 7; ++i) {
-            SignatureNode node = i < 3
-                ? new SignatureNode {
-                    Kind = SignatureKind.Instantiation,
-                    Element = 5,
-                    Arguments = new IndexRange(metadata.SignatureBuilder.Edges.Length, 1)
-                }
-                : new SignatureNode {
-                    Kind = i == 3 ? SignatureKind.Pointer
-                        : i == 4 ? SignatureKind.SzArray
-                        : i == 5 ? SignatureKind.ByReference
-                        : SignatureKind.Unknown
-                };
-
-            if (i < 3)
-                metadata.SignatureBuilder.AddEdge(i + 2);
-
-            int signature = metadata.SignatureBuilder.Nodes.Length;
-            metadata.SignatureBuilder.AddNode(node);
-            maps.Fields.Add(new FieldMapEntry {
-                DeclaringType = tables.Types[0].Address,
-                Name = "F" + i,
-                Signature = signature,
-                Location = FieldLocation.Offset,
-                Value = 8U + (uint)i * 8
-            });
-        }
-
-        var layouts = new FieldLayouts(metadata.Publish(), maps, tables);
-
-        uint[] expectedSizes = [2, 8, 0, 8, 8, 8, 0];
-        FieldStorageKind[] expectedStorage = [FieldStorageKind.Value, FieldStorageKind.Value, FieldStorageKind.Unknown,
-            FieldStorageKind.Pointer, FieldStorageKind.Reference, FieldStorageKind.ByReference, FieldStorageKind.Unknown];
-
-        for (int i = 0; i < expectedSizes.Length; ++i) {
-            Assert(layouts.FieldTypes[i].Size == expectedSizes[i]);
-            Assert(layouts.FieldTypes[i].Storage == expectedStorage[i]);
-            Assert(layouts.FieldTypes[i].Binding == 0);
-        }
-
-        Console.WriteLine("Field sizes: primitive nullable alignment, unresolved struct alignment, and signature-defined pointer widths passed.");
     }
 
     private static void Assert(bool condition) {

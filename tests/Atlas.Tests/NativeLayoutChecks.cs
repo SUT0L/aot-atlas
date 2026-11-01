@@ -1,4 +1,3 @@
-using System.Buffers.Binary;
 using Atlas;
 
 internal static class NativeLayoutChecks {
@@ -7,27 +6,21 @@ internal static class NativeLayoutChecks {
             throw new Exception("NativeLayout assertion failed.");
     }
 
-    private static int Put(byte[] data, int offset, params uint[] values) {
-        foreach (uint value in values) {
-            data[offset] = 15;
-            BinaryPrimitives.WriteUInt32LittleEndian(data.AsSpan(offset + 1), value);
-            offset += 5;
-        }
-
-        return offset;
-    }
+    private static int Put(byte[] data, int offset, params uint[] values)
+        => NativeFixture.Unsigned(data, offset, values);
 
     internal static void Run() {
         byte[] data = new byte[1024];
         new byte[] { 0x46, 0x0C, 0x24, 0x08, 0x44, 0x68, 0x82 }.CopyTo(data, 0);
-        Put(data, 32, 0x2A, 6, 1, 7, 2, unchecked((uint)-2), 0);
+        int arrayEnd = Put(data, 32, 0x2A, 6, 1, 7, 2);
+        arrayEnd = Put(data, arrayEnd, unchecked((uint)-2), 0);
 
         data[80] = 2;
         data[81] = (byte)'M';
-        Put(data, 82, 128 - 82);
+        int methodEnd = Put(data, 82, 128 - 82);
 
         new byte[] { 10, 2, 12 }.CopyTo(data, 77);
-        Put(data, 87, 1, 0x145);
+        Put(data, methodEnd, 1, 0x145);
 
         Put(data, 128, 3, 1, 2, 0x14, 6, 0xB, 6, 1, 0x15, 0x85);
 
@@ -50,13 +43,13 @@ internal static class NativeLayoutChecks {
         reader.Position = 32;
         int arraySignature = layout.TypeSignature(ref reader);
         var array = signatures.Nodes[arraySignature];
-        Assert(reader.Position == 67 && array.Value == 2);
+        Assert(reader.Position == arrayEnd && array.Value == 2);
         Assert(array.Sizes.Count == 1 && signatures.Edges[array.Sizes.Start] == 7);
         Assert(array.LowerBounds.Count == 2 && signatures.Edges[array.LowerBounds.Start] == -2);
         Assert(signatures.Edges[array.LowerBounds.Start + 1] == 0);
 
         var method = layout.Method(80);
-        Assert(method.Name == "M" && method.End == 87 && layout.Method(80).Signature == method.Signature);
+        Assert(method.Name == "M" && method.End == methodEnd && layout.Method(80).Signature == method.Signature);
         Assert(signatures.RenderMethod(method.Name, method.Signature)
             == "M(mt_ref_1234, delegate* unmanaged<System.Int32,System.Void>) -> TM [native_cc=0x3]");
 
@@ -115,7 +108,7 @@ internal static class NativeLayoutChecks {
         }
 
         foreach (uint count in new uint[] { 0, 2 }) {
-            Put(data, 87, count);
+            Put(data, methodEnd, count);
             bool failed = false;
 
             try {

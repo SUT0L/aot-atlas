@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>net11.0</TargetFramework>
+    <TargetFramework Condition="'$(ProbeFramework)' != ''">$(ProbeFramework)</TargetFramework>
     <OutputType>Exe</OutputType>
     <PublishAot>true</PublishAot>
     <IlcDehydrate>true</IlcDehydrate>

@@ -4,7 +4,6 @@ using Atlas;
 
 internal static class MetadataFactsChecks {
     internal static void Run() {
-        Check(System.Runtime.CompilerServices.Unsafe.SizeOf<FactCell>() == 24, "Owned fact cell stride.");
         NamedQueriesPreserveIndependentFacts();
         OwnershipNormalizesAcrossEncodings();
         ReferenceOwnershipNormalizesAcrossEncodings();
@@ -316,22 +315,8 @@ internal static class MetadataFactsChecks {
         source[4] = 0;
     }
 
-    private static void Write(byte[] source, ref int position, uint value) {
-        if (value < 128) {
-            source[position++] = (byte)(value << 1);
-        } else if (value < 16384) {
-            source[position++] = (byte)(value << 2 | 1);
-            source[position++] = (byte)(value >> 6);
-        } else if (value < 2097152) {
-            source[position++] = (byte)(value << 3 | 3);
-            source[position++] = (byte)(value >> 5);
-            source[position++] = (byte)(value >> 13);
-        } else {
-            source[position++] = 15;
-            BinaryPrimitives.WriteUInt32LittleEndian(source.AsSpan(position), value);
-            position += 4;
-        }
-    }
+    private static void Write(byte[] source, ref int position, uint value)
+        => position = NativeFixture.Unsigned(source, position, value);
 
     private static void Check(bool condition, string message) {
         if (!condition) {

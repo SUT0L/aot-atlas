@@ -10,6 +10,11 @@ using Internal.Metadata.NativeFormat;
 internal static class RuntimeChecks {
 #if RUNTIME_CHECKS
     internal static unsafe void Run(ReadOnlySpan<string> inputs) {
+        string? cli = null;
+        if (inputs.Length >= 2 && inputs[0] == "--cli") {
+            cli = Path.GetFullPath(inputs[1]);
+            inputs = inputs[2..];
+        }
         var binaries = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (string input in inputs) {
@@ -57,6 +62,7 @@ internal static class RuntimeChecks {
             uint[] AtlasHandles(IndexRange range) => atlas.DefinitionHandles.Slice(range.Start, range.Count).ToArray();
             uint[] MemberHandles(IndexRange range) => members.MemberHandles.Slice(range.Start, range.Count).ToArray();
 
+            string inputSha256 = Convert.ToHexStringLower(SHA256.HashData(image.FileData));
             fixed (byte* bytes = data.Span) {
                 var reader = new MetadataReader((nint)bytes, data.Length);
                 var namespaces = new Queue<NamespaceDefinitionHandle>();
@@ -258,11 +264,16 @@ internal static class RuntimeChecks {
                     }
                 }
 
+                if (cli is not null) {
+                    CliMetadataChecks.Run(cli, binary, inputSha256, reader, handleBits, visited, expectedMethods,
+                        expectedFields, expectedProperties, expectedEvents, expectedParameters, expectedGenerics);
+                }
+
                 Console.WriteLine($"RTR {rtr.Major}.{rtr.Minor} {Path.GetRelativePath(Environment.CurrentDirectory, binary)}: "
                     + $"Microsoft runtime source matches {visited.Count} types, {expectedMethods.Count} methods, {expectedFields.Count} fields, "
                     + $"{expectedProperties.Count} properties, {expectedEvents.Count} events, {expectedParameters.Count} parameters, "
                     + $"{expectedGenerics.Count} generic parameters, {enumMembers} enum constants; metadata decode {metadataMs:F3} ms; "
-                    + $"sha256={Convert.ToHexStringLower(SHA256.HashData(image.FileData))}");
+                    + $"sha256={inputSha256}");
             }
 
             ++checkedBinaries;
@@ -313,7 +324,7 @@ internal static class RuntimeChecks {
     }
 #else
     internal static void Run(ReadOnlySpan<string> inputs) {
-        throw new InvalidOperationException("Run the RuntimeChecks MSBuild target with a dotnet/runtime checkout.");
+        throw new InvalidOperationException("Run tests/Verification.proj to prepare and compare the pinned Microsoft readers.");
     }
 #endif
 }

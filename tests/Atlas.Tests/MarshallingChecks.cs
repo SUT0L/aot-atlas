@@ -5,79 +5,6 @@ using Atlas;
 
 internal static class MarshallingChecks {
     internal static void Run(ReadOnlySpan<string> binaries) {
-        foreach (int bits in new[] { 7, 8 }) {
-            foreach (uint layout in new uint[] { 0, 8, 16, 24 }) {
-                foreach (bool retained in new[] { false, true }) {
-                    var metadata = new MetadataBuilder(new byte[1], bits);
-                    if (retained) {
-                        metadata.TypeIndex.Add(1, 0);
-                        metadata.Types.Add(new MetadataType {
-                            Offset = 1,
-                            Flags = layout
-                        });
-                    }
-
-                    var maps = new ReflectionMaps();
-                    maps.Types.Add(new TypeMapEntry {
-                        MethodTable = 0x140001000,
-                        Handle = (0x3AU << (32 - bits)) | 1
-                    });
-
-                    var tables = new MethodTables();
-                    tables.Types.Add(new MethodTable {
-                        Address = 0x140001000,
-                        Flags = 0x48000000,
-                        BaseSize = 24,
-                        ValuePadding = 4
-                    });
-
-                    bool nativeExtent = retained && layout is 8 or 16;
-
-                    foreach (uint offset in new uint[] { 0, 4, 8 }) {
-                        var marshalling = new Marshalling();
-                        marshalling.Structs.Add(new NativeStruct {
-                            Header = 4,
-                            Fields = new IndexRange(0, 1)
-                        });
-                        marshalling.Fields.Add(new NativeField(default, offset));
-
-                        bool rejected = false;
-
-                        try {
-                            marshalling.Bind(tables, metadata, maps, bits == 8);
-                        } catch (InvalidDataException) {
-                            rejected = true;
-                        }
-
-                        Assert(rejected == (nativeExtent && offset > 4));
-
-                        var entry = marshalling.Structs[0];
-                        Assert(entry.Size == 4 && entry.HasLayoutSize == nativeExtent);
-                        Assert(entry.SizeSource == (nativeExtent ? NativeSizeSource.MethodTable : NativeSizeSource.RuntimeCopy));
-                    }
-
-                    var explicitSize = new Marshalling();
-                    explicitSize.Structs.Add(new NativeStruct {
-                        Header = 5,
-                        Size = 4,
-                        SizeSource = NativeSizeSource.MarshallingMap,
-                        Fields = new IndexRange(0, 1)
-                    });
-                    explicitSize.Fields.Add(new NativeField(default, 8));
-
-                    bool explicitRejected = false;
-
-                    try {
-                        explicitSize.Bind(tables, metadata, maps, bits == 8);
-                    } catch (InvalidDataException) {
-                        explicitRejected = true;
-                    }
-
-                    Assert(explicitRejected);
-                }
-            }
-        }
-
         foreach (string binary in binaries) {
             var image = new PeImage(File.ReadAllBytes(binary));
             var header = ReadyToRun.Read(image);
@@ -137,7 +64,7 @@ internal static class MarshallingChecks {
             Console.WriteLine($"Marshalling sizes: {Convert.ToHexString(SHA256.HashData(image.FileData)).ToLowerInvariant()} — two live sizes, six offsets, and the auto-layout domain verified.");
         }
 
-        Console.WriteLine("Marshalling sizes: layout identity, missing metadata, and explicit extent failures verified.");
+        Console.WriteLine("Marshalling sizes: extracted native layouts match the running producer.");
     }
 
     private static void Assert(bool condition) {

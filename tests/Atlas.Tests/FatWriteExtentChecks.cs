@@ -1,13 +1,10 @@
 using Atlas;
 using Iced.Intel;
 using System.Buffers.Binary;
-using System.Reflection;
 
 internal static class FatWriteExtentChecks {
     internal static void Run() {
         const ulong target = 0x140010000;
-        MethodInfo checker = Type.GetType("Atlas.ImageWriteProof, Atlas", throwOnError: true)!
-            .GetMethod("MayWrite", BindingFlags.Static | BindingFlags.NonPublic)!;
         int[] lengths = [8, 16];
 
         foreach (int length in lengths) {
@@ -56,9 +53,9 @@ internal static class FatWriteExtentChecks {
         Console.WriteLine($"Image writes: {string.Join("/", lengths)}-byte extents, bounded stack induction, aliases, independent roots, loop budget, pivot, REP and XSAVE cases passed.");
 
         void Prove(byte[] bytes, bool expected, int[]? roots = null, ulong consumer = 0) {
-            object graph = MethodControlFlowChecks.Decode(bytes, roots);
+            var graph = MethodControlFlowChecks.Decode(bytes, roots);
             IReadOnlyList<bool> mask = MethodControlFlowChecks.Reachability(graph);
-            bool actual = (bool)checker.Invoke(null, [graph, mask, target, 16, consumer, null, CancellationToken.None])!;
+            bool actual = ImageWriteProof.MayWrite(graph, mask, target, 16, consumer);
 
             if (actual != expected)
                 throw new Exception($"Image write proof failed for {Convert.ToHexString(bytes)}.");
@@ -75,9 +72,9 @@ internal static class FatWriteExtentChecks {
             tail.CopyTo(bytes, 20);
             bytes[^1] = 0xC3;
 
-            object graph = MethodControlFlowChecks.Decode(bytes);
+            var graph = MethodControlFlowChecks.Decode(bytes);
             IReadOnlyList<bool> mask = MethodControlFlowChecks.Reachability(graph);
-            bool actual = (bool)checker.Invoke(null, [graph, mask, target, length, 0UL, null, CancellationToken.None])!;
+            bool actual = ImageWriteProof.MayWrite(graph, mask, target, length);
 
             if (actual != expected)
                 throw new Exception($"Image write extent failed for {Convert.ToHexString(tail)} at {address:X}.");

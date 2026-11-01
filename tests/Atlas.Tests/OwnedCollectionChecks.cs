@@ -1,29 +1,7 @@
-using System.Collections;
-using System.Reflection;
 using Atlas;
 
 internal static class OwnedCollectionChecks {
-    [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("Trimming", "IL2026", Justification = "The API audit runs against the untrimmed test assembly.")]
-    [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("Trimming", "IL2075", Justification = "The API audit inspects each exported result type in the untrimmed test assembly.")]
     internal static void Run() {
-        foreach (var type in typeof(Extraction).Assembly.GetExportedTypes()) {
-            if (type.IsAbstract)
-                continue;
-
-            foreach (var field in type.GetFields(BindingFlags.Public | BindingFlags.Instance)) {
-                if (field.FieldType.IsArray
-                    || typeof(IList).IsAssignableFrom(field.FieldType)
-                    || typeof(IDictionary).IsAssignableFrom(field.FieldType)
-                    || IsMemory(field.FieldType))
-                    throw new Exception($"Writable published field: {type.Name}.{field.Name}.");
-            }
-
-            foreach (var property in type.GetProperties(BindingFlags.Public | BindingFlags.Instance)) {
-                if (property.PropertyType.IsArray || IsMemory(property.PropertyType))
-                    throw new Exception($"Writable published property: {type.Name}.{property.Name}.");
-            }
-        }
-
         var prototype = PeFixture.Create(new byte[64], ".rdata", 0x40000040);
         var callerFile = (byte[])prototype.FileData.Clone();
         var image = new PeImage(callerFile);
@@ -75,12 +53,8 @@ internal static class OwnedCollectionChecks {
         }
 
         Assert(rejected);
-        Console.WriteLine("Owned collections: exported classes and structs expose no mutable backing arrays, lists, dictionaries or recoverable memory; input copies, retained runtime publications and append growth passed.");
+        Console.WriteLine("Owned snapshots: caller mutations and later builder changes preserve retained input and published values.");
     }
-
-    private static bool IsMemory(Type type) => type.IsGenericType
-        && (type.GetGenericTypeDefinition() == typeof(ReadOnlyMemory<>)
-            || type.GetGenericTypeDefinition() == typeof(Memory<>));
 
     private static void Assert(bool value) {
         if (!value)

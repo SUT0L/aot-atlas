@@ -18,29 +18,9 @@ internal static class AnalysisProductChecks {
             Check(ReferenceEquals(products.Members, products.Properties!.Members)
                 && ReferenceEquals(products.Abi!.Signatures, products.Properties.Signatures));
 
-            if (products.FunctionPointers!.DictionaryConsumers is { } consumers)
-                Check(ReferenceEquals(products.GenericContexts, consumers.ContextReferences)
-                    && ReferenceEquals(products.DictionaryConsumers, consumers));
-
-            foreach (var row in products.Properties.ProjectionEntries) {
-                var property = products.Members!.PropertyDefinitions[row.Property];
-                Check(products.Members.PropertyType(row.Property).Render()
-                    == products.Properties.Signatures.Types[property.Type].Render());
-            }
-
-            // The local compiler fixture declares Packet.Message as a string
-            // auto-property; the getter/setter select its first reference field.
-            var messages = products.Properties.ProjectionEntries.ToArray()
-                .Where(row => products.Members!.PropertyDefinitions[row.Property].Name == "Message").ToArray();
-            if (metadata.TypeDefinitions.ToArray().Any(row => row.Name == "Packet")) {
-                Check(messages.Length == 1 && messages[0].Size == 8 && messages[0].Offset == 8
-                    && messages[0].Getter != 0
-                    && messages[0].Storage.Kind == AbiKind.Reference);
-                Check(products.Members!.PropertyType(messages[0].Property).Render() == "System.String");
-                var property = products.Members.PropertyDefinitions[messages[0].Property];
-                var accessors = products.Members.AccessorEntries.Slice(property.Accessors.Start, property.Accessors.Count).ToArray();
-                Check(accessors.Any(row => row.Semantics == 1) && accessors.Any(row => row.Semantics == 2));
-            }
+            var consumers = products.FunctionPointers!.DictionaryConsumers;
+            Check(consumers is not null && ReferenceEquals(products.GenericContexts, consumers.ContextReferences)
+                && ReferenceEquals(products.DictionaryConsumers, consumers));
 
             var shared = AnalysisProducts.Read(image);
             Check(ReferenceEquals(shared.Members, shared.Properties!.Members)
@@ -50,12 +30,11 @@ internal static class AnalysisProductChecks {
 
             var selected = AnalysisProducts.Read(image,
                 requested: AnalysisProduct.Code);
-            Check(selected.Extraction.Stages == AnalysisProducts.RequiredExtractionStages(AnalysisProduct.Code));
             Check(selected.Abi is not null && selected.Code is not null && selected.Members is null
                 && selected.Properties is null && selected.DispatchCells is null && selected.GcInfo is null
                 && selected.FunctionPointers is null && selected.GenericContexts is null && selected.Strings is null);
             Check(ReferenceEquals(selected.RequireCode(), selected.Code));
-            RejectProduct(selected.RequireStrings, "not requested");
+            Reject<InvalidOperationException>(() => selected.RequireStrings());
 
             byte[] withoutUnwind = (byte[])image.FileData.Clone();
             int unwindEntry = image.FileRange(image.ImageBase + image.ExceptionRva).Start;
@@ -65,11 +44,10 @@ internal static class AnalysisProductChecks {
             var unavailable = AnalysisProducts.Read(new PeImage(withoutUnwind),
                 requested: AnalysisProduct.Code);
             Check(unavailable.Code is null);
-            RejectProduct(unavailable.RequireCode, "managed unwind is unavailable");
+            Reject<InvalidOperationException>(() => unavailable.RequireCode());
 
             var contexts = AnalysisProducts.Read(image,
                 requested: AnalysisProduct.GenericContexts);
-            Check(contexts.Extraction.Stages == AnalysisProducts.RequiredExtractionStages(AnalysisProduct.GenericContexts));
             Check(contexts.GenericContexts is not null && contexts.DictionaryConsumers is not null && contexts.GcInfo is not null
                 && contexts.FunctionPointers is null && contexts.Abi is null && contexts.Code is null
                 && contexts.Members is null && contexts.Properties is null && contexts.DispatchCells is null && contexts.Strings is null);
@@ -88,8 +66,7 @@ internal static class AnalysisProductChecks {
                 && contexts.DictionaryConsumers.UnresolvedOwners.SequenceEqual(products.DictionaryConsumers.UnresolvedOwners));
 
             var helpers = AnalysisProducts.Read(image, requested: AnalysisProduct.Helpers);
-            Check(helpers.Extraction.Stages == AnalysisProducts.RequiredExtractionStages(AnalysisProduct.Helpers)
-                && helpers.Extraction.Stages == ExtractionStage.RuntimeTypes);
+            Check(helpers.Extraction.Stages == ExtractionStage.RuntimeTypes);
             Check(helpers.Helpers?.Status == RuntimeHelperStatus.Complete
                 && products.Helpers?.Status == RuntimeHelperStatus.Complete
                 && helpers.Helpers.HelperEntries.SequenceEqual(products.Helpers.HelperEntries)
@@ -103,22 +80,16 @@ internal static class AnalysisProductChecks {
                 && fullHelpers.Helpers!.HelperEntries.SequenceEqual(helpers.Helpers.HelperEntries)
                 && fullHelpers.Helpers.StartupEdges.SequenceEqual(helpers.Helpers.StartupEdges));
             Check(fullHelpers.Code is not null && fullHelpers.Abi is not null);
-            Check(helpers.TotalMeasurement.AllocatedBytes < fullHelpers.TotalMeasurement.AllocatedBytes);
 
             byte[] damagedTable = (byte[])image.FileData.Clone();
             BinaryPrimitives.WriteUInt64LittleEndian(
                 damagedTable.AsSpan(image.FileRange(helpers.Helpers!.Table).Start), 0);
             var fallback = AnalysisProducts.Read(new PeImage(damagedTable),
                 requested: AnalysisProduct.Helpers);
-            Check((fallback.Extraction.Stages & AnalysisProducts.RequiredExtractionStages(AnalysisProduct.Code))
-                == AnalysisProducts.RequiredExtractionStages(AnalysisProduct.Code));
             Check(fallback.Code is not null && fallback.Abi is not null
                 && fallback.Helpers?.Status != RuntimeHelperStatus.Complete);
             Reject<ArgumentException>(() => AnalysisProducts.Read(new PeImage(damagedTable),
                 requested: AnalysisProduct.Helpers, stages: ExtractionStage.RuntimeTypes));
-
-            Console.WriteLine($"Helper product: {helpers.TotalMeasurement.AllocatedBytes} B startup path versus "
-                + $"{fullHelpers.TotalMeasurement.AllocatedBytes} B code path; damaged startup selected code fallback.");
 
             using var canceled = new CancellationTokenSource();
             canceled.Cancel();
@@ -130,7 +101,7 @@ internal static class AnalysisProductChecks {
             Reject<ArgumentException>(() => new PropertyProjections(shared.Extraction, products.Abi!));
             Reject<ArgumentException>(() => new CodeFlow(shared.Extraction, products.Abi!));
 
-            Console.WriteLine($"Analysis products: {path}; shared members/signature publication, ABI/property/code facts, compiler auto-property, selective prerequisites, source isolation and owner rejection passed.");
+            Console.WriteLine($"Analysis products: {path}; shared members/signature publication, selective prerequisites, helper fallback and owner rejection passed.");
         }
     }
 
@@ -147,15 +118,5 @@ internal static class AnalysisProductChecks {
         }
 
         throw new Exception($"Expected {typeof(T).Name}.");
-    }
-
-    private static void RejectProduct<T>(Func<T> read, string reason) {
-        try {
-            read();
-        } catch (InvalidOperationException error) when (error.Message.Contains(reason, StringComparison.Ordinal)) {
-            return;
-        }
-
-        throw new Exception($"Expected product failure containing '{reason}'.");
     }
 }

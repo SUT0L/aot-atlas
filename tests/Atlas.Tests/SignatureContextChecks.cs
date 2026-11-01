@@ -137,18 +137,9 @@ internal static class SignatureContextChecks {
             byte[] data = new byte[1024];
             uint H(int offset, uint kind) => ((uint)offset << bits) | kind;
 
-            void Put(int offset, params uint[] values) {
-                foreach (uint value in values) {
-                    data[offset++] = 15;
-                    BinaryPrimitives.WriteUInt32LittleEndian(data.AsSpan(offset), value);
-                    offset += 4;
-                }
-            }
+            void Put(int offset, params uint[] values) => NativeFixture.Unsigned(data, offset, values);
 
-            void Text(int offset, string text) {
-                Put(offset, (uint)Encoding.UTF8.GetByteCount(text));
-                Encoding.UTF8.GetBytes(text, data.AsSpan(offset + 5));
-            }
+            void Text(int offset, string text) => NativeFixture.Text(data, offset, text);
 
             Text(32, "Collision");
             Text(64, "Packet");

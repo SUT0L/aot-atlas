@@ -8,20 +8,11 @@ internal static class MetadataIdentityChecks {
             throw new Exception("Metadata identity assertion failed.");
     }
 
-    private static int Put(byte[] data, int offset, params uint[] values) {
-        foreach (uint value in values) {
-            data[offset++] = 15;
-            BinaryPrimitives.WriteUInt32LittleEndian(data.AsSpan(offset), value);
-            offset += 4;
-        }
+    private static int Put(byte[] data, int offset, params uint[] values)
+        => NativeFixture.Unsigned(data, offset, values);
 
-        return offset;
-    }
-
-    private static void Text(byte[] data, int offset, string text) {
-        Put(data, offset, (uint)Encoding.UTF8.GetByteCount(text));
-        Encoding.UTF8.GetBytes(text, data.AsSpan(offset + 5));
-    }
+    private static void Text(byte[] data, int offset, string text)
+        => NativeFixture.Text(data, offset, text);
 
     internal static void Run() {
         foreach (int bits in new[] { 7, 8 }) {

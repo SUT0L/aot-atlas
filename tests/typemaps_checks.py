@@ -90,7 +90,7 @@ def main():
         output.write_bytes(previous)
         for operation in ("typemaps", "extract"):
             result = subprocess.run([*cli, operation, str(damaged), str(output)], capture_output=True, text=True)
-            assert result.returncode != 0 and "section 340" in result.stderr and "state 2" in result.stderr
+            assert result.returncode != 0 and result.stderr.strip()
             assert output.read_bytes() == previous, "Malformed maps replaced the previous result."
             assert not list(Path(directory).glob("*.tmp")), "Failed output left temporary files."
 

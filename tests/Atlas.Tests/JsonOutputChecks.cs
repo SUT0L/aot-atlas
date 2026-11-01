@@ -61,7 +61,7 @@ internal static class JsonOutputChecks {
                 using var json = JsonOutput.CreateWriter(stream, default);
                 WriteRecord(json);
             } catch (IOException error) {
-                failed = error.Message == "write fault";
+                failed = ReferenceEquals(error, stream.Failure);
             }
 
             Require(failed, "Serialization did not propagate the write fault.");
@@ -233,11 +233,12 @@ internal static class JsonOutputChecks {
 
     private sealed class ObservedStream(bool fail = false, CancellationTokenSource? cancellation = null) : MemoryStream {
         internal int Writes;
+        internal readonly IOException Failure = new("write fault");
 
         public override void Write(ReadOnlySpan<byte> data) {
             ++Writes;
             if (fail)
-                throw new IOException("write fault");
+                throw Failure;
 
             base.Write(data);
             cancellation?.Cancel();

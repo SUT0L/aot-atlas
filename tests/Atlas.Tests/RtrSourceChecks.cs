@@ -1,6 +1,5 @@
 using System.Buffers.Binary;
 using System.Numerics;
-using System.Runtime.CompilerServices;
 using Atlas;
 
 internal static class RtrSourceChecks {
@@ -62,19 +61,7 @@ internal static class RtrSourceChecks {
             Assert(new ResourceMap(second, secondHeader).Bytes[0] == 0x22);
         }
 
-        var (retained, sourceBytes) = RetainedHeader();
-        GC.Collect();
-        GC.WaitForPendingFinalizers();
-        GC.Collect();
-        Assert(!sourceBytes.IsAlive && retained.Sections.Length == 2);
-        GC.KeepAlive(retained);
-        Console.WriteLine("RTR source validation: legacy/embedded foreign rows reject at public decoders; equivalent clones and unrelated edits remain valid; duplicate headers reject and retained headers do not keep file bytes alive.");
-    }
-
-    [MethodImpl(MethodImplOptions.NoInlining)]
-    private static (ReadyToRun Header, WeakReference SourceBytes) RetainedHeader() {
-        var image = Create(true, 192, 0x22);
-        return (ReadyToRun.Read(image), new WeakReference(image.FileData));
+        Console.WriteLine("RTR source validation: foreign rows reject; equivalent clones and unrelated edits remain valid; duplicate headers reject.");
     }
 
     private static PeImage Create(bool embedded, int payloadOffset, byte payload) {

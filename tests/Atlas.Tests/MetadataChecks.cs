@@ -8,21 +8,11 @@ internal static class MetadataChecks {
             throw new Exception("Metadata assertion failed.");
     }
 
-    private static int Put(byte[] data, int offset, params uint[] values) {
-        foreach (uint value in values) {
-            data[offset] = 15;
-            BinaryPrimitives.WriteUInt32LittleEndian(data.AsSpan(offset + 1), value);
-            offset += 5;
-        }
+    private static int Put(byte[] data, int offset, params uint[] values)
+        => NativeFixture.Unsigned(data, offset, values);
 
-        return offset;
-    }
-
-    private static void Text(byte[] data, int offset, string value) {
-        int count = Encoding.UTF8.GetByteCount(value);
-        Put(data, offset, (uint)count);
-        Encoding.UTF8.GetBytes(value, data.AsSpan(offset + 5));
-    }
+    private static void Text(byte[] data, int offset, string value)
+        => NativeFixture.Text(data, offset, value);
 
     internal static void Run() {
         foreach (int bits in new[] { 7, 8 }) {
@@ -48,7 +38,9 @@ internal static class MetadataChecks {
             Put(data, 320, Handle(2112, 0x3E));
             Put(data, 352, Handle(2144, 0x3E));
             Put(data, 384, Handle(192, 0x3D), 2, Handle(2048, 0x3E), Handle(2080, 0x3E));
-            Put(data, 432, Handle(224, 0x3D), 2, 1, 3, 2, unchecked((uint)-2), 0);
+            int bounds = Put(data, 432, Handle(224, 0x3D), 2, 1, 3, 2);
+            bounds = NativeFixture.Signed(data, bounds, -2);
+            NativeFixture.Signed(data, bounds, 0);
             data[480] = 1;
             Put(data, 481, Handle(224, 0x3D), Handle(2176, 0x3E));
             Put(data, 512, 5, 2, Handle(2112, 0x3E), 1, Handle(2176, 0x3E), 1, Handle(2144, 0x3E));
@@ -193,13 +185,14 @@ internal static class MetadataChecks {
             Text(data, 32, "Field");
             Text(data, 48, "T");
             Put(data, 80, ((uint)160 << bits) | (uint)MetadataRecordKind.TypeReference);
-            Put(data, 96, 0x10, 32, 80, 0, 12, 0);
+            int tail = Put(data, 96, 0x10, 32, 80);
+            Put(data, tail, 0, 12, 0);
             Put(data, 160, 0, 48);
             var roots = new[] { new MetadataRecordId(MetadataRecordKind.Field, 96) };
             var healthy = Metadata.Read(data, new(bits), roots);
             Assert(healthy.Fields.Length == 1 && healthy.Fields[0].ExplicitOffset == 12);
 
-            data[111] = 255; // Invalid varint begins after the known flags/name/signature prefix.
+            data[tail] = 255; // Invalid varint begins after the known flags/name/signature prefix.
             var partial = Metadata.Read(data, new(bits), roots);
             Assert(partial.Fields.Length == 1 && !partial.IsComplete);
             var field = partial.Fields[0];
@@ -210,7 +203,7 @@ internal static class MetadataChecks {
             Assert(healthy.Fields[0].ExplicitOffset == 12
                 && healthy.Fields[0].DefaultValueStatus == MetadataFactStatus.Valid);
 
-            data[111] = 15;
+            data[tail] = 0;
             var restored = Metadata.Read(data, new(bits), roots);
             Assert(restored.IsComplete && restored.Fields[0].ExplicitOffset == 12);
         }
@@ -225,8 +218,8 @@ internal static class MetadataChecks {
         Put(invokeMap, 5, 0x80, 32);
 
         byte[] layout = new byte[128];
-        Text(layout, 32, "M");
-        Put(layout, 38, 10);
+        int identityEnd = NativeFixture.Text(layout, 32, "M");
+        Put(layout, identityEnd, 10);
 
         Assert(ReflectionMaps.SelectFormat(12, invokeMap, [], [], definitions) == MapFormat.Metadata);
         Assert(ReflectionMaps.SelectFormat(12, invokeMap, [], layout, new MetadataBuilder(default, 7)) == MapFormat.Legacy);

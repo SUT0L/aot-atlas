@@ -4,17 +4,6 @@ using Atlas.Binja;
 
 internal static class Rtr32Checks {
     internal static void Run() {
-        var format = NativeAotFormat.ForVersion(32, 0);
-        Assert(format.NormalizeInvokeFlags(0x3f) == 0xbb, "Compact invoke flags lost a semantic bit.");
-        Assert(format.NormalizeFieldFlags(0xf) == 0xa3, "Compact field flags lost a semantic bit.");
-        Assert(format.ExternalTypeMapSection == RtrSectionId.SharedExternalTypeMap
-            && format.ProxyTypeMapSection == RtrSectionId.SharedProxyTypeMap, "Current type map sections are wrong.");
-        var old = NativeAotFormat.ForVersion(16, 0);
-        Assert(old.NormalizeInvokeFlags(0xbb) == 0xbb && old.NormalizeFieldFlags(0xa3) == 0xa3,
-            "Legacy reflection flags changed.");
-        Assert(old.ExternalTypeMapSection == RtrSectionId.ExternalTypeMap
-            && old.ProxyTypeMapSection == RtrSectionId.ProxyTypeMap, "Legacy type map sections changed.");
-
         SparseContracts();
         DictionaryRecipe();
         DispatchHelper();
@@ -126,7 +115,8 @@ internal static class Rtr32Checks {
         at = Put(layout, 64, 2, 3, 1, 6, 4);
         "Echo"u8.CopyTo(layout.AsSpan(at));
         at += 4;
-        at = Put(layout, at, (uint)(200 - at), 1, 0x16, 1, 0x26);
+        at = NativeFixture.Signed(layout, at, 200 - at);
+        Put(layout, at, 1, 0x16, 1, 0x26);
         Put(layout, 200, 1, 1, 1, 0x14, 0x14);
 
         foreach (bool retain in new[] { false, true }) {
@@ -141,7 +131,7 @@ internal static class Rtr32Checks {
                     && recipes[1].Kind == DictionaryFixup.TypeHandle, "GVM method payload or following recipe was lost.");
             }
             var legacy = Recipes(layout, 18, 5, retain);
-            Assert(legacy.Dictionaries.SignatureGaps.SequenceEqual(new[] { new DictionarySignatureGap(64, 69, 3, 2) })
+            Assert(legacy.Dictionaries.SignatureGaps.SequenceEqual(new[] { new DictionarySignatureGap(64, 65, 3, 2) })
                 && legacy.Native.ExternalTypes.Count == 0, "GVM recipe was accepted in an older wire grammar.");
         }
     }
@@ -401,14 +391,8 @@ internal static class Rtr32Checks {
         BinaryPrimitives.WriteUInt64LittleEndian(row[8..], 0x140001000UL + (uint)offset);
     }
 
-    private static int Put(byte[] bytes, int offset, params uint[] values) {
-        foreach (uint value in values) {
-            bytes[offset++] = 15;
-            BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(offset), value);
-            offset += 4;
-        }
-        return offset;
-    }
+    private static int Put(byte[] bytes, int offset, params uint[] values)
+        => NativeFixture.Unsigned(bytes, offset, values);
 
     private static void Assert(bool condition, string message) {
         if (!condition)

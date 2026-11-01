@@ -54,10 +54,11 @@ def main():
     parser.add_argument("cli", type=Path)
     parser.add_argument("test_host", type=Path)
     parser.add_argument("binary", type=Path)
+    parser.add_argument("--output", type=Path)
     arguments = parser.parse_args()
 
     root = Path(__file__).resolve().parents[1]
-    output = root / "artifacts" / "verify" / "command-contracts"
+    output = arguments.output or root / "artifacts" / "verify" / "command-contracts"
     output.mkdir(parents=True, exist_ok=True)
 
     result = subprocess.run(

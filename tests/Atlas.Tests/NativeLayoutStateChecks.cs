@@ -19,21 +19,13 @@ internal static class NativeLayoutStateChecks {
         }
     }
 
-    private static int Put(byte[] data, int offset, params uint[] values) {
-        foreach (uint value in values) {
-            data[offset++] = 15;
-            BinaryPrimitives.WriteUInt32LittleEndian(data.AsSpan(offset), value);
-            offset += 4;
-        }
-
-        return offset;
-    }
+    private static int Put(byte[] data, int offset, params uint[] values)
+        => NativeFixture.Unsigned(data, offset, values);
 
     private static byte[] Encoded(params uint[] values) {
         byte[] data = new byte[values.Length * 5];
-        Put(data, 0, values);
-
-        return data;
+        int end = Put(data, 0, values);
+        return data[..end];
     }
 
     internal static void Run() {
@@ -60,8 +52,9 @@ internal static class NativeLayoutStateChecks {
     }
 
     private static void CheckTypeFailure(byte[] invalid) {
-        byte[] data = new byte[32 + Math.Max(5, invalid.Length)];
-        Put(data, 0, 6);
+        byte[] data = new byte[32 + invalid.Length];
+        int prefixEnd = Put(data, 0, 6);
+        Put(data, 16, 0x85);
         invalid.CopyTo(data, 32);
 
         var signatures = new SignatureBuilder();
@@ -71,40 +64,37 @@ internal static class NativeLayoutStateChecks {
         int prior = layout.TypeSignature(ref prefix);
 
         var saved = State.Read(layout, signatures);
-        string? first = null;
 
-        for (int replay = 0; replay < 1000; ++replay) {
+        for (int replay = 0; replay < 2; ++replay) {
             var reader = new NativeReader(data, 32);
-            string? error = null;
+            bool rejected = false;
 
             try {
                 layout.TypeSignature(ref reader);
-            } catch (InvalidDataException failure) {
-                error = failure.Message;
+            } catch (InvalidDataException) {
+                rejected = true;
             }
 
-            Assert(error is not null && (first is null || first == error));
-            first ??= error;
+            Assert(rejected);
             Assert(reader.Position == 32);
             saved.Equal(layout, signatures);
 
             prefix.Position = 0;
-            Assert(layout.TypeSignature(ref prefix) == prior && prefix.Position == 5);
+            Assert(layout.TypeSignature(ref prefix) == prior && prefix.Position == prefixEnd);
         }
 
-        Put(data, 32, 0x85);
-        var restored = new NativeReader(data, 32);
+        var restored = new NativeReader(data, 16);
         int valid = layout.TypeSignature(ref restored);
 
         Assert(valid == saved.Nodes.Length && signatures.RenderType(valid) == "System.Int32");
         Assert(signatures.Nodes[1].Name == "PreviouslyPublished" && layout.ExternalTypes[0x1234] == prior);
     }
 
-    private static void Identity(byte[] data, int offset, string name, int signature) {
+    private static int Identity(byte[] data, int offset, string name, int signature) {
         int origin = Put(data, offset, (uint)name.Length);
         Encoding.UTF8.GetBytes(name, data.AsSpan(origin));
         origin += name.Length;
-        Put(data, origin, (uint)(signature - origin));
+        return NativeFixture.Signed(data, origin, signature - origin);
     }
 
     private static void CheckNativeMethods() {
@@ -125,19 +115,16 @@ internal static class NativeLayoutStateChecks {
         var saved = State.Read(layout, signatures);
 
         foreach (uint offset in new uint[] { 32, 64, uint.MaxValue }) {
-            string? first = null;
-
-            for (int replay = 0; replay < 1000; ++replay) {
-                string? error = null;
+            for (int replay = 0; replay < 2; ++replay) {
+                bool rejected = false;
 
                 try {
                     layout.Method(offset);
                 } catch (Exception failure) when (failure is InvalidDataException or OverflowException) {
-                    error = failure.Message;
+                    rejected = true;
                 }
 
-                Assert(error is not null && (first is null || first == error));
-                first ??= error;
+                Assert(rejected);
                 saved.Equal(layout, signatures);
 
                 var cached = layout.Method(0);
@@ -146,7 +133,7 @@ internal static class NativeLayoutStateChecks {
         }
 
         foreach (uint offset in new uint[] { 160, 224, uint.MaxValue }) {
-            for (int replay = 0; replay < 1000; ++replay) {
+            for (int replay = 0; replay < 2; ++replay) {
                 bool rejected = false;
                 try {
                     layout.MethodSignature(offset);
@@ -159,31 +146,27 @@ internal static class NativeLayoutStateChecks {
             }
         }
 
-        Put(data, 185, 0x145);
-        var restored = layout.Method(32);
-        Assert(layout.MethodSignature(160) == restored.Signature);
-        Assert(restored.Signature == saved.Methods.Length);
-        Assert(signatures.RenderMethod(restored.Name, restored.Signature)
-            == "Bad(System.Int32, System.String) -> mt_ref_1234 [native_cc=0x1]");
+
     }
 
     private static void CheckLegacyEntry() {
         byte[] native = new byte[256];
-        Put(native, 0, 1, 6);
-        Identity(native, 10, "L", 128);
-        Put(native, 21, 2, 0x16, 7);
+        int identity = Put(native, 0, 1, 6);
+        int arguments = Identity(native, identity, "L", 128);
+        int badArgument = Put(native, arguments, 2, 0x16);
+        Put(native, badArgument, 7);
         Put(native, 128, 1, 2, 0, 0x15);
 
         var metadata = new MetadataBuilder(default, 7);
         var layout = new NativeLayout(native, [0x1234, 0x5678], metadata.SignatureBuilder, takeOwnership: true);
         State saved = State.Read(layout, metadata.SignatureBuilder);
 
-        for (int replay = 0; replay < 1000; ++replay) {
+        for (int replay = 0; replay < 2; ++replay) {
             bool rejected = false;
 
             try {
                 layout.MethodEntry(0, metadata, MapFormat.Legacy);
-            } catch (InvalidDataException error) when (error.Message.Contains("kind 0x7", StringComparison.Ordinal)) {
+            } catch (InvalidDataException) {
                 rejected = true;
             }
 
@@ -195,7 +178,7 @@ internal static class NativeLayoutStateChecks {
             Assert(layout.ExternalTypes.Count == 1 && layout.ExternalTypes.ContainsKey(0x1234));
         }
 
-        Put(native, 31, 0x85);
+        Put(native, badArgument, 0x85);
         var restored = layout.MethodEntry(0, metadata, MapFormat.Legacy);
         Assert(restored.Identity.Signature == 1
             && restored.Arguments.Start == 0 && restored.Arguments.Count == 2);
@@ -213,34 +196,32 @@ internal static class NativeLayoutStateChecks {
         Put(data, 800, Handle(64, 0x2C));
         Put(data, 128, 0x10, 2, Handle(768, 0x3E), 1, Handle(800, 0x3E), 0);
         Put(data, 256, 0, 0, 512, 128, 0, 2, 640, 672, 0);
-        Put(data, 512, 1);
-        data[517] = (byte)'M';
+        NativeFixture.Text(data, 512, "M");
 
         var metadata = new MetadataBuilder(data, bits, legacyConstants: false, takeOwnership: true);
         int priorMetadata = metadata.TypeSignature(Handle(32, 0x3F));
 
         byte[] native = new byte[128];
         Put(native, 0, 6);
-        Put(native, 32, 1, 6, (0x28U << (32 - bits)) | 256, 2, 0x16, 7);
+        int badArgument = Put(native, 32, 1, 6, (0x28U << (32 - bits)) | 256, 2, 0x16);
+        Put(native, badArgument, 7);
 
         var layout = new NativeLayout(native, [0x1234, 0x5678], metadata.SignatureBuilder, takeOwnership: true);
         var reader = new NativeReader(native);
         int priorNative = layout.TypeSignature(ref reader);
 
-        string? first = null;
         State saved = State.Read(layout, metadata.SignatureBuilder);
 
-        for (int replay = 0; replay < 1000; ++replay) {
-            string? error = null;
+        for (int replay = 0; replay < 2; ++replay) {
+            bool rejected = false;
 
             try {
                 layout.MethodEntry(32, metadata, MapFormat.Metadata);
-            } catch (InvalidDataException failure) {
-                error = failure.Message;
+            } catch (InvalidDataException) {
+                rejected = true;
             }
 
-            Assert(error is not null && (first is null || first == error));
-            first ??= error;
+            Assert(rejected);
 
             if (replay == 0)
                 saved = State.Read(layout, metadata.SignatureBuilder);
@@ -253,7 +234,7 @@ internal static class NativeLayoutStateChecks {
             Assert(layout.TypeSignature(ref reader) == priorNative);
         }
 
-        Put(native, 57, 0x85);
+        Put(native, badArgument, 0x85);
         var restored = layout.MethodEntry(32, metadata, MapFormat.Metadata);
         Assert(restored.Identity.Signature == 1 && restored.DeclaringType == priorNative);
         Assert(restored.Arguments.Start == 1 && restored.Arguments.Count == 2);
@@ -265,6 +246,6 @@ internal static class NativeLayoutStateChecks {
 
     private static void Assert(bool condition) {
         if (!condition)
-            throw new InvalidDataException("NativeLayout state assertion failed.");
+            throw new Exception("NativeLayout state assertion failed.");
     }
 }

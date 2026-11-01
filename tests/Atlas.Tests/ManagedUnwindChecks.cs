@@ -155,16 +155,19 @@ internal static class ManagedUnwindChecks {
                     break;
             }
 
+            if (fault == 5) {
+                image = new PeImage(invalid);
+                var damaged = new ManagedUnwind(image, new UnwindTables(image), new PeDebug(image));
+                Assert(damaged.Frames.Length == 4 && damaged.Clauses.Length == 3);
+                Assert(damaged.Clauses[0].TypeUnavailable);
+                continue;
+            }
+
             bool failed = false;
 
             try {
                 image = new PeImage(invalid);
-                var damaged = new ManagedUnwind(image, new UnwindTables(image), new PeDebug(image));
-                if (fault == 5) {
-                    Assert(damaged.Frames.Length == result.Frames.Length);
-                    Assert(damaged.Clauses[0].TypeUnavailable);
-                    continue;
-                }
+                _ = new ManagedUnwind(image, new UnwindTables(image), new PeDebug(image));
             } catch (InvalidDataException) {
                 failed = true;
             } catch (NotSupportedException) {
@@ -179,6 +182,6 @@ internal static class ManagedUnwindChecks {
 
     private static void Assert(bool condition) {
         if (!condition)
-            throw new InvalidDataException("Managed unwind assertion failed.");
+            throw new Exception("Managed unwind assertion failed.");
     }
 }

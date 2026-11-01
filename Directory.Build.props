@@ -1,5 +1,6 @@
 <Project>
   <PropertyGroup>
+    <ArtifactsProjectName Condition="'$(MSBuildProjectName)' == 'RuntimeChecks' And '$(ReaderSchema)' != ''">RuntimeChecks-$(ReaderSchema)</ArtifactsProjectName>
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>

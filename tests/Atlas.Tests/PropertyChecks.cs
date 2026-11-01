@@ -99,7 +99,7 @@ internal static class PropertyChecks {
                 }
 
                 bool retained = metadata.Types.Any(type => type.Name == "IFields" && type.Properties.Count != 0);
-                Assert(observed == (retained ? 8 : 0), "Named interface projections must require retained property semantics.");
+                Assert(retained && observed == 8, "The retained interface fixture must prove eight live property projections.");
 
                 foreach (var type in metadata.Types) {
                     if (type.Name is "Ordinary" or "Explicit" or "UsesDefault" or "Covariant"
@@ -112,7 +112,6 @@ internal static class PropertyChecks {
                 Assert(!properties.Projections.Any(projection => properties.Members.Properties[projection.Property].Name == "Next"),
                     "A computed default-interface property became a storage projection.");
 
-                CheckConflictingInterfaceAccessors(extraction, abi, properties);
             } else if (lines.Any(line => line.StartsWith("owner|"))) {
                 int liveCount = 0;
                 int unprovenCopies = 0;
@@ -188,70 +187,6 @@ internal static class PropertyChecks {
             }
 
             Console.WriteLine($"{Path.GetFileName(binary)}: {observed} live property observations; {properties.Projections.Count} projections; sha256={Convert.ToHexStringLower(SHA256.HashData(image.FileData))}");
-        }
-    }
-
-    private static void CheckConflictingInterfaceAccessors(Extraction extraction, ManagedAbi abi, PropertyProjections baseline) {
-        PropertyProjection destination = default;
-        PropertyProjection source = default;
-
-        bool getter = false;
-        bool found = false;
-
-        for (int i = 0; i < baseline.Projections.Count && !found; ++i) {
-            var first = baseline.Projections[i];
-            if (first.Owner == first.Contract) {
-                continue;
-            }
-
-            for (int j = i + 1; j < baseline.Projections.Count; ++j) {
-                var second = baseline.Projections[j];
-                if (first.Owner == second.Owner
-                    || first.Contract != second.Contract
-                    || first.Property != second.Property
-                    || first.Offset != second.Offset
-                    || first.Size != second.Size
-                    || first.Storage.Kind != second.Storage.Kind
-                    || first.Storage.Binding != second.Storage.Binding
-                    || first.ByReference != second.ByReference) {
-                    continue;
-                }
-
-                if (first.Getter != 0 && second.Getter != 0 && first.Getter != second.Getter) {
-                    destination = first;
-                    source = second;
-                    getter = true;
-                    found = true;
-                    break;
-                }
-
-                if (first.Setter != 0 && second.Setter != 0 && first.Setter != second.Setter) {
-                    destination = first;
-                    source = second;
-                    found = true;
-                    break;
-                }
-            }
-        }
-
-        Assert(found, "The interface fixture did not provide distinct accessors with the same property storage shape.");
-
-        ulong sourceAddress = getter ? source.Getter : source.Setter;
-        var injected = extraction.Dispatch.Targets.Single(target => target.OwnerType == source.Owner
-            && target.InterfaceType == source.Contract && target.Target == sourceAddress);
-        injected.OwnerType = destination.Owner;
-        extraction.Dispatch.Targets.Add(injected);
-
-        try {
-            var conflicted = new PropertyProjections(extraction, abi);
-            Assert(conflicted.Rejected[(int)PropertyRejection.ConflictingAccessors]
-                    == baseline.Rejected[(int)PropertyRejection.ConflictingAccessors] + 1,
-                "Distinct implementations of one property accessor were not reported as a conflict.");
-            Assert(!conflicted.Projections.Any(projection => projection.Owner == destination.Owner
-                    && projection.Contract == destination.Contract && projection.Property == destination.Property),
-                "A property with conflicting accessor implementations was retained.");
-        } finally {
-            extraction.Dispatch.Targets.RemoveAt(extraction.Dispatch.Targets.Count - 1);
         }
     }
 

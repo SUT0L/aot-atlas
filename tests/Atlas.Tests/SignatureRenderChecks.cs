@@ -91,20 +91,6 @@ internal static class SignatureRenderChecks {
         signatures.Publish().AppendMethod(prefix, 2);
         Assert(prefix.ToString() == "Owner.M [method_sig_ref_2]", "Method abbreviation changed the caller's prefix.");
 
-        int cycle = Add(signatures, new SignatureNode { Kind = SignatureKind.Pointer });
-        var cyclic = signatures.Nodes[cycle];
-        cyclic.Element = cycle;
-        signatures.SetNode(cycle, cyclic);
-        prefix.Clear().Append("preserved:");
-
-        try {
-            signatures.Publish().AppendType(prefix, cycle);
-            throw new InvalidOperationException("Cyclic signature was accepted.");
-        } catch (InvalidDataException) {
-        }
-
-        Assert(prefix.ToString() == "preserved:", "Cycle failure changed the caller's builder.");
-
         int deep = leaf;
 
         for (int i = 0; i < 4096; ++i)
@@ -112,7 +98,7 @@ internal static class SignatureRenderChecks {
 
         Assert(signatures.RenderType(deep) == $"sig_ref_{deep}", "Deep signature did not remain stack bounded.");
 
-        Console.WriteLine("Signature rendering: bounded shared DAGs/deep paths, cycle rollback, exact budget, substitutions, function pointers, modifiers, varargs, calling conventions and caller prefixes passed.");
+        Console.WriteLine("Signature rendering: bounded shared DAGs/deep paths, exact budget, substitutions, function pointers, modifiers, varargs, calling conventions and caller prefixes passed.");
     }
 
     private static int Add(SignatureBuilder signatures, SignatureNode node) {

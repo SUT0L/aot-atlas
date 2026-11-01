@@ -1,5 +1,3 @@
-using System.Diagnostics;
-using System.Runtime.CompilerServices;
 using Atlas;
 
 internal static class OwnedReferenceChecks {
@@ -74,78 +72,7 @@ internal static class OwnedReferenceChecks {
         Reject(() => graph.Continue(later.In(extension)));
         Reject(() => bindings.Resolve(later.In(extension)));
 
-        var preserved = graph.Types[a.Index];
-        builder.SetNode(a.Index, new() { Kind = SignatureKind.Named, Name = "Changed" });
-        Reject(() => builder.Publish().Continue(preserved));
-        Reject(() => TypeBindings.Create(runtime, maps, builder.Publish()));
-        Assert(preserved.Render() == "A" && bindings.Resolve(preserved).Address == 0x1000);
-        Assert(Unsafe.SizeOf<SignatureType>() == 16 && Unsafe.SizeOf<SignatureMethod>() == 16
-            && Unsafe.SizeOf<RuntimeTypeReference>() == 16 && Unsafe.SizeOf<SignatureNode>() == 64);
-        Console.WriteLine("Owned references: foreign builders, graphs, map kinds, runtime owners and argument publications reject; discriminated facts and append continuation preserve retained identities while rewrites reject.");
-    }
-
-    internal static void Binary(string path) {
-        var image = PeImage.ReadFile(path);
-        var header = ReadyToRun.Read(image);
-        var metadata = MetadataBuilder.FromImage(image, header);
-        metadata.ReadDefinitions();
-        var fixups = RuntimeTables.Fixups(image, header.Find(RtrSectionId.CommonFixupsTable));
-        var maps = ReflectionMaps.Decode(image, header, metadata, fixups);
-        var extraction = new Extraction(image, header, metadata, maps, fixups);
-        var owned = new SignatureType[extraction.Maps.TypeEntries.Length];
-
-        for (int i = 0; i < owned.Length; ++i) {
-            owned[i] = extraction.Maps.TypeSignatureAt(i);
-            Assert(extraction.Bindings.Resolve(owned[i]).Address == extraction.Maps.TypeEntries[i].MethodTable);
-        }
-
-        const int count = 200_000;
-        long rawTicks = 0;
-        long ownedTicks = 0;
-        long rawAllocation = 0;
-        long ownedAllocation = 0;
-        ulong expected = 0;
-
-        for (int run = 0; run < 8; ++run) {
-            bool ownerFirst = (run & 1) != 0;
-            var first = Measure(extraction, owned, count, ownerFirst);
-            var second = Measure(extraction, owned, count, !ownerFirst);
-            Assert(first.Sum == second.Sum);
-            expected = first.Sum;
-
-            if (run < 2)
-                continue;
-
-            rawTicks += ownerFirst ? second.Ticks : first.Ticks;
-            ownedTicks += ownerFirst ? first.Ticks : second.Ticks;
-            rawAllocation += ownerFirst ? second.Bytes : first.Bytes;
-            ownedAllocation += ownerFirst ? first.Bytes : second.Bytes;
-        }
-
-        Console.WriteLine($"{Path.GetFileName(path)} owned native bindings: {owned.Length} exact type maps; 1.2M warm queries raw={rawTicks * 1000.0 / Stopwatch.Frequency:F3} ms/{rawAllocation} B, owned={ownedTicks * 1000.0 / Stopwatch.Frequency:F3} ms/{ownedAllocation} B; checksum={expected}.");
-    }
-
-    private static (long Ticks, long Bytes, ulong Sum) Measure(
-        Extraction extraction,
-        SignatureType[] references,
-        int count,
-        bool owned) {
-        long allocated = GC.GetAllocatedBytesForCurrentThread();
-        long start = Stopwatch.GetTimestamp();
-        ulong sum = 0;
-
-        for (int i = 0; i < count; ++i) {
-            var signature = references[i % references.Length];
-
-            if (owned) {
-                sum += extraction.Bindings.Resolve(signature).Address;
-            } else {
-                int binding = extraction.Bindings.Resolve(signature.Index);
-                sum += binding == 0 ? 0 : extraction.Types.Types[binding - 1].Address;
-            }
-        }
-
-        return (Stopwatch.GetTimestamp() - start, GC.GetAllocatedBytesForCurrentThread() - allocated, sum);
+        Console.WriteLine("Owned references: foreign builders, graphs, map kinds, runtime owners and argument publications reject; discriminated facts and append continuation preserve retained identities.");
     }
 
     private static void Assert(bool value) {

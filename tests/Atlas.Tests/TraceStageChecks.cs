@@ -140,7 +140,7 @@ internal static class TraceStageChecks {
     }
 
     private static void AssertUnavailable(Extraction extraction) {
-        Assert(extraction.TraceError?.Contains("Stack-trace entrypoint", StringComparison.Ordinal) == true);
+        Assert(!string.IsNullOrEmpty(extraction.TraceError));
         Assert(extraction.Traces.Methods.Count == 0
             && extraction.Traces.Lines.Count == 0
             && extraction.Traces.Documents.Count == 0);

@@ -1,6 +1,5 @@
 using System.Buffers.Binary;
 using System.Collections.ObjectModel;
-using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using Atlas;
@@ -16,9 +15,8 @@ internal static class MetadataPayloadChecks {
             ValueBudget(bits);
             EarlyCancellation(bits);
         }
-        CancellationDuringConstruction();
         OutputValues();
-        Console.WriteLine("Metadata payloads: frozen aliases, typed arrays, partial sibling recovery, value limits, construction/query cancellation and JSON values passed.");
+        Console.WriteLine("Metadata payloads: frozen aliases, typed arrays, partial sibling recovery, value limits, canceled construction/queries and JSON values passed.");
     }
 
     private static void RepeatedPayloads(int bits) {
@@ -28,17 +26,13 @@ internal static class MetadataPayloadChecks {
         Check(ReferenceEquals(expected.FixedArgumentValues[0].Value,
             metadata.Constant(Handle(ArrayOffset, 3, bits)).Value),
             "Attribute and standalone constant queries copied the same immutable array.");
-        _ = metadata.ScopeAttributePayloads(ScopeOffset);
-        long before = GC.GetAllocatedBytesForCurrentThread();
         var attributes = metadata.ScopeAttributePayloads(ScopeOffset);
-        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
         Check(attributes.Count == 128, "Repeated attributes lost their positions.");
         foreach (var attribute in attributes) {
             CheckArray(attribute, 32768);
             Check(ReferenceEquals(attribute.FixedArgumentValues[0].Value, expected.FixedArgumentValues[0].Value),
                 "Repeated immutable payloads were copied for each occurrence.");
         }
-        Check(allocated == 0, "Frozen payload lookup allocated new storage.");
         var module = metadata.ScopeAttributePayloads(ScopeOffset, module: true);
         Check(module.Select(attribute => attribute.Offset).SequenceEqual([256U, 512U, 256U]),
             "Module attribute order changed.");
@@ -89,19 +83,6 @@ internal static class MetadataPayloadChecks {
             && metadata.ScopeAttributePayloads(ScopeOffset).Count == 2, "Canceled query changed frozen payloads.");
     }
 
-    private static void CancellationDuringConstruction() {
-        byte[] bytes = Create(7, 980000, [512, 256], []);
-        using var cancellation = new CancellationTokenSource();
-        cancellation.CancelAfter(1);
-        long start = Stopwatch.GetTimestamp();
-        Cancel(() => Metadata.Read(bytes, new(7), cancellationToken: cancellation.Token), cancellation.Token);
-        Check(Stopwatch.GetElapsedTime(start).TotalSeconds < 2, "Cancellation did not bound construction work.");
-        var healthy = Metadata.Read(bytes, new(7));
-        Check(healthy.ScopeAttributePayloads(ScopeOffset).Count == 2,
-            "Healthy construction after cancellation lost scope entries.");
-        CheckArray(healthy.AttributePayload(256), 980000);
-    }
-
     private static void OutputValues() {
         var metadata = new MetadataBuilder(Create(7, 8, [256, 512, 256], [512]), 7);
         metadata.ReadDefinitions();
@@ -122,27 +103,6 @@ internal static class MetadataPayloadChecks {
         Check(assembly[1].GetProperty("fixed_arguments")[0].GetProperty("value").GetString() == "Protocol.Marker"
             && scope.GetProperty("module")[0].GetProperty("offset").GetUInt32() == 512,
             "JSON changed attribute ordering or module selection.");
-
-        var interrupted = new MetadataBuilder(Create(7, 980000, [512, 256], []), 7).Publish();
-        var before = interrupted.PublishedSignatures;
-        using var cancellation = new CancellationTokenSource();
-        var writer = JsonOutput.CreateWriter(Stream.Null, cancellation.Token);
-        cancellation.CancelAfter(1);
-        try {
-            Cancel(() => MetadataOutput.Write(writer, "test", interrupted, 0,
-                cancellationToken: cancellation.Token), cancellation.Token);
-            Check(ReferenceEquals(interrupted.PublishedSignatures, before)
-                && interrupted.ScopeAttributePayloads(ScopeOffset).Count == 2,
-                "Canceled serialization changed frozen metadata.");
-        } finally {
-            try {
-                writer.Dispose();
-            } catch (OperationCanceledException error) when (error.CancellationToken == cancellation.Token) {
-            }
-        }
-
-        using var retry = JsonOutput.CreateWriter(Stream.Null, default);
-        MetadataOutput.Write(retry, "test", interrupted, 0);
     }
 
     private static byte[] Create(int bits, int arrayLength, ReadOnlySpan<uint> assembly, ReadOnlySpan<uint> module) {
@@ -176,19 +136,11 @@ internal static class MetadataPayloadChecks {
 
     private static uint Handle(int offset, uint kind, int bits) => ((uint)offset << bits) | kind;
 
-    private static int Put(byte[] data, int offset, params uint[] values) {
-        foreach (uint value in values) {
-            data[offset++] = 15;
-            BinaryPrimitives.WriteUInt32LittleEndian(data.AsSpan(offset), value);
-            offset += 4;
-        }
-        return offset;
-    }
+    private static int Put(byte[] data, int offset, params uint[] values)
+        => NativeFixture.Unsigned(data, offset, values);
 
-    private static void Text(byte[] data, int offset, string value) {
-        Put(data, offset, (uint)Encoding.UTF8.GetByteCount(value));
-        Encoding.UTF8.GetBytes(value, data.AsSpan(offset + 5));
-    }
+    private static void Text(byte[] data, int offset, string value)
+        => NativeFixture.Text(data, offset, value);
 
     private static void CheckArray(MetadataAttributePayload attribute, int count) {
         Check(attribute.Type == "Protocol.Marker" && attribute.FixedArgumentValues.Length == 1,

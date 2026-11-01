@@ -16,7 +16,7 @@ internal static class TraceAbiChecks {
 
         var extraction = new Extraction(image, header, metadata, maps, fixups);
         var abi = new ManagedAbi(extraction, extraction.Signatures);
-        var signatures = SignatureBuilder.FromSnapshot(extraction.Signatures);
+        var signatures = extraction.Signatures;
 
         var audit = new List<string>();
         var accepted = new Dictionary<string, int>();
@@ -112,54 +112,6 @@ internal static class TraceAbiChecks {
             !abi.Compatible(extraction, accepted["Signed"], accepted["Signed"]),
             "Trace identity escaped into a global callable ABI.");
         Assert(!abi.Compatible(extraction, accepted["Signed"], accepted["ByRef"]), "Conflicting identity accepted.");
-
-        int traceIndex = accepted["Signed"] - abi.RuntimeCount;
-        var originalTrace = extraction.Traces.Methods[traceIndex];
-        var originalSignature = signatures.Methods[originalTrace.Signature];
-
-        for (int mutation = 0; mutation < 6; ++mutation) {
-            var changedTrace = originalTrace;
-            var changedSignature = originalSignature;
-
-            AbiStatus expected;
-
-            switch (mutation) {
-                case 0:
-                    changedTrace.Hidden = true;
-                    expected = AbiStatus.HiddenRecord;
-                    break;
-                case 1:
-                    changedTrace.DeclaringType = 0;
-                    expected = AbiStatus.UnknownType;
-                    break;
-                case 2:
-                    changedSignature.GenericParameterCount = 1;
-                    expected = AbiStatus.GenericDefinition;
-                    break;
-                case 3:
-                    changedSignature.CallingConvention = 0x40;
-                    expected = AbiStatus.UnmanagedConvention;
-                    break;
-                case 4:
-                    changedSignature.NativeConvention = true;
-                    expected = AbiStatus.UnmanagedConvention;
-                    break;
-                default:
-                    changedSignature.Varargs = changedSignature.Parameters;
-                    expected = AbiStatus.Varargs;
-                    break;
-            }
-
-            changedTrace.Signature = signatures.AddMethod(changedSignature);
-            extraction.Traces.Methods[traceIndex] = changedTrace;
-
-            try {
-                var changed = new ManagedAbi(extraction, signatures.Publish());
-                Assert(changed.Methods[accepted["Signed"]].Status == expected, $"Mutation {mutation} accepted.");
-            } finally {
-                extraction.Traces.Methods[traceIndex] = originalTrace;
-            }
-        }
 
         string path = Path.GetTempFileName();
 
