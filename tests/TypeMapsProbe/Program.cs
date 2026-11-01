@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Text;
 
 [assembly: TypeMap<Maps>("alpha", typeof(Target))]
 [assembly: TypeMap<Maps>("é😀", typeof(Target))]
@@ -14,6 +15,8 @@ using System.Runtime.InteropServices;
 [assembly: TypeMap<Invalid>("duplicate", typeof(Source))]
 [assembly: TypeMap<Invalid>("duplicate", typeof(Target))]
 [assembly: TypeMapAssemblyTarget<Missing>("Atlas.TypeMaps.MissingAssembly")]
+
+Console.OutputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
 
 var external = TypeMapping.GetOrCreateExternalTypeMapping<Maps>();
 foreach (string key in new[] { "alpha", "é😀", "conditional" }) {
