@@ -169,9 +169,9 @@ public sealed partial class Extraction {
 
         rtr = rtr.ValidateSource(image);
 
-        var schedule = ExtractionPlan.Schedule(requested);
+        Stages = ExtractionPlan.Required(requested);
 
-        if ((schedule.Stages & ExtractionStage.RuntimeTypes) != 0)
+        if ((Stages & ExtractionStage.RuntimeTypes) != 0)
             maps.ValidateSignatureOrigin(metadata.SignatureBuilder.Origin);
 
         Image = image;
@@ -179,265 +179,283 @@ public sealed partial class Extraction {
         Maps = maps;
         CommonFixups = (ulong[])commonFixups.Clone();
         commonFixups = CommonFixups;
-        Stages = schedule.Stages;
 
-        phaseMeasurements = new ExtractionPhaseMeasurement[schedule.Phases.Length];
-        int measurementIndex = 0;
+        List<ExtractionPhaseMeasurement> measurements = [];
         double typesSeconds = 0;
-        List<FieldType>? memberSignatures = null;
+        long phaseStart = 0;
+        long phaseAllocated = 0;
 
-        foreach (var phase in schedule.Phases) {
-            cancellationToken.ThrowIfCancellationRequested();
+        if ((Stages & ExtractionStage.Linkage) != 0) {
+            StartPhase();
+            linkage = new PeLinkage(image, cancellationToken);
+            CompletePhase("Linkage", includeInTypes: false);
+        }
 
-            long phaseAllocated = GC.GetAllocatedBytesForCurrentThread();
-            long phaseStart = Stopwatch.GetTimestamp();
+        if ((Stages & ExtractionStage.Resources) != 0) {
+            StartPhase();
+            resources = new ResourceMap(image, rtr, cancellationToken);
+            CompletePhase("Resources", includeInTypes: false);
+        }
 
-            switch (phase) {
-                case ExtractionPhase.MetadataSignatures:
-                    Enumerations.ReadSignatures(metadata, cancellationToken);
-                    break;
+        if ((Stages & ExtractionStage.RuntimeTypes) != 0) {
+            StartPhase();
+            Enumerations.ReadSignatures(metadata, cancellationToken);
+            CompletePhase("MetadataSignatures");
 
-                case ExtractionPhase.EnumDefinitions:
-                    System.Diagnostics.Debug.Assert(Metadata is not null);
-                    enums = new Enumerations(Metadata, cancellationToken);
-                    break;
+            StartPhase();
+            hydrated = Hydration.Read(image, rtr, cancellationToken);
+            memory = new RuntimeMemory(image, Hydrated);
+            unwindAnalysis = new UnwindAnalysis(image, rtr, Memory, cancellationToken);
 
-                case ExtractionPhase.RuntimeSources:
-                    hydrated = Hydration.Read(image, rtr, cancellationToken);
-                    memory = new RuntimeMemory(image, Hydrated);
-                    unwindAnalysis = new UnwindAnalysis(image, rtr, Memory, cancellationToken);
+            nativeReferences = RuntimeTables.Fixups(image, rtr.Find(RtrSectionId.NativeReferences), cancellationToken);
+            nativeStatics = RuntimeTables.Fixups(image, rtr.Find(RtrSectionId.NativeStatics), cancellationToken);
+            var section = rtr.Find(RtrSectionId.NativeLayoutInfo);
+            layout = new NativeLayout(
+                section.Length == 0
+                    ? default
+                    : image.FileMemory(section.Start, checked((int)section.Length)),
+                NativeReferences,
+                metadata.SignatureBuilder,
+                takeOwnership: true,
+                methodFlags: rtr.Format.ReturnDroppingAsyncThunks ? 31U : 15U);
 
-                    nativeReferences = RuntimeTables.Fixups(image, rtr.Find(RtrSectionId.NativeReferences), cancellationToken);
-                    nativeStatics = RuntimeTables.Fixups(image, rtr.Find(RtrSectionId.NativeStatics), cancellationToken);
-                    var section = rtr.Find(RtrSectionId.NativeLayoutInfo);
-                    layout = new NativeLayout(
-                        section.Length == 0
-                            ? default
-                            : image.FileMemory(section.Start, checked((int)section.Length)),
-                        NativeReferences,
-                        metadata.SignatureBuilder,
-                        takeOwnership: true,
-                        methodFlags: rtr.Format.ReturnDroppingAsyncThunks ? 31U : 15U);
+            gc = new GcLayouts();
+            generics = new GenericMaps();
+            gvms = new GvmTables();
+            marshalling = new Marshalling();
+            virtuals = new VirtualMap();
+            templates = new TemplateMaps();
+            dictionaries = new GenericDictionaries();
+            CompletePhase("RuntimeSources");
 
-                    gc = new GcLayouts();
-                    generics = new GenericMaps();
-                    gvms = new GvmTables();
-                    marshalling = new Marshalling();
-                    virtuals = new VirtualMap();
-                    templates = new TemplateMaps();
-                    dictionaries = new GenericDictionaries();
-                    break;
+            StartPhase();
+            Generics.Read(image, rtr, metadata, Layout, NativeReferences, maps.Format, cancellationToken);
 
-                case ExtractionPhase.NativeSignatures:
-                    Generics.Read(image, rtr, metadata, Layout, NativeReferences, maps.Format, cancellationToken);
+            int typeRoots = checked(maps.Types.Count + maps.DerivedTypes.Count + Generics.Types.Count);
+            int typeCapacity = checked((int)BitOperations.RoundUpToPowerOf2((uint)Math.Max(256, typeRoots)));
+            types = new MethodTables(typeCapacity);
 
-                    int typeRoots = checked(maps.Types.Count + maps.DerivedTypes.Count + Generics.Types.Count);
-                    int typeCapacity = checked((int)BitOperations.RoundUpToPowerOf2((uint)Math.Max(256, typeRoots)));
-                    types = new MethodTables(typeCapacity);
+            Gvms.Read(image, rtr, metadata, Layout, commonFixups, maps.Format, Types, cancellationToken);
+            Marshalling.Read(image, rtr, commonFixups, Types, cancellationToken);
+            typeMaps = new TypeMaps(image, rtr, commonFixups, Types, cancellationToken);
+            dispatchCellMetadata = new DispatchCellMetadata(
+                image, rtr, Memory, NativeReferences, metadata, Layout, maps.Format, Types, cancellationToken);
+            virtuals!.Read(image, rtr, metadata, Layout, commonFixups, maps.Format, cancellationToken);
+            Templates.Read(image, rtr, metadata, Layout, commonFixups, NativeStatics, maps.Format, cancellationToken);
 
-                    Gvms.Read(image, rtr, metadata, Layout, commonFixups, maps.Format, Types, cancellationToken);
-                    Marshalling.Read(image, rtr, commonFixups, Types, cancellationToken);
-                    typeMaps = new TypeMaps(image, rtr, commonFixups, Types, cancellationToken);
-                    dispatchCellMetadata = new DispatchCellMetadata(
-                        image, rtr, Memory, NativeReferences, metadata, Layout, maps.Format, Types, cancellationToken);
-                    virtuals!.Read(image, rtr, metadata, Layout, commonFixups, maps.Format, cancellationToken);
-                    Templates.Read(image, rtr, metadata, Layout, commonFixups, NativeStatics, maps.Format, cancellationToken);
+            if ((Stages & ExtractionStage.DictionaryBindings) != 0)
+                dictionaries!.Read(image, rtr, metadata, Layout, Templates, maps.Format, cancellationToken);
+            else
+                dictionaries!.ReadSignatures(image, rtr, metadata, Layout, Templates, maps.Format, cancellationToken);
+            CompletePhase("NativeSignatures");
 
-                    if ((Stages & ExtractionStage.DictionaryBindings) != 0)
-                        dictionaries!.Read(image, rtr, metadata, Layout, Templates, maps.Format, cancellationToken);
-                    else
-                        dictionaries!.ReadSignatures(image, rtr, metadata, Layout, Templates, maps.Format, cancellationToken);
-
-                    break;
-
-                case ExtractionPhase.TraceSignatures:
-                    try {
-                        traces = new TraceMaps(image, rtr, metadata, commonFixups, cancellationToken);
-                    } catch (Exception error) when (error is InvalidDataException or NotSupportedException or OverflowException) {
-                        TraceError = error.Message;
-                        traces = TraceMaps.Unavailable(metadata, cancellationToken);
-                    }
-                    break;
-
-                case ExtractionPhase.StaticSources:
-                    statics = new StaticStorage(image, rtr, Memory, commonFixups, NativeReferences, NativeStatics, cancellationToken);
-
-                    foreach (ref var entry in CollectionsMarshal.AsSpan(maps.Methods)) {
-                        cancellationToken.ThrowIfCancellationRequested();
-
-                        if (entry.MetadataOffset == 0)
-                            entry.Signature = Layout.Method(entry.NativeSignatureOffset).Signature;
-                    }
-
-                    break;
-
-                case ExtractionPhase.RuntimeRoots:
-                    var roots = Types;
-
-                    foreach (ref readonly var entry in CollectionsMarshal.AsSpan(maps.Types))
-                        roots.Add(entry.MethodTable, TypeEvidence.TypeMap);
-
-                    foreach (ref readonly var entry in CollectionsMarshal.AsSpan(maps.DerivedTypes))
-                        roots.Add(entry.MethodTable, TypeEvidence.DerivedMap);
-
-                    foreach (ref readonly var entry in CollectionsMarshal.AsSpan(maps.Methods))
-                        roots.Add(entry.DeclaringType, TypeEvidence.InvokeMap);
-
-                    foreach (ref readonly var entry in CollectionsMarshal.AsSpan(maps.Fields))
-                        roots.Add(entry.DeclaringType, TypeEvidence.FieldMap);
-
-                    foreach (ulong argument in CollectionsMarshal.AsSpan(maps.GenericArguments))
-                        roots.Add(argument, TypeEvidence.InvokeMap);
-
-                    foreach (ref readonly var entry in CollectionsMarshal.AsSpan(Generics.Types))
-                        roots.Add(entry.MethodTable, TypeEvidence.GenericMap);
-
-                    foreach (ref readonly var entry in CollectionsMarshal.AsSpan(Generics.Methods))
-                        roots.Add(entry.DeclaringType, TypeEvidence.GenericMethod);
-
-                    foreach (ulong argument in CollectionsMarshal.AsSpan(Generics.Arguments))
-                        roots.Add(argument, TypeEvidence.GenericMethod);
-
-                    foreach (ref readonly var entry in CollectionsMarshal.AsSpan(virtuals!.Entries))
-                        roots.Add(entry.DeclaringType, TypeEvidence.VirtualMethod);
-
-                    foreach (ref readonly var entry in CollectionsMarshal.AsSpan(Templates.Types))
-                        roots.Add(entry.MethodTable, TypeEvidence.TypeTemplate);
-
-                    foreach (ulong address in Layout.ExternalTypes.Keys)
-                        roots.Add(address, TypeEvidence.NativeSignature);
-
-                    foreach (ref readonly var entry in CollectionsMarshal.AsSpan(Statics.Constructors))
-                        roots.Add(entry.Type, TypeEvidence.StaticConstructor);
-
-                    foreach (ref readonly var entry in CollectionsMarshal.AsSpan(Statics.Generics))
-                        roots.Add(entry.Type, TypeEvidence.GenericStatics);
-
-                    foreach (ref readonly var entry in CollectionsMarshal.AsSpan(Statics.Allocations))
-                        roots.Add(entry.RelatedType, TypeEvidence.StaticAllocation);
-
-                    if (UnwindAnalysis.Managed is { } managed) {
-                        foreach (ref readonly var clause in managed.Clauses.AsSpan()) {
-                            if (clause.Kind == ExceptionClauseKind.Typed && !clause.TypeUnavailable)
-                                roots.Add(image.ImageBase + clause.Type, TypeEvidence.ExceptionHandling);
-                        }
-                    }
-
-                    long frozenStart = Stopwatch.GetTimestamp();
-                    frozen = new FrozenObjects(rtr.Find(RtrSectionId.FrozenObjectRegion), Memory, Types, cancellationToken);
-                    FrozenSeconds = Stopwatch.GetElapsedTime(frozenStart).TotalSeconds;
-                    break;
-
-                case ExtractionPhase.RuntimeTypes:
-                    Types.Read(image, rtr, Memory, cancellationToken);
-                    Frozen.ReadRuntimeTypes(image, rtr, Memory, Types, cancellationToken);
-                    break;
-
-                case ExtractionPhase.MemberSignatures:
-                    memberSignatures = FieldLayouts.ReadSignatures(metadata, maps, Types, cancellationToken);
-                    break;
-
-                case ExtractionPhase.TemplateSignatures:
-                    // Keep the established signature and runtime-type prefixes. New
-                    // leaves resume the append-only reader before GC/name publication.
-                    int signaturePrefix = metadata.SignatureBuilder.Nodes.Length;
-                    Templates.ReadSignatures(image, rtr, Layout, cancellationToken);
-
-                    foreach (var entry in Layout.ExternalTypes) {
-                        if (entry.Value >= signaturePrefix)
-                            Types.Add(entry.Key, TypeEvidence.NativeSignature);
-                    }
-
-                    Types.Read(image, rtr, Memory, cancellationToken);
-                    Templates.ValidateRelations(Types, metadata.SignatureBuilder, cancellationToken);
-                    break;
-
-                case ExtractionPhase.RuntimePublication:
-                    Gc.Read(Types, Memory, rtr.Format.LegacyTypeLayout, cancellationToken);
-
-                    long bindStart = Stopwatch.GetTimestamp();
-                    Frozen.Bind(Types, Gc, cancellationToken);
-                    FrozenSeconds += Stopwatch.GetElapsedTime(bindStart).TotalSeconds;
-
-                    names = new RuntimeNames(Types, maps);
-                    Layout.BindTypes(Types, Names);
-                    Gvms.Bind(Types, metadata.SignatureBuilder, cancellationToken);
-                    Marshalling.Bind(Types, metadata, maps, rtr.Format.LegacyTypeLayout, cancellationToken);
-                    TypeMaps.ValidateHashes(Types, cancellationToken);
-                    DispatchCellMetadata.ValidateTypes(Types, cancellationToken);
-                    Statics.BindFields(image, Memory, maps, Types);
-                    break;
-
-                case ExtractionPhase.SignaturePublication:
-                    Metadata = metadata.Publish(cancellationToken);
-                    signatures = Metadata.PublishedSignatures;
-                    maps.SetSignatureOrigin(signatures);
-                    break;
-
-                case ExtractionPhase.BindingIndex:
-                    bindings = new TypeBindings(RuntimeIndex, maps, Signatures);
-                    break;
-
-                case ExtractionPhase.MemberLayouts:
-                    fields = new FieldLayouts(maps, Types, memberSignatures!, Bindings, cancellationToken);
-                    shared = new SharedMethods(this);
-                    break;
-
-                case ExtractionPhase.MethodTracing:
-                    traces!.Publish(Signatures, cancellationToken);
-                    break;
-
-                case ExtractionPhase.DictionaryBindings:
-                    Dictionaries.Bind(this, cancellationToken);
-                    break;
-
-                case ExtractionPhase.Dispatch:
-                    long dispatchStart = Stopwatch.GetTimestamp();
-                    dispatch = new Dispatch(image, Memory, Types, cancellationToken);
-                    virtuals!.Bind(image, Memory, Types, Dispatch, cancellationToken);
-                    DispatchSeconds = Stopwatch.GetElapsedTime(dispatchStart).TotalSeconds;
-                    break;
-
-                case ExtractionPhase.Enums:
-                    Enums.Bind(maps, Types, Bindings);
-                    break;
-
-                case ExtractionPhase.Resources:
-                    resources = new ResourceMap(image, rtr, cancellationToken);
-                    break;
-
-                case ExtractionPhase.Linkage:
-                    linkage = new PeLinkage(image, cancellationToken);
-                    break;
-
-                case ExtractionPhase.PInvokes:
-                    pInvokes = new PInvokeFixups(image, Types, maps);
-                    break;
-
-                default:
-                    throw new InvalidOperationException($"No extraction operation for phase {phase}.");
+            if ((Stages & ExtractionStage.MethodTracing) != 0) {
+                StartPhase();
+                try {
+                    traces = new TraceMaps(image, rtr, metadata, commonFixups, cancellationToken);
+                } catch (Exception error) when (error is InvalidDataException or NotSupportedException or OverflowException) {
+                    TraceError = error.Message;
+                    traces = TraceMaps.Unavailable(metadata, cancellationToken);
+                }
+                CompletePhase("TraceSignatures");
             }
 
-            cancellationToken.ThrowIfCancellationRequested();
+            StartPhase();
+            statics = new StaticStorage(image, rtr, Memory, commonFixups, NativeReferences, NativeStatics, cancellationToken);
 
-            double seconds = Stopwatch.GetElapsedTime(phaseStart).TotalSeconds;
-            long allocated = GC.GetAllocatedBytesForCurrentThread() - phaseAllocated;
-            phaseMeasurements[measurementIndex++] = new(phase.ToString(), seconds, allocated);
+            foreach (ref var entry in CollectionsMarshal.AsSpan(maps.Methods)) {
+                cancellationToken.ThrowIfCancellationRequested();
 
-            // The type aggregate excludes independent products. The individual
-            // phase measurements are disjoint; FrozenSeconds is a nested detail.
-            if (phase is not (ExtractionPhase.EnumDefinitions or ExtractionPhase.Enums
-                or ExtractionPhase.Dispatch or ExtractionPhase.Resources
-                or ExtractionPhase.Linkage or ExtractionPhase.PInvokes))
-                typesSeconds += seconds;
+                if (entry.MetadataOffset == 0)
+                    entry.Signature = Layout.Method(entry.NativeSignatureOffset).Signature;
+            }
+            CompletePhase("StaticSources");
+
+            StartPhase();
+            var roots = Types;
+
+            foreach (ref readonly var entry in CollectionsMarshal.AsSpan(maps.Types))
+                roots.Add(entry.MethodTable, TypeEvidence.TypeMap);
+
+            foreach (ref readonly var entry in CollectionsMarshal.AsSpan(maps.DerivedTypes))
+                roots.Add(entry.MethodTable, TypeEvidence.DerivedMap);
+
+            foreach (ref readonly var entry in CollectionsMarshal.AsSpan(maps.Methods))
+                roots.Add(entry.DeclaringType, TypeEvidence.InvokeMap);
+
+            foreach (ref readonly var entry in CollectionsMarshal.AsSpan(maps.Fields))
+                roots.Add(entry.DeclaringType, TypeEvidence.FieldMap);
+
+            foreach (ulong argument in CollectionsMarshal.AsSpan(maps.GenericArguments))
+                roots.Add(argument, TypeEvidence.InvokeMap);
+
+            foreach (ref readonly var entry in CollectionsMarshal.AsSpan(Generics.Types))
+                roots.Add(entry.MethodTable, TypeEvidence.GenericMap);
+
+            foreach (ref readonly var entry in CollectionsMarshal.AsSpan(Generics.Methods))
+                roots.Add(entry.DeclaringType, TypeEvidence.GenericMethod);
+
+            foreach (ulong argument in CollectionsMarshal.AsSpan(Generics.Arguments))
+                roots.Add(argument, TypeEvidence.GenericMethod);
+
+            foreach (ref readonly var entry in CollectionsMarshal.AsSpan(virtuals!.Entries))
+                roots.Add(entry.DeclaringType, TypeEvidence.VirtualMethod);
+
+            foreach (ref readonly var entry in CollectionsMarshal.AsSpan(Templates.Types))
+                roots.Add(entry.MethodTable, TypeEvidence.TypeTemplate);
+
+            foreach (ulong address in Layout.ExternalTypes.Keys)
+                roots.Add(address, TypeEvidence.NativeSignature);
+
+            foreach (ref readonly var entry in CollectionsMarshal.AsSpan(Statics.Constructors))
+                roots.Add(entry.Type, TypeEvidence.StaticConstructor);
+
+            foreach (ref readonly var entry in CollectionsMarshal.AsSpan(Statics.Generics))
+                roots.Add(entry.Type, TypeEvidence.GenericStatics);
+
+            foreach (ref readonly var entry in CollectionsMarshal.AsSpan(Statics.Allocations))
+                roots.Add(entry.RelatedType, TypeEvidence.StaticAllocation);
+
+            if (UnwindAnalysis.Managed is { } managed) {
+                foreach (ref readonly var clause in managed.Clauses.AsSpan()) {
+                    if (clause.Kind == ExceptionClauseKind.Typed && !clause.TypeUnavailable)
+                        roots.Add(image.ImageBase + clause.Type, TypeEvidence.ExceptionHandling);
+                }
+            }
+
+            long frozenStart = Stopwatch.GetTimestamp();
+            frozen = new FrozenObjects(rtr.Find(RtrSectionId.FrozenObjectRegion), Memory, Types, cancellationToken);
+            FrozenSeconds = Stopwatch.GetElapsedTime(frozenStart).TotalSeconds;
+            CompletePhase("RuntimeRoots");
+
+            StartPhase();
+            Types.Read(image, rtr, Memory, cancellationToken);
+            Frozen.ReadRuntimeTypes(image, rtr, Memory, Types, cancellationToken);
+            CompletePhase("RuntimeTypes");
+
+            List<FieldType>? memberSignatures = null;
+
+            if ((Stages & ExtractionStage.MemberLayouts) != 0) {
+                StartPhase();
+                memberSignatures = FieldLayouts.ReadSignatures(metadata, maps, Types, cancellationToken);
+                CompletePhase("MemberSignatures");
+            }
+
+            StartPhase();
+            // Member signatures precede template discovery to preserve signature IDs.
+            // New runtime leaves extend the existing type prefix before GC/name publication.
+            int signaturePrefix = metadata.SignatureBuilder.Nodes.Length;
+            Templates.ReadSignatures(image, rtr, Layout, cancellationToken);
+
+            foreach (var entry in Layout.ExternalTypes) {
+                if (entry.Value >= signaturePrefix)
+                    Types.Add(entry.Key, TypeEvidence.NativeSignature);
+            }
+
+            Types.Read(image, rtr, Memory, cancellationToken);
+            Templates.ValidateRelations(Types, metadata.SignatureBuilder, cancellationToken);
+            CompletePhase("TemplateSignatures");
+
+            StartPhase();
+            Gc.Read(Types, Memory, rtr.Format.LegacyTypeLayout, cancellationToken);
+
+            long bindStart = Stopwatch.GetTimestamp();
+            Frozen.Bind(Types, Gc, cancellationToken);
+            FrozenSeconds += Stopwatch.GetElapsedTime(bindStart).TotalSeconds;
+
+            names = new RuntimeNames(Types, maps);
+            Layout.BindTypes(Types, Names);
+            Gvms.Bind(Types, metadata.SignatureBuilder, cancellationToken);
+            Marshalling.Bind(Types, metadata, maps, rtr.Format.LegacyTypeLayout, cancellationToken);
+            TypeMaps.ValidateHashes(Types, cancellationToken);
+            DispatchCellMetadata.ValidateTypes(Types, cancellationToken);
+            Statics.BindFields(image, Memory, maps, Types);
+            CompletePhase("RuntimePublication");
+
+            StartPhase();
+            Metadata = metadata.Publish(cancellationToken);
+            signatures = Metadata.PublishedSignatures;
+            maps.SetSignatureOrigin(signatures);
+            CompletePhase("SignaturePublication");
+
+            if ((Stages & ExtractionStage.Enums) != 0) {
+                StartPhase();
+                enums = new Enumerations(Metadata, cancellationToken);
+                CompletePhase("EnumDefinitions", includeInTypes: false);
+            }
+
+            if ((Stages & (ExtractionStage.MemberLayouts | ExtractionStage.Enums)) != 0) {
+                StartPhase();
+                bindings = new TypeBindings(RuntimeIndex, maps, Signatures);
+                CompletePhase("BindingIndex");
+            }
+
+            if ((Stages & ExtractionStage.MemberLayouts) != 0) {
+                StartPhase();
+                fields = new FieldLayouts(maps, Types, memberSignatures!, Bindings, cancellationToken);
+                shared = new SharedMethods(this);
+                CompletePhase("MemberLayouts");
+            }
+
+            if ((Stages & ExtractionStage.MethodTracing) != 0) {
+                StartPhase();
+                traces!.Publish(Signatures, cancellationToken);
+                CompletePhase("MethodTracing");
+            }
+
+            if ((Stages & ExtractionStage.DictionaryBindings) != 0) {
+                StartPhase();
+                Dictionaries.Bind(this, cancellationToken);
+                CompletePhase("DictionaryBindings");
+            }
+
+            if ((Stages & ExtractionStage.Dispatch) != 0) {
+                StartPhase();
+                long dispatchStart = Stopwatch.GetTimestamp();
+                dispatch = new Dispatch(image, Memory, Types, cancellationToken);
+                virtuals!.Bind(image, Memory, Types, Dispatch, cancellationToken);
+                DispatchSeconds = Stopwatch.GetElapsedTime(dispatchStart).TotalSeconds;
+                CompletePhase("Dispatch", includeInTypes: false);
+            }
+
+            if ((Stages & ExtractionStage.PInvokes) != 0) {
+                StartPhase();
+                pInvokes = new PInvokeFixups(image, Types, maps);
+                CompletePhase("PInvokes", includeInTypes: false);
+            }
+
+            if ((Stages & ExtractionStage.Enums) != 0) {
+                StartPhase();
+                Enums.Bind(maps, Types, Bindings);
+                CompletePhase("Enums", includeInTypes: false);
+            }
         }
 
         Metadata ??= metadata.Publish(cancellationToken);
         // Source readers and their mutable signature buffers belong to construction.
         // Consumers retain the published graph and resolved IDs on their own rows.
         layout = null;
+        phaseMeasurements = measurements.ToArray();
         TypesSeconds = typesSeconds;
         TotalSeconds = Stopwatch.GetElapsedTime(operationStart).TotalSeconds;
         TotalAllocatedBytes = GC.GetAllocatedBytesForCurrentThread() - operationAllocated;
+
+        void StartPhase() {
+            cancellationToken.ThrowIfCancellationRequested();
+            phaseAllocated = GC.GetAllocatedBytesForCurrentThread();
+            phaseStart = Stopwatch.GetTimestamp();
+        }
+
+        void CompletePhase(string name, bool includeInTypes = true) {
+            cancellationToken.ThrowIfCancellationRequested();
+            double seconds = Stopwatch.GetElapsedTime(phaseStart).TotalSeconds;
+            long allocated = GC.GetAllocatedBytesForCurrentThread() - phaseAllocated;
+            measurements.Add(new(name, seconds, allocated));
+
+            // Phase measurements are disjoint; FrozenSeconds is a nested detail.
+            if (includeInTypes) {
+                typesSeconds += seconds;
+            }
+        }
     }
 }
