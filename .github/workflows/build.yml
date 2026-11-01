@@ -45,7 +45,10 @@ jobs:
           restore-keys: nuget-${{ runner.os }}-
 
       - name: Verify parser and published CLI evidence
-        run: python tests/verify.py
+        shell: cmd
+        run: |
+          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do call "%%i\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64
+          python tests/verify.py
 
   build:
     name: ${{ matrix.name }} (${{ matrix.rid }})
