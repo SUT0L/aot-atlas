@@ -4,6 +4,7 @@ import argparse
 from collections import Counter
 import json
 import subprocess
+import tempfile
 from pathlib import Path
 
 
@@ -55,13 +56,13 @@ def main():
     parser.add_argument("binary", type=Path)
     arguments = parser.parse_args()
 
-    root = Path(__file__).resolve().parents[1]
-    output = root / "artifacts" / "verify" / "property-rejections.json"
     prefix = ["dotnet", str(arguments.cli)] if arguments.cli.suffix == ".dll" else [str(arguments.cli)]
-    result = subprocess.run(prefix + ["properties", str(arguments.binary), str(output)],
-                            capture_output=True, text=True)
-    require(result.returncode == 0, f"Property extraction failed: {result.stderr}")
-    report = json.loads(output.read_bytes())
+    with tempfile.TemporaryDirectory(prefix="atlas-property-rejections-") as directory:
+        output = Path(directory) / "properties.json"
+        result = subprocess.run(prefix + ["properties", str(arguments.binary), str(output)],
+                                capture_output=True, text=True)
+        require(result.returncode == 0, f"Property extraction failed: {result.stderr}")
+        report = json.loads(output.read_bytes())
     check(report)
 
     shortened = dict(report)

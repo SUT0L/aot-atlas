@@ -4,6 +4,7 @@ import argparse
 import json
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 
@@ -23,14 +24,14 @@ def main():
         require(result.returncode == 0 and "assertions|passed" in result.stdout,
                 f"Reference property fixture failed its runtime checks: {result.stderr}")
 
-    root = Path(__file__).resolve().parents[1]
-    output = root / "artifacts" / "verify" / "reference-setters.json"
     prefix = ["dotnet", str(arguments.cli)] if arguments.cli.suffix == ".dll" else [str(arguments.cli)]
-    result = subprocess.run(prefix + ["properties", str(arguments.binary), str(output)],
-                            capture_output=True, text=True)
-    require(result.returncode == 0, f"Property extraction failed: {result.stderr}")
+    with tempfile.TemporaryDirectory(prefix="atlas-reference-setters-") as directory:
+        output = Path(directory) / "properties.json"
+        result = subprocess.run(prefix + ["properties", str(arguments.binary), str(output)],
+                                capture_output=True, text=True)
+        require(result.returncode == 0, f"Property extraction failed: {result.stderr}")
+        report = json.loads(output.read_bytes())
 
-    report = json.loads(output.read_bytes())
     helpers = [entry for entry in report["rejection_witnesses"]
                if entry["reason"] == "ReferenceHelper"]
     direct = [entry for entry in helpers if entry.get("first_opcode") == "Lea_r64_m"]
