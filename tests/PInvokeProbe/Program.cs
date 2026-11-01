@@ -61,13 +61,15 @@ internal static unsafe class Program {
         ulong originalBase = expected.GetProperty("image_base").GetUInt64();
 
         var modules = expected.GetProperty("modules");
-        int verified = 0;
+        var observed = new List<(string Module, string Entry)>();
+        var cells = new HashSet<ulong>();
 
         foreach (var method in expected.GetProperty("methods").EnumerateArray()) {
             var module = modules[method.GetProperty("module_index").GetInt32()];
             string moduleName = module.GetProperty("module").GetString()!;
             if (moduleName != Provider && moduleName != UnicodeProvider)
                 continue;
+            Assert(cells.Add(method.GetProperty("address").GetUInt64()));
 
             byte* cell = (byte*)image + (method.GetProperty("address").GetUInt64() - originalBase);
             byte* moduleCell = (byte*)image + (module.GetProperty("address").GetUInt64() - originalBase);
@@ -87,12 +89,14 @@ internal static unsafe class Program {
             nint target;
             if (method.TryGetProperty("ordinal", out var ordinal)) {
                 int value = ordinal.GetInt32();
+                observed.Add((moduleName, "#" + value));
                 Assert(*(nuint*)(cell + 8) == (uint)value);
 
                 target = GetProcAddress(handle, value);
                 Assert((target == 0) == (value == 0));
             } else {
                 string name = method.GetProperty("name").GetString()!;
+                observed.Add((moduleName, name));
                 Assert(*(byte**)(cell + 8) == (byte*)image + (method.GetProperty("entry_point").GetUInt64() - originalBase));
                 Assert(Marshal.PtrToStringUTF8(*(nint*)(cell + 8)) == name);
 
@@ -100,12 +104,15 @@ internal static unsafe class Program {
             }
 
             Assert(*(nint*)cell == target);
-            ++verified;
         }
 
-        Assert(verified == 8);
+        var declarations = new (string, string)[] {
+            (Provider, "A"), (Provider, "Add"), (Provider, "#7"), (Provider, "#0"),
+            (Provider, LongEntryPoint), (UnicodeProvider, "A"), (Provider, "A"), (Provider, "U")
+        };
+        Assert(observed.Order().SequenceEqual(declarations.Order()));
 
-        Console.WriteLine($"{verified} lazy P/Invoke cells match resolved targets, module identities, names, ordinals and flags; missing ordinal reports {missing}; {digest}");
+        Console.WriteLine($"{observed.Count} lazy P/Invoke cells match resolved targets, module identities, names, ordinals and flags; missing ordinal reports {missing}; {digest}");
     }
 
     private static void Assert(bool condition) {
