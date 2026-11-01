@@ -54,10 +54,27 @@ internal static class PreparedAnalysisChecks {
                 "An unavailable unwind source published dependent managed work.");
             Assert(partial.Strings.Items.SequenceEqual(healthy.Strings.Items),
                 "An unwind failure disabled independent native string discovery.");
-            Assert(partial.FunctionPointers.Values.Count != 0
-                && partial.FunctionPointers.References.All(reference =>
-                    reference.Source == FatPointerSource.ClassConstructor),
-                "Independent constructor descriptors were lost or dependent pointer facts survived.");
+            var constructors = healthy.Extraction.Statics.ConstructorEntries.ToArray()
+                .Where(entry => entry.Descriptor != 0).ToArray();
+            var expectedPointers = constructors
+                .Select(entry => (entry.Pointer, entry.Descriptor, Body: entry.Entrypoint, Context: entry.GenericContext))
+                .Distinct().OrderBy(entry => entry.Pointer);
+            var actualPointers = partial.FunctionPointers.Values
+                .Select(entry => (entry.Pointer, entry.Descriptor, entry.Body, entry.Context))
+                .OrderBy(entry => entry.Pointer);
+            Assert(actualPointers.SequenceEqual(expectedPointers),
+                "Independent constructor descriptors disagree with the constructor map after unwind failure.");
+
+            var expectedReferences = constructors
+                .Select(entry => (entry.Pointer, Owner: entry.Type, Holder: entry.NonGcBase - 8))
+                .OrderBy(entry => entry);
+            var actualReferences = partial.FunctionPointers.References
+                .Select(entry => (partial.FunctionPointers.Values[entry.PointerIndex].Pointer, entry.Owner, entry.Holder))
+                .OrderBy(entry => entry);
+            Assert(actualReferences.SequenceEqual(expectedReferences)
+                && partial.FunctionPointers.References.All(reference => reference.Source == FatPointerSource.ClassConstructor)
+                && partial.FunctionPointers.Values.All(pointer => pointer.ContextKind == FunctionPointerContextKind.MethodTable),
+                "Constructor references changed or dependent pointer facts survived unwind failure.");
             Assert(partialEvidence.Tags.Any(tag => tag.Kind == AnalysisEvidenceKind.Status
                 && tag.Text.Contains("unwind=unavailable", StringComparison.Ordinal)),
                 "Host preparation omitted the optional-source failure status.");
