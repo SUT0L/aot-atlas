@@ -7,6 +7,7 @@
 
 #ifdef _MSC_VER
 #include <intrin.h>
+using DWORD = unsigned long;
 #endif
 
 #define GCINFODECODER_NO_EE
